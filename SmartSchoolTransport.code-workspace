@@ -1,0 +1,35 @@
+{
+  "folders": [
+    {
+      "name": "Backend",
+      "path": "./backend"
+    },
+    {
+      "name": "Admin Dashboard",
+      "path": "./frontend"
+    },
+    {
+      "name": "Parent Mobile App",
+      "path": "./parent-mobile-app"
+    }
+  ],
+  "settings": {
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.eslint": "explicit"
+    },
+    "files.associations": {
+      "*.env": "properties"
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "msjsdiag.vscode-react-native",
+      "dsznajder.es7-react-js-snippets",
+      "expo.vscode-expo-tools",
+      "esbenp.prettier-vscode",
+      "dbaeumer.vscode-eslint"
+    ]
+  }
+}

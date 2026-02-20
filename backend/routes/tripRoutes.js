@@ -1,97 +1,81 @@
 const express = require('express');
 const router = express.Router();
-
 const Trip = require('../models/Trip');
-const { authMiddleware } = require('../middleware/authMiddleware');
-const roleMiddleware = require('../middleware/roleMiddleware');
+const Bus = require('../models/Bus');
 
-
-// 🧑‍💼 ADMIN — Create Trip
-router.post(
-  '/',
-  authMiddleware,
-  roleMiddleware('admin'),
-  async (req, res) => {
-    try {
-      const trip = new Trip(req.body);
-      await trip.save();
-      res.status(201).json({ message: 'Trip created successfully', trip });
-    } catch (error) {
-      res.status(400).json({ error: error.message });
-    }
+// Get all trips
+router.get('/', async (req, res) => {
+  try {
+    const trips = await Trip.find().populate('busId').populate('driverId');
+    res.json(trips);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
-);
+});
 
-
-// 🚦 DRIVER — Start Trip
-router.put(
-  '/start/:id',
-  authMiddleware,
-  roleMiddleware('driver'),
-  async (req, res) => {
-    try {
-      const trip = await Trip.findById(req.params.id);
-
-      if (!trip) return res.status(404).json({ message: 'Trip not found' });
-
-      if (trip.driverId.toString() !== req.user.id) {
-        return res.status(403).json({ message: 'Not your trip' });
-      }
-
-      trip.status = 'running';
-      trip.startTime = new Date();
-      await trip.save();
-
-      res.json({ message: 'Trip started', trip });
-
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
+// Get active trips
+router.get('/active', async (req, res) => {
+  try {
+    const trips = await Trip.find({ status: 'in-progress' })
+      .populate('busId')
+      .populate('driverId');
+    res.json(trips);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
-);
+});
 
-
-// 🏁 DRIVER — End Trip
-router.put(
-  '/end/:id',
-  authMiddleware,
-  roleMiddleware('driver'),
-  async (req, res) => {
-    try {
-      const trip = await Trip.findById(req.params.id);
-
-      if (!trip) return res.status(404).json({ message: 'Trip not found' });
-
-      if (trip.driverId.toString() !== req.user.id) {
-        return res.status(403).json({ message: 'Not your trip' });
-      }
-
-      trip.status = 'completed';
-      trip.endTime = new Date();
-      await trip.save();
-
-      res.json({ message: 'Trip completed', trip });
-
-    } catch (error) {
-      res.status(500).json({ error: error.message });
+// Get single trip
+router.get('/:id', async (req, res) => {
+  try {
+    const trip = await Trip.findById(req.params.id)
+      .populate('busId')
+      .populate('driverId');
+    if (!trip) {
+      return res.status(404).json({ message: 'Trip not found' });
     }
+    res.json(trip);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
-);
+});
 
-
-// 👑 ADMIN — View All Trips
-router.get(
-  '/',
-  authMiddleware,
-  roleMiddleware('admin'),
-  async (req, res) => {
-    try {
-      const trips = await Trip.find().sort({ createdAt: -1 });
-      res.json(trips);
-    } catch (error) {
-      res.status(500).json({ error: error.message });
+// Create trip
+router.post('/', async (req, res) => {
+  try {
+    const trip = new Trip(req.body);
+    const newTrip = await trip.save();
+    
+    if (trip.busId) {
+      await Bus.findByIdAndUpdate(trip.busId, { status: 'on-trip' });
     }
+    
+    res.status(201).json(newTrip);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
   }
-);
+});
+
+// End trip
+router.patch('/:id/end', async (req, res) => {
+  try {
+    const trip = await Trip.findByIdAndUpdate(
+      req.params.id,
+      { 
+        status: 'completed',
+        endTime: new Date()
+      },
+      { new: true }
+    );
+    
+    if (trip.busId) {
+      await Bus.findByIdAndUpdate(trip.busId, { status: 'active' });
+    }
+    
+    res.json(trip);
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+});
 
 module.exports = router;
