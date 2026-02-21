@@ -66,19 +66,32 @@ export default function RegisterScreen({ navigation }) {
 
     setLoading(true);
     try {
-      // Prepare data for backend - include role and exclude confirmPassword
+      // Split the full name into first and last name
+      const nameParts = formData.name.trim().split(' ');
+      const firstName = nameParts[0] || '';
+      
+      // ✅ FIX: If only one name, use it as both first and last
+      const lastName = nameParts.slice(1).join(' ') || firstName;
+      
+      // Prepare data for backend - matches your User model
       const registrationData = {
-        name: formData.name,
+        firstName,
+        lastName,
         email: formData.email,
         phone: formData.phone,
         password: formData.password,
-        role: 'parent'  // 👈 ADDED: Required by backend
+        role: 'parent'
       };
+      
+      console.log('Registration data:', registrationData);
       
       const result = await register(registrationData);
       if (result.success) {
-        Alert.alert('Success', 'Registration successful! Please login.');
-        navigation.navigate('Login');
+        Alert.alert(
+          'Success', 
+          'Registration successful! Please login.',
+          [{ text: 'OK', onPress: () => navigation.navigate('Login') }]
+        );
       } else {
         Alert.alert('Registration Failed', result.message || 'Please try again');
       }

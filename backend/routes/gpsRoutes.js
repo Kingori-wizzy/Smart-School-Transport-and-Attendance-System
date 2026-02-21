@@ -269,10 +269,13 @@ router.post(
       if (speed > SPEED_LIMIT) {
         console.log("🚨 Speeding detected!");
 
-        io.emit('speedAlert', {
+        // ✅ UPDATED: Changed from 'speedAlert' to 'speed-alert'
+        io.emit('speed-alert', {
           vehicleId: activeTrip.vehicleId,
+          busId: activeTrip.vehicleId, // Add busId for compatibility
           speed,
-          message: "Vehicle exceeding speed limit!"
+          message: "Vehicle exceeding speed limit!",
+          severity: 'high'
         });
 
         // Optionally save to notifications
@@ -298,9 +301,14 @@ router.post(
         if (drop > 15) { // sudden large drop
           console.log("⛽ Fuel anomaly detected!");
 
-          io.emit('fuelAlert', {
+          // ✅ UPDATED: Changed from 'fuelAlert' to 'fuel-alert'
+          io.emit('fuel-alert', {
             vehicleId: activeTrip.vehicleId,
-            message: "Sudden fuel drop detected!"
+            busId: activeTrip.vehicleId,
+            message: "Sudden fuel drop detected!",
+            previousLevel: previousLog.fuelLevel,
+            currentLevel: fuelLevel,
+            drop
           });
 
           // Optionally save to notifications
@@ -350,11 +358,14 @@ router.post(
         if (outside) {
           console.log("🚨 Geofence violation!");
 
-          io.emit('geofenceAlert', {
+          // ✅ UPDATED: Changed from 'geofenceAlert' to 'geofence-alert'
+          io.emit('geofence-alert', {
             vehicleId: activeTrip.vehicleId,
+            busId: activeTrip.vehicleId,
             lat,
             lon,
-            message: "Vehicle outside permitted zone!"
+            message: "Vehicle outside permitted zone!",
+            severity: 'high'
           });
 
           // Optionally save to notifications
@@ -369,15 +380,28 @@ router.post(
       }
 
       // ==============================
-      // 🗺 MAP CLUSTER SUPPORT EVENT
+      // 🗺 LIVE BUS LOCATION UPDATE
       // ==============================
-      io.emit('liveGPS', {
+      // ✅ UPDATED: Changed from 'liveGPS' to 'bus-location-update'
+      io.emit('bus-location-update', {
         vehicleId: activeTrip.vehicleId,
+        busId: activeTrip.vehicleId,
         routeName: activeTrip.routeName,
         lat,
         lon,
         speed,
         fuelLevel,
+        heading,
+        timestamp: new Date()
+      });
+
+      // Also emit to specific bus room for targeted updates
+      io.to(`bus-${activeTrip.vehicleId}`).emit('bus-location-update', {
+        vehicleId: activeTrip.vehicleId,
+        busId: activeTrip.vehicleId,
+        lat,
+        lon,
+        speed,
         timestamp: new Date()
       });
 

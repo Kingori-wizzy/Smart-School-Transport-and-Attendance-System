@@ -49,9 +49,43 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
     index: true
+  },
+
+  // ===============================
+  // ADDITIONAL FIELDS
+  // ===============================
+  profileImage: {
+    type: String  // URL to profile picture
+  },
+
+  lastLogin: {
+    type: Date    // Track last login time
+  },
+
+  // For parent-child relationship
+  children: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Student'
+  }],
+
+  // For driver specific info
+  driverDetails: {
+    licenseNumber: String,
+    licenseExpiry: Date,
+    experience: Number,
+    emergencyContact: String
   }
 
-}, { timestamps: true });
+}, { 
+  timestamps: true,
+  toJSON: {
+    transform: function(doc, ret) {
+      delete ret.password;
+      delete ret.__v;
+      return ret;
+    }
+  }
+});
 
 
 // 🔐 Password Hashing
@@ -69,5 +103,14 @@ userSchema.methods.comparePassword = async function (password) {
   return await bcrypt.compare(password, this.password);
 };
 
+// 👤 Get full name
+userSchema.virtual('fullName').get(function() {
+  return `${this.firstName} ${this.lastName}`;
+});
+
+// 📧 Find by email (static method)
+userSchema.statics.findByEmail = function(email) {
+  return this.findOne({ email });
+};
 
 module.exports = mongoose.model('User', userSchema);

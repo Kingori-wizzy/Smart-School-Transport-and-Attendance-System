@@ -38,6 +38,15 @@ const studentSchema = new mongoose.Schema({
 
   guardianContact: { type: String, required: true },
 
+  // ✅ NEW: Reference to Bus model
+  busId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Bus',  // References the Bus model
+    index: true
+  },
+
+  // Keep these for display/compatibility
+  busNumber: { type: String },
   routeName: {
     type: String,
     required: true,

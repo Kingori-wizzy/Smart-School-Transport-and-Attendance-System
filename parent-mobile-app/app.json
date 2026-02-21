@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "resizeMode": "contain",
       "backgroundColor": "#667eea"
@@ -15,16 +15,17 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.smartschool.parent",
       "buildNumber": "1.0.0",
+      "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to location to track school buses",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "This app needs access to location to track school buses",
-        "UIBackgroundModes": [
-          "location",
-          "fetch",
-          "remote-notification"
-        ],
+        "UIBackgroundModes": ["location", "fetch", "remote-notification"],
         "NSCameraUsageDescription": "This app uses camera to scan QR codes",
-        "NSPhotoLibraryUsageDescription": "This app needs access to photo library to upload profile pictures"
+        "NSPhotoLibraryUsageDescription": "This app needs access to photo library to upload profile pictures",
+        "NSUserNotificationUsageDescription": "This app needs permission to send you notifications about your children"
+      },
+      "entitlements": {
+        "aps-environment": "development"
       }
     },
     "android": {
@@ -34,6 +35,7 @@
       },
       "package": "com.smartschool.parent",
       "versionCode": 1,
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
@@ -45,7 +47,8 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "edgeToEdgeEnabled": true
     },
@@ -56,21 +59,31 @@
     },
     "plugins": [
       [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#667eea",
+          "sounds": ["./assets/notification.wav"]
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true,
+            "extraMavenRepos": ["../../node_modules/@react-native-firebase/messaging/android/libs"]
+          },
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ],
+      [
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "Allow Smart School Parent to use your location to track school buses.",
           "locationAlwaysPermission": "Allow Smart School Parent to track buses in the background.",
           "locationWhenInUsePermission": "Allow Smart School Parent to use your location to track school buses."
-        }
-      ],
-      [
-        "expo-notifications",
-        {
-          "icon": "./assets/notification-icon.png",
-          "color": "#667eea",
-          "sounds": [
-            "./assets/notification.wav"
-          ]
         }
       ],
       [

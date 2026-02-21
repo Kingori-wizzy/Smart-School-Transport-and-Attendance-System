@@ -5,11 +5,11 @@ import {
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  
   KeyboardAvoidingView,
   Platform,
   ScrollView,
   ActivityIndicator,
+  Alert,  // ✅ ADD THIS - it was missing!
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -47,7 +47,6 @@ export default function LoginScreen({ navigation }) {
           colors={['#667eea', '#764ba2']}
           style={styles.header}
         >
-         
           <Text style={styles.appName}>Smart School Transport</Text>
           <Text style={styles.tagline}>Parent Portal</Text>
         </LinearGradient>

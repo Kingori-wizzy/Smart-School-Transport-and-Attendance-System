@@ -16,6 +16,7 @@ import AttendanceScreen from '../screens/Main/AttendanceScreen';
 import NotificationsScreen from '../screens/Main/NotificationsScreen';
 import MessagesScreen from '../screens/Main/MessagesScreen';
 import ProfileScreen from '../screens/Main/ProfileScreen';
+import TransportScreen from '../screens/Main/TransportScreen';
 
 // Child Screens
 import ChildDetailsScreen from '../screens/Child/ChildDetailsScreen';
@@ -103,8 +104,12 @@ const AppNavigator = () => {
             <Stack.Screen name="AddChild" component={AddChildScreen} />
             <Stack.Screen name="ChildHistory" component={ChildHistoryScreen} />
             <Stack.Screen name="EditChild" component={EditChildScreen} />
-            <Stack.Screen name="TrackingDetail" component={TrackingScreen} />
-            <Stack.Screen name="NotificationsScreen" component={NotificationsScreen} />
+            <Stack.Screen name="Tracking" component={TrackingScreen} />
+            <Stack.Screen name="Notifications" component={NotificationsScreen} />
+            <Stack.Screen name="Attendance" component={AttendanceScreen} />
+            <Stack.Screen name="Profile" component={ProfileScreen} />
+            <Stack.Screen name="Messages" component={MessagesScreen} />
+            <Stack.Screen name="Transport" component={TransportScreen} />
           </>
         )}
       </Stack.Navigator>

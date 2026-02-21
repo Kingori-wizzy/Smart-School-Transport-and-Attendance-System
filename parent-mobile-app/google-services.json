@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "146704273582",
+    "project_id": "smart-school-parent",
+    "storage_bucket": "smart-school-parent.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:146704273582:android:ef194e135dcc5a68771d3f",
+        "android_client_info": {
+          "package_name": "com.smartschool.parent"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCxXoU2xijPdof1zyhE-CnbanA41ZD2ZS8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

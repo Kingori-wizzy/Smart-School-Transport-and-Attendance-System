@@ -22,7 +22,15 @@ export const AuthProvider = ({ children }) => {
       
       if (storedUser && token) {
         setUser(JSON.parse(storedUser));
-        await fetchChildren();
+        // Verify token with backend
+        try {
+          await api.get('/auth/verify');
+          await fetchChildren();
+        } catch (error) {
+          console.error('Token verification failed:', error.response?.data || error.message);
+          // Token invalid, clear storage
+          await AsyncStorage.multiRemove(['@auth_token', '@user']);
+        }
       }
     } catch (error) {
       console.error('Error loading stored data:', error);
@@ -31,11 +39,23 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // ✅ FIXED LOGIN FUNCTION
   const login = async (email, password) => {
     try {
-      const response = await api.post('/auth/login', { email, password });
+      console.log('Attempting login for:', email);
       
-      const { token, user } = response.data;
+      // api.post returns the data directly, NOT response.data
+      const data = await api.post('/auth/login', { email, password });
+      
+      console.log('Login response data:', data);
+      
+      // Extract token and user from the response data
+      const { token, user } = data;
+      
+      if (!token || !user) {
+        console.error('Missing token or user in response:', data);
+        return { success: false, message: 'Invalid response from server' };
+      }
       
       await AsyncStorage.multiSet([
         ['@auth_token', token],
@@ -43,13 +63,20 @@ export const AuthProvider = ({ children }) => {
       ]);
       
       setUser(user);
+      
+      // Fetch children after successful login
       await fetchChildren();
       
       return { success: true };
     } catch (error) {
+      console.error('Login error details:', {
+        message: error.message,
+        response: error.response?.data
+      });
+      
       return { 
         success: false, 
-        message: error.response?.data?.message || 'Login failed' 
+        message: error.message || 'Login failed' 
       };
     }
   };
@@ -68,24 +95,34 @@ export const AuthProvider = ({ children }) => {
 
   const fetchChildren = async () => {
     try {
-      const response = await api.get('/parents/children');
-      setChildrenList(response.data);
-      return response.data;
+      const data = await api.get('/parents/children');
+      setChildrenList(data);
+      return data;
     } catch (error) {
-      console.error('Error fetching children:', error);
+      console.error('Error fetching children:', error.message);
       return [];
     }
   };
 
   const register = async (userData) => {
     try {
-      // Use the correct endpoint from your backend
-      const response = await api.post('/auth/register', userData);
-      return { success: true, data: response.data };
+      // Ensure role is set to 'parent'
+      const registrationData = {
+        ...userData,
+        role: 'parent'
+      };
+      
+      console.log('Registration data sent:', registrationData);
+      
+      const data = await api.post('/auth/register', registrationData);
+      console.log('Registration response:', data);
+      
+      return { success: true, data };
     } catch (error) {
+      console.error('Registration error:', error.message);
       return { 
         success: false, 
-        message: error.response?.data?.message || 'Registration failed' 
+        message: error.message || 'Registration failed' 
       };
     }
   };
@@ -95,9 +132,10 @@ export const AuthProvider = ({ children }) => {
       await api.post('/auth/forgot-password', { email });
       return { success: true };
     } catch (error) {
+      console.error('Forgot password error:', error.message);
       return { 
         success: false, 
-        message: error.response?.data?.message || 'Request failed' 
+        message: error.message || 'Request failed' 
       };
     }
   };
@@ -107,10 +145,23 @@ export const AuthProvider = ({ children }) => {
       await api.post('/auth/reset-password', { token, newPassword });
       return { success: true };
     } catch (error) {
+      console.error('Reset password error:', error.message);
       return { 
         success: false, 
-        message: error.response?.data?.message || 'Reset failed' 
+        message: error.message || 'Reset failed' 
       };
+    }
+  };
+
+  const refreshUser = async () => {
+    try {
+      const data = await api.get('/auth/verify');
+      if (data.valid) {
+        setUser(data.user);
+        await fetchChildren();
+      }
+    } catch (error) {
+      console.error('Error refreshing user:', error);
     }
   };
 
@@ -125,6 +176,7 @@ export const AuthProvider = ({ children }) => {
       forgotPassword,
       resetPassword,
       fetchChildren,
+      refreshUser,
     }}>
       {children}
     </AuthContext.Provider>

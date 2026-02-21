@@ -46,10 +46,11 @@ export const SocketProvider = ({ children }) => {
       setIsConnected(false);
     });
 
+    // ✅ Updated to match backend event names
     socketInstance.on('bus-location-update', (data) => {
       setLiveLocations(prev => ({
         ...prev,
-        [data.busId]: {
+        [data.vehicleId || data.busId]: {
           ...data,
           timestamp: new Date(),
         },
@@ -67,6 +68,11 @@ export const SocketProvider = ({ children }) => {
     socketInstance.on('boarding-alert', (data) => {
       handleAlert('boarding', data);
       showNotification('Child Boarded', `${data.childName} has boarded the bus`);
+    });
+
+    socketInstance.on('new-message', (data) => {
+      handleAlert('message', data);
+      showNotification('New Message', data.message);
     });
 
     setSocket(socketInstance);
