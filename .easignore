@@ -1,0 +1,19 @@
+# Ignore everything by default
+/*
+
+# But allow the parent-mobile-app folder
+!/parent-mobile-app
+
+# Allow the .git folder (needed for EAS)
+!.git
+
+# Allow .easignore itself
+!.easignore
+
+# Now ignore specific patterns within parent-mobile-app
+parent-mobile-app/node_modules/
+parent-mobile-app/.expo/
+parent-mobile-app/android/
+parent-mobile-app/ios/
+parent-mobile-app/web-build/
+parent-mobile-app/.env
