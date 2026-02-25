@@ -108,3 +108,6 @@ parent-mobile-app/web-build/
 # OS files
 .DS_Store
 Thumbs.db
+
+
+.expo/

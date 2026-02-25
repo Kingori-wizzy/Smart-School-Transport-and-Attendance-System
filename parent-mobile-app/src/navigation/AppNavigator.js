@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { Text } from 'react-native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useAuth } from '../context/AuthContext';
@@ -79,45 +79,39 @@ const MainTabs = () => {
   );
 };
 
+// ✅ FIXED: NO NavigationContainer here!
 const AppNavigator = () => {
   const { user, loading } = useAuth();
 
   if (loading) {
-    return null; // Or a loading screen
+    return null;
   }
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {!user ? (
-          // Auth Stack
-          <>
-            <Stack.Screen name="Login" component={LoginScreen} />
-            <Stack.Screen name="Register" component={RegisterScreen} />
-            <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-          </>
-        ) : (
-          // Main Stack
-          <>
-            <Stack.Screen name="MainTabs" component={MainTabs} />
-            <Stack.Screen name="ChildDetails" component={ChildDetailsScreen} />
-            <Stack.Screen name="AddChild" component={AddChildScreen} />
-            <Stack.Screen name="ChildHistory" component={ChildHistoryScreen} />
-            <Stack.Screen name="EditChild" component={EditChildScreen} />
-            <Stack.Screen name="Tracking" component={TrackingScreen} />
-            <Stack.Screen name="Notifications" component={NotificationsScreen} />
-            <Stack.Screen name="Attendance" component={AttendanceScreen} />
-            <Stack.Screen name="Profile" component={ProfileScreen} />
-            <Stack.Screen name="Messages" component={MessagesScreen} />
-            <Stack.Screen name="Transport" component={TransportScreen} />
-          </>
-        )}
-      </Stack.Navigator>
-    </NavigationContainer>
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      {!user ? (
+        <>
+          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="Register" component={RegisterScreen} />
+          <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+        </>
+      ) : (
+        <>
+          <Stack.Screen name="MainTabs" component={MainTabs} />
+          <Stack.Screen name="ChildDetails" component={ChildDetailsScreen} />
+          <Stack.Screen name="AddChild" component={AddChildScreen} />
+          <Stack.Screen name="ChildHistory" component={ChildHistoryScreen} />
+          <Stack.Screen name="EditChild" component={EditChildScreen} />
+          <Stack.Screen name="Tracking" component={TrackingScreen} />
+          <Stack.Screen name="Notifications" component={NotificationsScreen} />
+          <Stack.Screen name="Attendance" component={AttendanceScreen} />
+          <Stack.Screen name="Profile" component={ProfileScreen} />
+          <Stack.Screen name="Messages" component={MessagesScreen} />
+          <Stack.Screen name="Transport" component={TransportScreen} />
+        </>
+      )}
+    </Stack.Navigator>
   );
 };
-
-// Add this missing import at the top
-import { Text } from 'react-native';
 
 export default AppNavigator;

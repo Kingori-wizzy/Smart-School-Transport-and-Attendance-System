@@ -8,16 +8,27 @@
       "developmentClient": true,
       "distribution": "internal",
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "image": "ubuntu-22.04-jdk-17-ndk-r21e"
       }
     },
     "preview": {
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "image": "ubuntu-22.04-jdk-17-ndk-r21e"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://your-api-url.com"
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "android": {
+        "image": "ubuntu-22.04-jdk-17-ndk-r21e"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://192.168.100.3:5000/api"
+      }
     }
   },
   "submit": {

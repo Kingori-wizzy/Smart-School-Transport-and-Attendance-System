@@ -6,7 +6,6 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
     "splash": {
       "resizeMode": "contain",
       "backgroundColor": "#667eea"
@@ -15,11 +14,14 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.smartschool.parent",
       "buildNumber": "1.0.0",
-      "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to location to track school buses",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "This app needs access to location to track school buses",
-        "UIBackgroundModes": ["location", "fetch", "remote-notification"],
+        "UIBackgroundModes": [
+          "location",
+          "fetch",
+          "remote-notification"
+        ],
         "NSCameraUsageDescription": "This app uses camera to scan QR codes",
         "NSPhotoLibraryUsageDescription": "This app needs access to photo library to upload profile pictures",
         "NSUserNotificationUsageDescription": "This app needs permission to send you notifications about your children"
@@ -49,8 +51,7 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.RECORD_AUDIO",
         "android.permission.POST_NOTIFICATIONS"
-      ],
-      "edgeToEdgeEnabled": true
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -63,7 +64,9 @@
         {
           "icon": "./assets/notification-icon.png",
           "color": "#667eea",
-          "sounds": ["./assets/notification.wav"]
+          "sounds": [
+            "./assets/notification.wav"
+          ]
         }
       ],
       [
@@ -71,7 +74,13 @@
         {
           "android": {
             "usesCleartextTraffic": true,
-            "extraMavenRepos": ["../../node_modules/@react-native-firebase/messaging/android/libs"]
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34,
+            "buildToolsVersion": "34.0.0",
+            "kotlinVersion": "1.8.10",
+            "extraMavenRepos": [
+              "../../node_modules/@react-native-firebase/messaging/android/libs"
+            ]
           },
           "ios": {
             "useFrameworks": "static"
