@@ -21,6 +21,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const parentRoutes = require('./routes/parentRoutes'); // ✅ NEW
 const userRoutes = require('./routes/userRoutes');
+const driverRoutes = require('./routes/driverRoutes');
 
 // Create Express app
 const app = express();
@@ -57,6 +58,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/parents', parentRoutes); // ✅ NEW
 app.use('/api/user', userRoutes);
+app.use('/api', driverRoutes);  // This will handle /api/auth/driver/login
 
 // Health check route
 app.get('/api/health', (req, res) => {
@@ -122,8 +124,8 @@ app.set('io', io);
 
 // Start server
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`🚀 Server running securely on port ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🚀 Server running securely on port ${PORT} (all interfaces)`);
 });
 
 module.exports = { app, server, io };
