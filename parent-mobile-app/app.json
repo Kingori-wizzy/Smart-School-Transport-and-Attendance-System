@@ -6,7 +6,6 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
     "splash": {
       "resizeMode": "contain",
       "backgroundColor": "#667eea"
@@ -15,7 +14,6 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.smartschool.parent",
       "buildNumber": "1.0.0",
-      "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to location to track school buses",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "This app needs access to location to track school buses",
@@ -53,8 +51,7 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.RECORD_AUDIO",
         "android.permission.POST_NOTIFICATIONS"
-      ],
-      "edgeToEdgeEnabled": true
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -77,9 +74,7 @@
         {
           "android": {
             "usesCleartextTraffic": true,
-            "extraMavenRepos": [
-              "../../node_modules/@react-native-firebase/messaging/android/libs"
-            ]
+            "extraMavenRepos": ["../../node_modules/@react-native-firebase/messaging/android/libs"]
           },
           "ios": {
             "useFrameworks": "static"
