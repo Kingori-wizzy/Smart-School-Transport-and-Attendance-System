@@ -2,17 +2,350 @@ const express = require('express');
 const router = express.Router();
 const Attendance = require('../models/AttendanceRecord');
 const Student = require('../models/Student');
+const Trip = require('../models/Trip');
 const { authMiddleware } = require('../middleware/authMiddleware');
 
 // All routes require authentication
 router.use(authMiddleware);
+
+// ==================== DRIVER ENDPOINTS (for mobile app) ====================
+
+/**
+ * @route   POST /api/attendance/driver/trip/:tripId/board/:studentId
+ * @desc    Record student boarding (called from driver app)
+ * @access  Private (Driver only)
+ */
+router.post('/driver/trip/:tripId/board/:studentId', async (req, res) => {
+  try {
+    const { tripId, studentId } = req.params;
+    const { method, timestamp, syncedFromOffline, location, deviceId } = req.body;
+
+    // Verify the trip exists and is active
+    const trip = await Trip.findById(tripId).populate('busId');
+    if (!trip) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Trip not found' 
+      });
+    }
+
+    // Verify the student exists
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Student not found' 
+      });
+    }
+
+    // Check if student already boarded this trip (avoid duplicates)
+    const existingAttendance = await Attendance.findOne({
+      studentId,
+      tripId,
+      eventType: 'board'
+    });
+
+    if (existingAttendance) {
+      return res.status(409).json({
+        success: false,
+        error: 'Student already boarded this trip',
+        data: existingAttendance
+      });
+    }
+
+    // Create attendance record
+    const attendance = new Attendance({
+      studentId,
+      tripId,
+      busId: trip.busId?._id || req.user.busId,
+      busNumber: trip.busId?.busNumber || req.body.busNumber,
+      driverName: req.user.name || req.body.driverName,
+      createdAt: timestamp || new Date(),
+      eventType: 'board', // 'board', 'alight', 'late', 'absent'
+      method: method || 'qr',
+      location: location ? {
+        type: 'Point',
+        coordinates: [location.lng, location.lat]
+      } : null,
+      metadata: {
+        deviceId,
+        syncedFromOffline: syncedFromOffline || false,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent')
+      }
+    });
+
+    await attendance.save();
+
+    // Update student's current status
+    await Student.findByIdAndUpdate(studentId, {
+      currentTrip: tripId,
+      lastBoardingTime: new Date(),
+      currentStatus: 'onboard'
+    });
+
+    // Emit real-time update via socket (if you have socket.io set up)
+    if (req.io) {
+      req.io.to(`trip-${tripId}`).emit('student-boarded', {
+        studentId,
+        studentName: student.name,
+        timestamp: attendance.createdAt,
+        attendanceId: attendance._id
+      });
+
+      // Notify parent if socket rooms exist
+      if (student.parentId) {
+        req.io.to(`parent-${student.parentId}`).emit('child-boarded', {
+          studentId,
+          studentName: student.name,
+          tripId,
+          timestamp: attendance.createdAt
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      data: attendance,
+      message: 'Boarding recorded successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Boarding error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+/**
+ * @route   POST /api/attendance/driver/trip/:tripId/alight/:studentId
+ * @desc    Record student alighting
+ * @access  Private (Driver only)
+ */
+router.post('/driver/trip/:tripId/alight/:studentId', async (req, res) => {
+  try {
+    const { tripId, studentId } = req.params;
+    const { method, timestamp, location } = req.body;
+
+    // Find the boarding record
+    const boardingRecord = await Attendance.findOne({
+      studentId,
+      tripId,
+      eventType: 'board'
+    });
+
+    if (!boardingRecord) {
+      return res.status(404).json({
+        success: false,
+        error: 'No boarding record found for this student on this trip'
+      });
+    }
+
+    // Create alighting record
+    const alighting = new Attendance({
+      studentId,
+      tripId,
+      busId: boardingRecord.busId,
+      busNumber: boardingRecord.busNumber,
+      driverName: req.user.name,
+      createdAt: timestamp || new Date(),
+      eventType: 'alight',
+      method: method || 'qr',
+      location: location ? {
+        type: 'Point',
+        coordinates: [location.lng, location.lat]
+      } : null,
+      metadata: {
+        relatedBoardId: boardingRecord._id
+      }
+    });
+
+    await alighting.save();
+
+    // Update student status
+    await Student.findByIdAndUpdate(studentId, {
+      currentTrip: null,
+      lastAlightingTime: new Date(),
+      currentStatus: 'offboard'
+    });
+
+    // Emit real-time update
+    if (req.io) {
+      req.io.to(`trip-${tripId}`).emit('student-alighted', {
+        studentId,
+        timestamp: alighting.createdAt
+      });
+    }
+
+    res.json({
+      success: true,
+      data: alighting,
+      message: 'Alighting recorded successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Alighting error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+/**
+ * @route   POST /api/attendance/driver/sync-offline
+ * @desc    Sync multiple offline attendance records
+ * @access  Private (Driver only)
+ */
+router.post('/driver/sync-offline', async (req, res) => {
+  try {
+    const { scans, deviceId } = req.body;
+    
+    if (!Array.isArray(scans) || scans.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid scans array'
+      });
+    }
+
+    const results = [];
+    const syncBatch = Date.now().toString();
+
+    for (const scan of scans) {
+      try {
+        const { studentId, tripId, method, timestamp, location } = scan;
+
+        // Check for duplicate
+        const existing = await Attendance.findOne({
+          studentId,
+          tripId,
+          createdAt: timestamp,
+          eventType: 'board'
+        });
+
+        if (existing) {
+          results.push({
+            success: true,
+            studentId,
+            status: 'duplicate',
+            attendanceId: existing._id
+          });
+          continue;
+        }
+
+        // Create attendance record
+        const attendance = new Attendance({
+          studentId,
+          tripId,
+          createdAt: timestamp || new Date(),
+          eventType: 'board',
+          method: method || 'qr',
+          location: location ? {
+            type: 'Point',
+            coordinates: [location.lng, location.lat]
+          } : null,
+          metadata: {
+            deviceId,
+            syncedFromOffline: true,
+            syncBatch
+          }
+        });
+
+        await attendance.save();
+
+        results.push({
+          success: true,
+          studentId,
+          status: 'synced',
+          attendanceId: attendance._id
+        });
+
+      } catch (error) {
+        results.push({
+          success: false,
+          studentId: scan.studentId,
+          error: error.message
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      batch: syncBatch,
+      summary: {
+        total: scans.length,
+        synced: results.filter(r => r.success).length,
+        failed: results.filter(r => !r.success).length,
+        duplicates: results.filter(r => r.status === 'duplicate').length
+      },
+      results
+    });
+
+  } catch (error) {
+    console.error('❌ Offline sync error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+/**
+ * @route   GET /api/attendance/driver/trip/:tripId/students
+ * @desc    Get all students who boarded a specific trip
+ * @access  Private (Driver only)
+ */
+router.get('/driver/trip/:tripId/students', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+
+    const boardings = await Attendance.find({
+      tripId,
+      eventType: 'board'
+    }).populate('studentId', 'name classLevel parentId photo');
+
+    const alightings = await Attendance.find({
+      tripId,
+      eventType: 'alight'
+    });
+
+    // Create map of alighted students
+    const alightedMap = {};
+    alightings.forEach(a => {
+      alightedMap[a.studentId.toString()] = a.createdAt;
+    });
+
+    const students = boardings.map(b => ({
+      ...b.studentId.toObject(),
+      boardedAt: b.createdAt,
+      alightedAt: alightedMap[b.studentId._id.toString()] || null,
+      status: alightedMap[b.studentId._id.toString()] ? 'completed' : 'onboard'
+    }));
+
+    res.json({
+      success: true,
+      count: students.length,
+      data: students
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching trip students:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ==================== PARENT/CHILD ENDPOINTS (your existing code) ====================
 
 // 📊 Get today's attendance for a child
 router.get('/child/:childId/today', async (req, res) => {
   try {
     const { childId } = req.params;
     
-    // Verify child exists (optional)
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);

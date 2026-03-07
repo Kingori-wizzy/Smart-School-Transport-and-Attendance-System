@@ -15,6 +15,7 @@ import NavigationScreen from '../screens/Main/NavigationScreen';
 import BoardingScreen from '../screens/Main/BoardingScreen';
 import ReportScreen from '../screens/Main/ReportScreen';
 import ProfileScreen from '../screens/Main/ProfileScreen';
+import QRScanScreen from '../screens/Main/QRScanScreen'; // 👈 Add this import
 
 // Emergency Screens
 import SOSScreen from '../screens/Emergency/SOSScreen';
@@ -75,6 +76,16 @@ const AppNavigator = () => {
           <Stack.Screen name="Boarding" component={BoardingScreen} />
           <Stack.Screen name="Report" component={ReportScreen} />
           <Stack.Screen name="SOS" component={SOSScreen} />
+          {/* 👇 Add QR Scan screen here - it will be accessible from anywhere */}
+          <Stack.Screen 
+            name="QRScan" 
+            component={QRScanScreen} 
+            options={{
+              // Keep header hidden, make it a full screen modal
+              presentation: 'fullScreenModal',
+              cardStyle: { backgroundColor: 'transparent' }
+            }}
+          />
         </>
       )}
     </Stack.Navigator>
