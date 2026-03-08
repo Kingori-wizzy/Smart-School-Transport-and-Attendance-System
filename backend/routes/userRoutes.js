@@ -10,52 +10,135 @@ router.use(authMiddleware);
 router.post('/push-token', async (req, res) => {
   try {
     const { token } = req.body;
-    
+    const userId = req.user.id;
+
     if (!token) {
-      return res.status(400).json({ message: 'Token is required' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Token is required' 
+      });
     }
 
-    await User.findByIdAndUpdate(req.user.id, {
-      pushToken: token,
-      pushTokenUpdatedAt: new Date()
-    });
+    const updatedUser = await User.findByIdAndUpdate(
+      userId, 
+      { 
+        pushToken: token,
+        pushTokenUpdatedAt: new Date()
+      },
+      { new: true }
+    ).select('-password');
+
+    if (!updatedUser) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    console.log(`✅ Push token saved for user ${userId}: ${token}`);
 
     res.json({ 
       success: true, 
-      message: 'Push token saved successfully' 
+      message: 'Push token saved successfully',
+      user: updatedUser
     });
   } catch (error) {
-    console.error('Error saving push token:', error);
-    res.status(500).json({ message: error.message });
+    console.error('❌ Error saving push token:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 });
 
 // 🗑️ Remove push token (when user logs out)
 router.delete('/push-token', async (req, res) => {
   try {
-    await User.findByIdAndUpdate(req.user.id, {
-      pushToken: null,
-      pushTokenUpdatedAt: null
-    });
+    const userId = req.user.id;
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { 
+        pushToken: null,
+        pushTokenUpdatedAt: null 
+      },
+      { new: true }
+    ).select('-password');
+
+    if (!updatedUser) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    console.log(`✅ Push token removed for user ${userId}`);
 
     res.json({ 
       success: true, 
       message: 'Push token removed successfully' 
     });
   } catch (error) {
-    console.error('Error removing push token:', error);
-    res.status(500).json({ message: error.message });
+    console.error('❌ Error removing push token:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+// 📱 Get push token
+router.get('/push-token', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const user = await User.findById(userId).select('pushToken pushTokenUpdatedAt');
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      pushToken: user.pushToken || null,
+      updatedAt: user.pushTokenUpdatedAt || null
+    });
+  } catch (error) {
+    console.error('❌ Error fetching push token:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 });
 
 // 👤 Get user profile
 router.get('/profile', async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password -pushToken');
-    res.json(user);
+    const user = await User.findById(req.user.id)
+      .select('-password -pushToken -__v')
+      .populate('children', 'name grade classLevel photo');
+
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      user 
+    });
   } catch (error) {
-    console.error('Error fetching profile:', error);
-    res.status(500).json({ message: error.message });
+    console.error('❌ Error fetching profile:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 });
 
@@ -63,17 +146,39 @@ router.get('/profile', async (req, res) => {
 router.put('/profile', async (req, res) => {
   try {
     const { firstName, lastName, phone } = req.body;
+    const userId = req.user.id;
     
     const updatedUser = await User.findByIdAndUpdate(
-      req.user.id,
-      { firstName, lastName, phone },
+      userId,
+      { 
+        firstName, 
+        lastName, 
+        phone,
+        name: `${firstName} ${lastName}`.trim()
+      },
       { new: true, runValidators: true }
     ).select('-password -pushToken');
 
-    res.json(updatedUser);
+    if (!updatedUser) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    console.log(`✅ Profile updated for user ${userId}`);
+
+    res.json({ 
+      success: true, 
+      message: 'Profile updated successfully',
+      user: updatedUser 
+    });
   } catch (error) {
-    console.error('Error updating profile:', error);
-    res.status(500).json({ message: error.message });
+    console.error('❌ Error updating profile:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 });
 
@@ -81,32 +186,110 @@ router.put('/profile', async (req, res) => {
 router.post('/change-password', async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
+    const userId = req.user.id;
     
-    const user = await User.findById(req.user.id).select('+password');
+    // Validate input
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Current password and new password are required' 
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'New password must be at least 6 characters long' 
+      });
+    }
+    
+    const user = await User.findById(userId).select('+password');
+    
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
     
     const isMatch = await user.comparePassword(currentPassword);
     if (!isMatch) {
-      return res.status(401).json({ message: 'Current password is incorrect' });
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Current password is incorrect' 
+      });
     }
     
     user.password = newPassword;
     await user.save();
     
-    res.json({ success: true, message: 'Password changed successfully' });
+    console.log(`✅ Password changed for user ${userId}`);
+
+    res.json({ 
+      success: true, 
+      message: 'Password changed successfully' 
+    });
   } catch (error) {
-    console.error('Error changing password:', error);
-    res.status(500).json({ message: error.message });
+    console.error('❌ Error changing password:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 });
 
 // 🗑️ Delete account
 router.delete('/account', async (req, res) => {
   try {
-    await User.findByIdAndDelete(req.user.id);
-    res.json({ success: true, message: 'Account deleted successfully' });
+    const userId = req.user.id;
+
+    const deletedUser = await User.findByIdAndDelete(userId);
+    
+    if (!deletedUser) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    console.log(`✅ Account deleted for user ${userId}`);
+
+    res.json({ 
+      success: true, 
+      message: 'Account deleted successfully' 
+    });
   } catch (error) {
-    console.error('Error deleting account:', error);
-    res.status(500).json({ message: error.message });
+    console.error('❌ Error deleting account:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+// ✅ Get user activity summary
+router.get('/activity-summary', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findById(userId)
+      .select('lastLogin createdAt pushTokenUpdatedAt')
+      .lean();
+
+    res.json({
+      success: true,
+      data: {
+        memberSince: user.createdAt,
+        lastLogin: user.lastLogin,
+        pushTokenRegistered: !!user.pushTokenUpdatedAt,
+        pushTokenLastUpdated: user.pushTokenUpdatedAt
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error fetching activity summary:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 });
 

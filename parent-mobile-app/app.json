@@ -74,7 +74,10 @@
         {
           "android": {
             "usesCleartextTraffic": true,
-            "extraMavenRepos": ["../../node_modules/@react-native-firebase/messaging/android/libs"]
+            "extraMavenRepos": ["../../node_modules/@react-native-firebase/messaging/android/libs"],
+            "minSdkVersion": 23,
+            "compileSdkVersion": 33,
+            "targetSdkVersion": 33
           },
           "ios": {
             "useFrameworks": "static"

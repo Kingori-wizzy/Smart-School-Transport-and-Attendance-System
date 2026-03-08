@@ -6,6 +6,8 @@ const userSchema = new mongoose.Schema({
   // ===============================
   // BASIC INFO
   // ===============================
+
+  
   firstName: {
     type: String,
     required: true,
@@ -42,9 +44,26 @@ const userSchema = new mongoose.Schema({
   },
 
   deviceToken: {
-    type: String // for Firebase push notifications
+    type: String // for Firebase push notifications (legacy)
   },
 
+  // ===============================
+  // PUSH NOTIFICATIONS
+  // ===============================
+  pushToken: {
+    type: String,    // Expo push token for the user's device
+    default: null,
+    index: true
+  },
+
+  pushTokenUpdatedAt: {
+    type: Date,
+    default: null
+  },
+
+  // ===============================
+  // ACCOUNT STATUS
+  // ===============================
   isActive: {
     type: Boolean,
     default: true,
@@ -111,6 +130,11 @@ userSchema.virtual('fullName').get(function() {
 // 📧 Find by email (static method)
 userSchema.statics.findByEmail = function(email) {
   return this.findOne({ email });
+};
+
+// 🔍 Find users by push token (static method)
+userSchema.statics.findByPushToken = function(token) {
+  return this.findOne({ pushToken: token });
 };
 
 module.exports = mongoose.model('User', userSchema);

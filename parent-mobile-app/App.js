@@ -1,3 +1,6 @@
+// Add this as the very first line
+globalThis.RNFB_SILENCE_MODULAR_DEPRECATION_WARNINGS = true;
+
 import 'react-native-gesture-handler';
 import React, { useEffect, useRef, useState } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';

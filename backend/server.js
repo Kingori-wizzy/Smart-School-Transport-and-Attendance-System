@@ -73,6 +73,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/sms', smsRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/user', userRoutes);
 
 // Health check route
 app.get('/api/health', (req, res) => {

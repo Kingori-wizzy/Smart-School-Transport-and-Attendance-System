@@ -6,6 +6,9 @@ const api = {
     try {
       const token = await AsyncStorage.getItem('@auth_token');
       
+      // Debug token presence
+      console.log(`🔑 Auth token present: ${!!token}`);
+      
       const headers = {
         'Content-Type': 'application/json',
         ...options.headers,
@@ -13,6 +16,9 @@ const api = {
       
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
+        console.log(`🔑 Token attached to request: ${endpoint}`);
+      } else {
+        console.log(`⚠️ No auth token for request: ${endpoint}`);
       }
 
       console.log(`🌐 API Request: ${options.method || 'GET'} ${API_URL}${endpoint}`);
@@ -22,7 +28,7 @@ const api = {
         headers,
       });
 
-      console.log(`📥 Response status: ${response.status}`);
+      console.log(`📥 Response status: ${response.status} for ${endpoint}`);
 
       const responseText = await response.text();
       
@@ -31,11 +37,19 @@ const api = {
         try {
           if (responseText) {
             const errorData = JSON.parse(responseText);
-            errorMessage = errorData.message || errorMessage;
+            errorMessage = errorData.message || errorData.error || errorMessage;
           }
         } catch (e) {
           errorMessage = responseText || errorMessage;
         }
+        
+        // Handle 401 Unauthorized - token expired or invalid
+        if (response.status === 401) {
+          console.log('🔑 Token expired or invalid, clearing storage');
+          await AsyncStorage.multiRemove(['@auth_token', '@user', '@user_role']);
+          // You might want to navigate to login here
+        }
+        
         throw new Error(errorMessage);
       }
 
@@ -62,39 +76,77 @@ const api = {
   },
 
   // ==================== USER/PROFILE ====================
-user: {
-  savePushToken: (token) => 
-    api.request('/user/push-token', { 
-      method: 'POST', 
-      body: JSON.stringify({ token }) 
-    }),
-  
-  removePushToken: () => 
-    api.request('/user/push-token', { method: 'DELETE' }),
-  
-  getProfile: () => 
-    api.request('/user/profile'),
-  
-  updateProfile: (data) => 
-    api.request('/user/profile', { 
-      method: 'PUT', 
-      body: JSON.stringify(data) 
-    }),
-  
-  changePassword: (data) => 
-    api.request('/user/change-password', { 
-      method: 'POST', 
-      body: JSON.stringify(data) 
-    }),
-  
-  deleteAccount: () => 
-    api.request('/user/account', { method: 'DELETE' }),
-},
+  user: {
+    // Save push token with better error handling
+    savePushToken: async (token) => {
+      try {
+        // Check if user is logged in first
+        const authToken = await AsyncStorage.getItem('@auth_token');
+        if (!authToken) {
+          console.log('⚠️ Cannot save push token: User not authenticated');
+          return { success: false, message: 'Not authenticated' };
+        }
+        
+        return await api.request('/user/push-token', { 
+          method: 'POST', 
+          body: JSON.stringify({ token }) 
+        });
+      } catch (error) {
+        console.error('❌ Error saving push token:', error);
+        return { success: false, message: error.message };
+      }
+    },
+    
+    removePushToken: () => 
+      api.request('/user/push-token', { method: 'DELETE' }),
+    
+    getProfile: () => 
+      api.request('/user/profile'),
+    
+    updateProfile: (data) => 
+      api.request('/user/profile', { 
+        method: 'PUT', 
+        body: JSON.stringify(data) 
+      }),
+    
+    changePassword: (data) => 
+      api.request('/user/change-password', { 
+        method: 'POST', 
+        body: JSON.stringify(data) 
+      }),
+    
+    deleteAccount: () => 
+      api.request('/user/account', { method: 'DELETE' }),
+    
+    // New: Get push token status
+    getPushTokenStatus: () => 
+      api.request('/user/push-token', { method: 'GET' }),
+  },
 
   // ==================== AUTH ====================
   auth: {
-    login: (email, password) => 
-      api.request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+    login: async (email, password) => {
+      try {
+        const response = await api.request('/auth/login', { 
+          method: 'POST', 
+          body: JSON.stringify({ email, password }) 
+        });
+        
+        // If login successful and token exists, store it
+        if (response.token) {
+          await AsyncStorage.setItem('@auth_token', response.token);
+          if (response.user) {
+            await AsyncStorage.setItem('@user', JSON.stringify(response.user));
+            await AsyncStorage.setItem('@user_role', response.user.role);
+          }
+          console.log('✅ Auth token stored after login');
+        }
+        
+        return response;
+      } catch (error) {
+        throw error;
+      }
+    },
     
     register: (userData) => 
       api.request('/auth/register', { method: 'POST', body: JSON.stringify(userData) }),
@@ -105,11 +157,37 @@ user: {
     resetPassword: (token, newPassword) => 
       api.request('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword }) }),
     
-    verify: () => 
-      api.request('/auth/verify'),
+    verify: async () => {
+      try {
+        return await api.request('/auth/verify');
+      } catch (error) {
+        // If verify fails, clear token
+        await AsyncStorage.multiRemove(['@auth_token', '@user', '@user_role']);
+        throw error;
+      }
+    },
     
-    logout: () => 
-      api.request('/auth/logout', { method: 'POST' }),
+    logout: async () => {
+      try {
+        await api.request('/auth/logout', { method: 'POST' });
+      } finally {
+        // Always clear local storage even if API call fails
+        await AsyncStorage.multiRemove(['@auth_token', '@user', '@user_role']);
+        console.log('✅ User logged out, tokens cleared');
+      }
+    },
+    
+    // New: Check if user is authenticated
+    isAuthenticated: async () => {
+      const token = await AsyncStorage.getItem('@auth_token');
+      return !!token;
+    },
+    
+    // New: Get current user
+    getCurrentUser: async () => {
+      const userStr = await AsyncStorage.getItem('@user');
+      return userStr ? JSON.parse(userStr) : null;
+    },
   },
 
   // ==================== PARENT ====================
@@ -208,7 +286,7 @@ user: {
       }),
   },
 
-  // ==================== PROFILE ====================
+  // ==================== PROFILE (Alias for user endpoints) ====================
   profile: {
     update: (userData) => 
       api.request('/user/profile', { method: 'PUT', body: JSON.stringify(userData) }),
@@ -216,12 +294,12 @@ user: {
     changePassword: (passwordData) => 
       api.request('/user/change-password', { method: 'POST', body: JSON.stringify(passwordData) }),
     
-    uploadPhoto: (formData) => {
-      // Special handler for file upload
+    uploadPhoto: async (formData) => {
+      const token = await AsyncStorage.getItem('@auth_token');
       return fetch(`${API_URL}/user/profile/photo`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${AsyncStorage.getItem('@auth_token')}`,
+          'Authorization': `Bearer ${token}`,
         },
         body: formData,
       });
@@ -237,6 +315,26 @@ user: {
   put: (endpoint, body) => api.request(endpoint, { method: 'PUT', body: JSON.stringify(body) }),
   delete: (endpoint) => api.request(endpoint, { method: 'DELETE' }),
   patch: (endpoint, body) => api.request(endpoint, { method: 'PATCH', body: JSON.stringify(body) }),
+  
+  // ==================== AUTH TOKEN MANAGEMENT ====================
+  // Helper to manually set token (useful after social login, etc.)
+  setAuthToken: async (token) => {
+    if (token) {
+      await AsyncStorage.setItem('@auth_token', token);
+      console.log('✅ Auth token manually set');
+    }
+  },
+  
+  // Helper to clear token
+  clearAuthToken: async () => {
+    await AsyncStorage.removeItem('@auth_token');
+    console.log('✅ Auth token cleared');
+  },
+  
+  // Helper to get current token
+  getAuthToken: async () => {
+    return await AsyncStorage.getItem('@auth_token');
+  },
 };
 
 export default api;
