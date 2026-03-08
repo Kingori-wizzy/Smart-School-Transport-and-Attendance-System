@@ -61,10 +61,19 @@ const api = {
     }
   },
 
-  // Auth endpoints
+  // Auth endpoints - UPDATED with correct login
   auth: {
-    login: (email, password) => 
-      api.request('/auth/driver/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+    login: (email, password) => {
+      // Use the working login endpoint without dummy data
+      return api.request('/auth/login', { 
+        method: 'POST', 
+        body: JSON.stringify({ 
+          email, 
+          password
+          // No firstName/lastName needed - backend fixed
+        }) 
+      });
+    },
     
     verifyPin: (pin) => 
       api.request('/auth/driver/verify-pin', { method: 'POST', body: JSON.stringify({ pin }) }),
@@ -105,13 +114,23 @@ const api = {
     boardStudent: (tripId, studentId, method) => 
       api.request(`/driver/trip/${tripId}/board/${studentId}`, { 
         method: 'POST', 
-        body: JSON.stringify({ method, timestamp: new Date().toISOString() }) 
+        body: JSON.stringify({ 
+          method, 
+          timestamp: new Date().toISOString() 
+        }) 
       }),
     
     updateLocation: (tripId, lat, lon, speed, heading) => 
       api.request('/driver/gps/update', { 
         method: 'POST', 
-        body: JSON.stringify({ tripId, lat, lon, speed, heading, timestamp: new Date().toISOString() }) 
+        body: JSON.stringify({ 
+          tripId, 
+          lat, 
+          lon, 
+          speed, 
+          heading, 
+          timestamp: new Date().toISOString() 
+        }) 
       }),
   },
 
@@ -148,10 +167,15 @@ const api = {
     sendSOS: (tripId, location) => 
       api.request('/driver/emergency', { 
         method: 'POST', 
-        body: JSON.stringify({ tripId, location, timestamp: new Date().toISOString() }) 
+        body: JSON.stringify({ 
+          tripId, 
+          location, 
+          timestamp: new Date().toISOString() 
+        }) 
       }),
   },
 
+  // HTTP method shortcuts
   get: (endpoint) => api.request(endpoint, { method: 'GET' }),
   post: (endpoint, body) => api.request(endpoint, { method: 'POST', body: JSON.stringify(body) }),
   put: (endpoint, body) => api.request(endpoint, { method: 'PUT', body: JSON.stringify(body) }),

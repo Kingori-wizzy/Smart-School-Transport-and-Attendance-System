@@ -22,7 +22,7 @@ const parentRoutes = require('./routes/parentRoutes');
 const userRoutes = require('./routes/userRoutes');
 const driverRoutes = require('./routes/driverRoutes');
 const smsRoutes = require('./routes/smsRoutes');
-const analyticsRoutes = require('./routes/analyticsRoutes'); // 👈 Only ONE declaration
+const analyticsRoutes = require('./routes/analyticsRoutes');
 
 // Import AI services (optional - for initialization)
 const analyticsService = require('./ai/services/analyticsService');
@@ -72,7 +72,7 @@ app.use('/api/parents', parentRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/sms', smsRoutes);
-app.use('/api/analytics', analyticsRoutes); // 👈 Only ONE usage
+app.use('/api/analytics', analyticsRoutes);
 
 // Health check route
 app.get('/api/health', (req, res) => {
@@ -258,8 +258,8 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
-app.use('*', (req, res) => {
+// 404 handler - FIXED (removed the '*')
+app.use((req, res) => {
   res.status(404).json({ 
     success: false, 
     message: 'Route not found',

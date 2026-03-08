@@ -83,7 +83,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// 🔐 Login User
+// 🔐 Login User - FIXED VERSION
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -100,7 +100,8 @@ router.post('/login', async (req, res) => {
     }
 
     // Find user and include password field for comparison
-    const user = await User.findOne({ email }).select('+password');
+    // Using lean() to get a plain object and avoid model validation
+    const user = await User.findOne({ email }).select('+password').lean();
 
     if (!user) {
       console.log('❌ User not found:', email);
@@ -127,10 +128,6 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
-
     // Generate token
     const token = jwt.sign(
       { id: user._id, role: user.role },
@@ -141,13 +138,17 @@ router.post('/login', async (req, res) => {
     console.log('✅ Login successful for:', email);
 
     // Remove password from response
-    const userResponse = user.toObject();
-    delete userResponse.password;
+    delete user.password;
+
+    // Update last login in the background (don't await)
+    User.findByIdAndUpdate(user._id, { lastLogin: new Date() }).catch(err => 
+      console.log('⚠️ Failed to update last login:', err.message)
+    );
 
     res.json({ 
       message: 'Login successful', 
       token, 
-      user: userResponse 
+      user 
     });
   } catch (error) {
     console.error('❌ Login error:', error);
@@ -169,7 +170,7 @@ router.get('/verify', async (req, res) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     console.log('✅ Token decoded:', { id: decoded.id, role: decoded.role });
 
-    const user = await User.findById(decoded.id);
+    const user = await User.findById(decoded.id).lean();
 
     if (!user) {
       console.log('❌ User not found for token');

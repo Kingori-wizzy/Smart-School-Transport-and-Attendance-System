@@ -15,7 +15,7 @@ import NavigationScreen from '../screens/Main/NavigationScreen';
 import BoardingScreen from '../screens/Main/BoardingScreen';
 import ReportScreen from '../screens/Main/ReportScreen';
 import ProfileScreen from '../screens/Main/ProfileScreen';
-import QRScanScreen from '../screens/Main/QRScanScreen'; // 👈 Add this import
+import QRScanScreen from '../screens/Main/QRScanScreen';
 
 // Emergency Screens
 import SOSScreen from '../screens/Emergency/SOSScreen';

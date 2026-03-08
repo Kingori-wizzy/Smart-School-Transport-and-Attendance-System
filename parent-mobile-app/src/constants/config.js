@@ -4,11 +4,11 @@ import { Platform } from 'react-native';
 const getApiUrl = () => {
   // For development, use your computer's IP
   // For production, use your domain
-  return 'http://192.168.100.3:5000/api'; // ✅ UPDATED with your actual IP
+ return 'http://192.168.100.3:5000/api';// ✅ Updated with your current IP
 };
 
 const getSocketUrl = () => {
-  return 'http://192.168.100.3:5000'; // ✅ UPDATED with your actual IP
+  return 'http://192.168.100.3:5000/api'; // ✅ Updated with your current IP
 };
 
 export const API_URL = getApiUrl();
