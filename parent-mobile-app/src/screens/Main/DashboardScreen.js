@@ -38,7 +38,7 @@ export default function DashboardScreen({ navigation }) {
     refresh: refreshChildren 
   } = useOfflineData(
     fetchChildren,
-    cache.keys.children(), // ✅ Use cache.keys helper
+    cache.keys.children(),
     []
   );
 
@@ -50,18 +50,15 @@ export default function DashboardScreen({ navigation }) {
     if (alerts.length > 0) {
       const recent = alerts.slice(0, 3);
       setRecentAlerts(recent);
-      // Save alerts to cache using cache.recentAlerts helper
       cache.recentAlerts.save(recent);
     }
   }, [alerts]);
 
-  // Load cached alerts on mount
   useEffect(() => {
     loadCachedAlerts();
   }, []);
 
   const loadCachedAlerts = async () => {
-    // Use cache.recentAlerts helper
     const cached = await cache.recentAlerts.get();
     if (cached && recentAlerts.length === 0) {
       setRecentAlerts(cached);
@@ -73,7 +70,6 @@ export default function DashboardScreen({ navigation }) {
     try {
       setLoading(true);
       
-      // Try to get from cache first using cache.childStatus helper
       const cachedStatus = await cache.childStatus.get();
       if (cachedStatus && !isConnected) {
         setChildStatus(cachedStatus);
@@ -93,11 +89,9 @@ export default function DashboardScreen({ navigation }) {
         if (!childId) return { childId: null, attendance: null, location: null };
         
         try {
-          // Try cache first for each child using cache.attendance and cache.location helpers
           const cachedAttendance = await cache.attendance.get(childId);
           const cachedLocation = await cache.location.get(childId);
 
-          // If offline and we have cache, use it
           if (isOffline && cachedAttendance && cachedLocation) {
             return {
               childId,
@@ -106,7 +100,6 @@ export default function DashboardScreen({ navigation }) {
             };
           }
 
-          // Otherwise fetch fresh data
           const [attendanceRes, locationRes] = await Promise.all([
             api.attendance.getToday(childId).catch(async (err) => {
               console.log(`Attendance fetch failed for child ${childId}:`, err.message);
@@ -118,7 +111,6 @@ export default function DashboardScreen({ navigation }) {
             })
           ]);
           
-          // Save to cache using helpers
           if (attendanceRes) {
             await cache.attendance.save(childId, attendanceRes);
           }
@@ -132,7 +124,6 @@ export default function DashboardScreen({ navigation }) {
             location: locationRes || null,
           };
         } catch (error) {
-          // Fallback to cache
           const cachedAttendance = await cache.attendance.get(childId);
           const cachedLocation = await cache.location.get(childId);
           
@@ -152,13 +143,11 @@ export default function DashboardScreen({ navigation }) {
         if (status.childId) statusMap[status.childId] = status;
       });
 
-      // Check if any data came from cache
       const anyFromCache = statuses.some(s => !s.attendance && !s.location);
       setIsFromCache(anyFromCache || childrenFromCache);
       
       setChildStatus(statusMap);
       
-      // Save to cache using cache.childStatus helper
       await cache.childStatus.save(statusMap);
       
     } catch (error) {
@@ -175,11 +164,13 @@ export default function DashboardScreen({ navigation }) {
     setRefreshing(false);
   };
 
+  // ✅ FIXED: Proper greeting based on time of day
   const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour < 12) return 'Good Morning';
     if (hour < 17) return 'Good Afternoon';
-    return 'Good Evening';
+    if (hour < 20) return 'Good Evening';
+    return 'Good Night';
   };
 
   const getAttendanceStatus = (child) => {
@@ -320,6 +311,7 @@ export default function DashboardScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
+      {/* ✅ FIXED: Reduced header height and adjusted padding */}
       <LinearGradient colors={[COLORS.primary, COLORS.secondary]} style={styles.header}>
         <View style={styles.headerTop}>
           <View>
@@ -439,12 +431,14 @@ export default function DashboardScreen({ navigation }) {
   );
 }
 
+// ✅ FIXED: Updated styles with reduced header height
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 10, fontSize: 16, color: '#666' },
-  header: { paddingTop: 50, paddingBottom: 20, paddingHorizontal: 20 },
-  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  // ✅ FIXED: Reduced header padding
+  header: { paddingTop: 40, paddingBottom: 15, paddingHorizontal: 20 },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   greeting: { fontSize: 14, color: 'rgba(255,255,255,0.8)' },
   userName: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
   headerRight: { flexDirection: 'row', alignItems: 'center' },

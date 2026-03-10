@@ -2,6 +2,34 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const multer = require('multer');
+const path = require('path');
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/');
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, `profile_${req.user.id}_${uniqueSuffix}${ext}`);
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const filetypes = /jpeg|jpg|png|gif/;
+    const mimetype = filetypes.test(file.mimetype);
+    const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
+    if (mimetype && extname) {
+      return cb(null, true);
+    }
+    cb(new Error('Only image files are allowed'));
+  }
+});
 
 // All user routes require authentication
 router.use(authMiddleware);
@@ -119,7 +147,7 @@ router.get('/push-token', async (req, res) => {
 router.get('/profile', async (req, res) => {
   try {
     const user = await User.findById(req.user.id)
-      .select('-password -pushToken -__v')
+      .select('-password -pushToken -__v -resetCode -resetCodeExpiry')
       .populate('children', 'name grade classLevel photo');
 
     if (!user) {
@@ -157,7 +185,7 @@ router.put('/profile', async (req, res) => {
         name: `${firstName} ${lastName}`.trim()
       },
       { new: true, runValidators: true }
-    ).select('-password -pushToken');
+    ).select('-password -pushToken -__v -resetCode -resetCodeExpiry');
 
     if (!updatedUser) {
       return res.status(404).json({ 
@@ -175,6 +203,33 @@ router.put('/profile', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error updating profile:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+// 📸 Upload profile photo
+router.post('/profile/photo', upload.single('photo'), async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const photoUrl = `/uploads/${req.file.filename}`;
+    
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { profileImage: photoUrl },
+      { new: true }
+    ).select('-password -pushToken -__v -resetCode -resetCodeExpiry');
+    
+    res.json({ 
+      success: true, 
+      message: 'Profile photo updated successfully',
+      photoUrl,
+      user 
+    });
+  } catch (error) {
+    console.error('❌ Error uploading profile photo:', error);
     res.status(500).json({ 
       success: false, 
       message: error.message 

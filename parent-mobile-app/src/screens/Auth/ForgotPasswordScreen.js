@@ -9,19 +9,22 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useAuth } from '../../context/AuthContext';
+import api from '../../services/api';
 import { COLORS } from '../../constants/config';
 
 export default function ForgotPasswordScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
-  const [sent, setSent] = useState(false);
+  const [step, setStep] = useState(1); // 1: email, 2: verification, 3: new password
+  const [verificationCode, setVerificationCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [resetToken, setResetToken] = useState('');
 
-  const { forgotPassword } = useAuth();
-
-  const handleSubmit = async () => {
+  const handleSendCode = async () => {
     if (!email) {
       Alert.alert('Error', 'Please enter your email');
       return;
@@ -29,14 +32,87 @@ export default function ForgotPasswordScreen({ navigation }) {
 
     setLoading(true);
     try {
-      const result = await forgotPassword(email);
-      if (result.success) {
-        setSent(true);
+      const response = await api.auth.forgotPassword(email);
+      if (response.success) {
+        setStep(2);
+        Alert.alert('Success', 'Verification code sent to your email');
       } else {
-        Alert.alert('Error', result.message);
+        Alert.alert('Error', response.message || 'Failed to send code');
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to send reset email');
+      Alert.alert('Error', error.message || 'Failed to send code');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    if (!verificationCode || verificationCode.length < 6) {
+      Alert.alert('Error', 'Please enter the 6-digit verification code');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await api.auth.verifyResetCode(email, verificationCode);
+      if (response.success) {
+        setStep(3);
+      } else {
+        Alert.alert('Error', response.message || 'Invalid verification code');
+      }
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Invalid verification code');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!newPassword || !confirmPassword) {
+      Alert.alert('Error', 'Please enter new password');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      Alert.alert('Error', 'Password must be at least 6 characters');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      Alert.alert('Error', 'Passwords do not match');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await api.auth.resetPassword(email, verificationCode, newPassword);
+      if (response.success) {
+        Alert.alert(
+          'Success',
+          'Password reset successfully. You can now login with your new password.',
+          [{ text: 'OK', onPress: () => navigation.navigate('Login') }]
+        );
+      } else {
+        Alert.alert('Error', response.message || 'Failed to reset password');
+      }
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Failed to reset password');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resendCode = async () => {
+    setLoading(true);
+    try {
+      const response = await api.auth.forgotPassword(email);
+      if (response.success) {
+        Alert.alert('Success', 'New verification code sent');
+      } else {
+        Alert.alert('Error', response.message || 'Failed to resend code');
+      }
+    } catch (error) {
+      Alert.alert('Error', error.message || 'Failed to resend code');
     } finally {
       setLoading(false);
     }
@@ -58,30 +134,33 @@ export default function ForgotPasswordScreen({ navigation }) {
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Forgot Password</Text>
+        <View style={styles.placeholder} />
       </LinearGradient>
 
-      <View style={styles.content}>
-        {!sent ? (
-          <>
+      <ScrollView contentContainerStyle={styles.content}>
+        {step === 1 && (
+          <View style={styles.formContainer}>
+            <Text style={styles.title}>Forgot Password?</Text>
             <Text style={styles.description}>
-              Enter your email address and we'll send you instructions to reset your password.
+              Enter your email address and we'll send you a verification code to reset your password.
             </Text>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Email</Text>
+              <Text style={styles.label}>Email Address</Text>
               <TextInput
                 style={styles.input}
-                placeholder="Enter your email"
+                placeholder="parent@school.com"
                 value={email}
                 onChangeText={setEmail}
                 keyboardType="email-address"
                 autoCapitalize="none"
+                autoCorrect={false}
               />
             </View>
 
             <TouchableOpacity
               style={styles.submitButton}
-              onPress={handleSubmit}
+              onPress={handleSendCode}
               disabled={loading}
             >
               <LinearGradient
@@ -91,27 +170,121 @@ export default function ForgotPasswordScreen({ navigation }) {
                 {loading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.submitButtonText}>Send Reset Instructions</Text>
+                  <Text style={styles.submitButtonText}>Send Verification Code</Text>
                 )}
               </LinearGradient>
             </TouchableOpacity>
-          </>
-        ) : (
-          <View style={styles.successContainer}>
-            <Text style={styles.successIcon}>✉️</Text>
-            <Text style={styles.successTitle}>Check Your Email</Text>
-            <Text style={styles.successText}>
-              We've sent password reset instructions to {email}
-            </Text>
+
             <TouchableOpacity
-              style={styles.backToLogin}
-              onPress={() => navigation.navigate('Login')}
+              onPress={() => navigation.goBack()}
+              style={styles.backLink}
             >
-              <Text style={styles.backToLoginText}>Back to Login</Text>
+              <Text style={styles.backLinkText}>← Back to Login</Text>
             </TouchableOpacity>
           </View>
         )}
-      </View>
+
+        {step === 2 && (
+          <View style={styles.formContainer}>
+            <Text style={styles.title}>Verify Code</Text>
+            <Text style={styles.description}>
+              Enter the 6-digit code sent to {email}
+            </Text>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Verification Code</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="123456"
+                value={verificationCode}
+                onChangeText={setVerificationCode}
+                keyboardType="number-pad"
+                maxLength={6}
+              />
+            </View>
+
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleVerifyCode}
+              disabled={loading}
+            >
+              <LinearGradient
+                colors={[COLORS.primary, COLORS.secondary]}
+                style={styles.gradient}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.submitButtonText}>Verify Code</Text>
+                )}
+              </LinearGradient>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={resendCode}
+              disabled={loading}
+              style={styles.resendLink}
+            >
+              <Text style={styles.resendText}>Didn't receive code? Resend</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => setStep(1)}
+              style={styles.backLink}
+            >
+              <Text style={styles.backLinkText}>← Back to Email</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {step === 3 && (
+          <View style={styles.formContainer}>
+            <Text style={styles.title}>New Password</Text>
+            <Text style={styles.description}>
+              Create a new password for your account
+            </Text>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>New Password</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="••••••••"
+                value={newPassword}
+                onChangeText={setNewPassword}
+                secureTextEntry
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Confirm Password</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="••••••••"
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry
+              />
+            </View>
+
+            <TouchableOpacity
+              style={styles.submitButton}
+              onPress={handleResetPassword}
+              disabled={loading}
+            >
+              <LinearGradient
+                colors={[COLORS.primary, COLORS.secondary]}
+                style={styles.gradient}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.submitButtonText}>Reset Password</Text>
+                )}
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        )}
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
@@ -127,6 +300,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
   },
   backButton: {
     width: 40,
@@ -135,7 +309,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.3)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 15,
   },
   backIcon: {
     fontSize: 24,
@@ -146,14 +319,29 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#fff',
   },
+  placeholder: {
+    width: 40,
+  },
   content: {
-    flex: 1,
+    flexGrow: 1,
+    justifyContent: 'center',
     padding: 20,
+  },
+  formContainer: {
+    width: '100%',
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 10,
+    textAlign: 'center',
   },
   description: {
     fontSize: 14,
     color: '#666',
     marginBottom: 30,
+    textAlign: 'center',
     lineHeight: 20,
   },
   inputContainer: {
@@ -189,38 +377,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  successContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  backLink: {
     alignItems: 'center',
-    padding: 20,
+    marginTop: 15,
   },
-  successIcon: {
-    fontSize: 60,
-    marginBottom: 20,
-  },
-  successTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 10,
-  },
-  successText: {
+  backLinkText: {
+    color: COLORS.primary,
     fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 30,
   },
-  backToLogin: {
-    padding: 12,
-    backgroundColor: COLORS.primary,
-    borderRadius: 8,
-    width: '100%',
+  resendLink: {
     alignItems: 'center',
+    marginTop: 10,
   },
-  backToLoginText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+  resendText: {
+    color: '#666',
+    fontSize: 14,
+    textDecorationLine: 'underline',
   },
 });

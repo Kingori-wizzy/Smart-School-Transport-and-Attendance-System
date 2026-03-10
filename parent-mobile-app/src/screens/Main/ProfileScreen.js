@@ -17,31 +17,33 @@ import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
+import { useTheme } from '../../context/ThemeContext';
 import api from '../../services/api';
 import notificationService from '../../services/notifications';
+import cache from '../../services/cache';
 import { COLORS } from '../../constants/config';
 
-const MenuItem = ({ icon, title, subtitle, onPress, value, type = 'arrow' }) => (
-  <TouchableOpacity style={styles.menuItem} onPress={onPress}>
-    <Text style={styles.menuIcon}>{icon}</Text>
+const MenuItem = ({ icon, title, subtitle, onPress, value, type = 'arrow', colors }) => (
+  <TouchableOpacity style={[styles.menuItem, { borderBottomColor: colors.border }]} onPress={onPress}>
+    <Text style={[styles.menuIcon, { color: colors.text }]}>{icon}</Text>
     <View style={styles.menuContent}>
-      <Text style={styles.menuTitle}>{title}</Text>
-      {subtitle && <Text style={styles.menuSubtitle}>{subtitle}</Text>}
+      <Text style={[styles.menuTitle, { color: colors.text }]}>{title}</Text>
+      {subtitle && <Text style={[styles.menuSubtitle, { color: colors.textSecondary }]}>{subtitle}</Text>}
     </View>
-    {type === 'arrow' && <Text style={styles.menuArrow}>›</Text>}
-    {type === 'value' && <Text style={styles.menuValue}>{value}</Text>}
+    {type === 'arrow' && <Text style={[styles.menuArrow, { color: colors.textSecondary }]}>›</Text>}
+    {type === 'value' && <Text style={[styles.menuValue, { color: colors.textSecondary }]}>{value}</Text>}
     {type === 'switch' && (
       <Switch
         value={value}
         onValueChange={onPress}
-        trackColor={{ false: '#ddd', true: COLORS.primary }}
+        trackColor={{ false: colors.border, true: colors.primary }}
         thumbColor={value ? '#fff' : '#f4f3f4'}
       />
     )}
   </TouchableOpacity>
 );
 
-const EditProfileModal = ({ visible, user, onSave, onClose }) => {
+const EditProfileModal = ({ visible, user, onSave, onClose, colors }) => {
   const [formData, setFormData] = useState({
     firstName: user?.firstName || '',
     lastName: user?.lastName || '',
@@ -49,6 +51,17 @@ const EditProfileModal = ({ visible, user, onSave, onClose }) => {
     phone: user?.phone || '',
   });
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (user) {
+      setFormData({
+        firstName: user.firstName || '',
+        lastName: user.lastName || '',
+        email: user.email || '',
+        phone: user.phone || '',
+      });
+    }
+  }, [user]);
 
   const handleSave = async () => {
     setLoading(true);
@@ -59,62 +72,82 @@ const EditProfileModal = ({ visible, user, onSave, onClose }) => {
   return (
     <Modal visible={visible} transparent={true} animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Edit Profile</Text>
+        <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Edit Profile</Text>
             <TouchableOpacity onPress={onClose}>
-              <Text style={styles.modalClose}>✕</Text>
+              <Text style={[styles.modalClose, { color: colors.textSecondary }]}>✕</Text>
             </TouchableOpacity>
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false}>
             <View style={styles.modalBody}>
               <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>First Name</Text>
+                <Text style={[styles.inputLabel, { color: colors.text }]}>First Name</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { 
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                    color: colors.text
+                  }]}
                   value={formData.firstName}
                   onChangeText={(text) => setFormData({ ...formData, firstName: text })}
                   placeholder="Enter first name"
+                  placeholderTextColor={colors.textSecondary}
                 />
               </View>
 
               <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Last Name</Text>
+                <Text style={[styles.inputLabel, { color: colors.text }]}>Last Name</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { 
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                    color: colors.text
+                  }]}
                   value={formData.lastName}
                   onChangeText={(text) => setFormData({ ...formData, lastName: text })}
                   placeholder="Enter last name"
+                  placeholderTextColor={colors.textSecondary}
                 />
               </View>
 
               <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Email</Text>
+                <Text style={[styles.inputLabel, { color: colors.text }]}>Email</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { 
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                    color: colors.text
+                  }]}
                   value={formData.email}
                   onChangeText={(text) => setFormData({ ...formData, email: text })}
                   placeholder="Enter email"
                   keyboardType="email-address"
                   autoCapitalize="none"
                   editable={false}
+                  placeholderTextColor={colors.textSecondary}
                 />
               </View>
 
               <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Phone Number</Text>
+                <Text style={[styles.inputLabel, { color: colors.text }]}>Phone Number</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { 
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                    color: colors.text
+                  }]}
                   value={formData.phone}
                   onChangeText={(text) => setFormData({ ...formData, phone: text })}
                   placeholder="Enter phone number"
                   keyboardType="phone-pad"
+                  placeholderTextColor={colors.textSecondary}
                 />
               </View>
 
               <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={loading}>
-                <LinearGradient colors={[COLORS.primary, COLORS.secondary]} style={styles.gradient}>
+                <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.gradient}>
                   {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveButtonText}>Save Changes</Text>}
                 </LinearGradient>
               </TouchableOpacity>
@@ -126,7 +159,7 @@ const EditProfileModal = ({ visible, user, onSave, onClose }) => {
   );
 };
 
-const ChangePasswordModal = ({ visible, onSave, onClose }) => {
+const ChangePasswordModal = ({ visible, onSave, onClose, colors }) => {
   const [formData, setFormData] = useState({
     currentPassword: '',
     newPassword: '',
@@ -151,51 +184,66 @@ const ChangePasswordModal = ({ visible, onSave, onClose }) => {
   return (
     <Modal visible={visible} transparent={true} animationType="slide" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Change Password</Text>
+        <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
+          <View style={[styles.modalHeader, { borderBottomColor: colors.border }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Change Password</Text>
             <TouchableOpacity onPress={onClose}>
-              <Text style={styles.modalClose}>✕</Text>
+              <Text style={[styles.modalClose, { color: colors.textSecondary }]}>✕</Text>
             </TouchableOpacity>
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false}>
             <View style={styles.modalBody}>
               <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Current Password</Text>
+                <Text style={[styles.inputLabel, { color: colors.text }]}>Current Password</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { 
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                    color: colors.text
+                  }]}
                   value={formData.currentPassword}
                   onChangeText={(text) => setFormData({ ...formData, currentPassword: text })}
                   placeholder="Enter current password"
                   secureTextEntry
+                  placeholderTextColor={colors.textSecondary}
                 />
               </View>
 
               <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>New Password</Text>
+                <Text style={[styles.inputLabel, { color: colors.text }]}>New Password</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { 
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                    color: colors.text
+                  }]}
                   value={formData.newPassword}
                   onChangeText={(text) => setFormData({ ...formData, newPassword: text })}
                   placeholder="Enter new password"
                   secureTextEntry
+                  placeholderTextColor={colors.textSecondary}
                 />
               </View>
 
               <View style={styles.inputContainer}>
-                <Text style={styles.inputLabel}>Confirm New Password</Text>
+                <Text style={[styles.inputLabel, { color: colors.text }]}>Confirm New Password</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { 
+                    backgroundColor: colors.background,
+                    borderColor: colors.border,
+                    color: colors.text
+                  }]}
                   value={formData.confirmPassword}
                   onChangeText={(text) => setFormData({ ...formData, confirmPassword: text })}
                   placeholder="Confirm new password"
                   secureTextEntry
+                  placeholderTextColor={colors.textSecondary}
                 />
               </View>
 
               <TouchableOpacity style={styles.saveButton} onPress={handleSave} disabled={loading}>
-                <LinearGradient colors={[COLORS.primary, COLORS.secondary]} style={styles.gradient}>
+                <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.gradient}>
                   {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveButtonText}>Update Password</Text>}
                 </LinearGradient>
               </TouchableOpacity>
@@ -210,6 +258,7 @@ const ChangePasswordModal = ({ visible, onSave, onClose }) => {
 export default function ProfileScreen({ navigation }) {
   const { user, logout, refreshUser } = useAuth();
   const { isConnected } = useSocket();
+  const { colors, isDarkMode, toggleTheme } = useTheme();
 
   const [loading, setLoading] = useState(false);
   const [profileImage, setProfileImage] = useState(null);
@@ -234,9 +283,13 @@ export default function ProfileScreen({ navigation }) {
 
   const loadProfileImage = async () => {
     try {
-      const savedImage = await AsyncStorage.getItem('@profile_image');
-      if (savedImage) {
-        setProfileImage(savedImage);
+      if (user?.profileImage) {
+        setProfileImage(user.profileImage);
+      } else {
+        const savedImage = await AsyncStorage.getItem(`@profile_image_${user?.id}`);
+        if (savedImage) {
+          setProfileImage(savedImage);
+        }
       }
     } catch (error) {
       console.error('Error loading profile image:', error);
@@ -245,7 +298,7 @@ export default function ProfileScreen({ navigation }) {
 
   const loadSettings = async () => {
     try {
-      const savedSettings = await AsyncStorage.getItem('@user_settings');
+      const savedSettings = await AsyncStorage.getItem(`@user_settings_${user?.id}`);
       if (savedSettings) {
         setSettings(JSON.parse(savedSettings));
       }
@@ -261,7 +314,7 @@ export default function ProfileScreen({ navigation }) {
 
   const saveSettings = async (newSettings) => {
     try {
-      await AsyncStorage.setItem('@user_settings', JSON.stringify(newSettings));
+      await AsyncStorage.setItem(`@user_settings_${user?.id}`, JSON.stringify(newSettings));
       setSettings(newSettings);
     } catch (error) {
       console.error('Error saving settings:', error);
@@ -289,8 +342,7 @@ export default function ProfileScreen({ navigation }) {
     });
 
     if (!result.canceled) {
-      setProfileImage(result.assets[0].uri);
-      await AsyncStorage.setItem('@profile_image', result.assets[0].uri);
+      uploadProfileImage(result.assets[0].uri);
     }
   };
 
@@ -309,8 +361,33 @@ export default function ProfileScreen({ navigation }) {
     });
 
     if (!result.canceled) {
-      setProfileImage(result.assets[0].uri);
-      await AsyncStorage.setItem('@profile_image', result.assets[0].uri);
+      uploadProfileImage(result.assets[0].uri);
+    }
+  };
+
+  const uploadProfileImage = async (imageUri) => {
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('photo', {
+        uri: imageUri,
+        type: 'image/jpeg',
+        name: `profile_${user?.id}_${Date.now()}.jpg`,
+      });
+      
+      const response = await api.profile.uploadPhoto(formData);
+      
+      if (response.ok) {
+        const data = await response.json();
+        setProfileImage(data.photoUrl);
+        await AsyncStorage.setItem(`@profile_image_${user?.id}`, data.photoUrl);
+        Alert.alert('Success', 'Profile picture updated');
+      }
+    } catch (error) {
+      console.error('Error uploading photo:', error);
+      Alert.alert('Error', 'Failed to upload photo');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -328,10 +405,12 @@ export default function ProfileScreen({ navigation }) {
 
   const handleUpdateProfile = async (formData) => {
     try {
-      await api.user.updateProfile(formData);
-      await refreshUser();
-      Alert.alert('Success', 'Profile updated successfully');
-      setShowEditModal(false);
+      const response = await api.user.updateProfile(formData);
+      if (response.success) {
+        await refreshUser();
+        Alert.alert('Success', 'Profile updated successfully');
+        setShowEditModal(false);
+      }
     } catch (error) {
       Alert.alert('Error', error.message || 'Failed to update profile');
     }
@@ -352,6 +431,27 @@ export default function ProfileScreen({ navigation }) {
       '🔔 Test Notification',
       'This is a test notification from your profile!',
       { type: 'test', timestamp: new Date().toISOString() }
+    );
+  };
+
+  const handleClearCache = async () => {
+    Alert.alert(
+      'Clear Cache',
+      'This will clear all cached data. You may need to reload the app.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          onPress: async () => {
+            try {
+              await cache.clearAll();
+              Alert.alert('Success', 'Cache cleared successfully');
+            } catch (error) {
+              Alert.alert('Error', 'Failed to clear cache');
+            }
+          }
+        }
+      ]
     );
   };
 
@@ -397,8 +497,8 @@ export default function ProfileScreen({ navigation }) {
   };
 
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={[COLORS.primary, COLORS.secondary]} style={styles.header}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
@@ -407,47 +507,50 @@ export default function ProfileScreen({ navigation }) {
       </LinearGradient>
 
       <ScrollView showsVerticalScrollIndicator={false}>
-        <View style={styles.profileCard}>
+        <View style={[styles.profileCard, { backgroundColor: colors.card }]}>
           <TouchableOpacity onPress={showImageOptions} style={styles.imageContainer}>
             {profileImage ? (
               <Image source={{ uri: profileImage }} style={styles.profileImage} />
             ) : (
-              <View style={styles.profileImagePlaceholder}>
+              <View style={[styles.profileImagePlaceholder, { backgroundColor: colors.primary }]}>
                 <Text style={styles.placeholderText}>
                   {user?.firstName?.charAt(0)}{user?.lastName?.charAt(0)}
                 </Text>
               </View>
             )}
-            <View style={styles.editBadge}>
+            <View style={[styles.editBadge, { backgroundColor: colors.secondary }]}>
               <Text style={styles.editIcon}>✏️</Text>
             </View>
           </TouchableOpacity>
 
-          <Text style={styles.userName}>{user?.firstName} {user?.lastName}</Text>
-          <Text style={styles.userEmail}>{user?.email}</Text>
-          <Text style={styles.userPhone}>{user?.phone}</Text>
+          <Text style={[styles.userName, { color: colors.text }]}>{user?.firstName} {user?.lastName}</Text>
+          <Text style={[styles.userEmail, { color: colors.textSecondary }]}>{user?.email}</Text>
+          <Text style={[styles.userPhone, { color: colors.textSecondary }]}>{user?.phone}</Text>
 
-          <View style={styles.statsRow}>
+          <View style={[styles.statsRow, { borderTopColor: colors.border }]}>
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>●</Text>
-              <Text style={styles.statLabel}>{isConnected ? 'Online' : 'Offline'}</Text>
+              <Text style={[styles.statNumber, { color: colors.primary }]}>●</Text>
+              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>{isConnected ? 'Online' : 'Offline'}</Text>
             </View>
-            <View style={styles.statDivider} />
+            <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>✓</Text>
-              <Text style={styles.statLabel}>Verified</Text>
+              <Text style={[styles.statNumber, { color: colors.primary }]}>✓</Text>
+              <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Verified</Text>
             </View>
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account Settings</Text>
+        <View style={[styles.section, { backgroundColor: colors.card }]}>
+          <Text style={[styles.sectionTitle, { color: colors.text, borderBottomColor: colors.border }]}>
+            Account Settings
+          </Text>
           
           <MenuItem
             icon="👤"
             title="Edit Profile"
             subtitle="Update your personal information"
             onPress={() => setShowEditModal(true)}
+            colors={colors}
           />
 
           <MenuItem
@@ -455,6 +558,7 @@ export default function ProfileScreen({ navigation }) {
             title="Change Password"
             subtitle="Update your password"
             onPress={() => setShowPasswordModal(true)}
+            colors={colors}
           />
 
           <MenuItem
@@ -462,11 +566,14 @@ export default function ProfileScreen({ navigation }) {
             title="Email Preferences"
             subtitle="Manage email communications"
             onPress={() => Alert.alert('Coming Soon', 'This feature is coming soon')}
+            colors={colors}
           />
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Notification Settings</Text>
+        <View style={[styles.section, { backgroundColor: colors.card }]}>
+          <Text style={[styles.sectionTitle, { color: colors.text, borderBottomColor: colors.border }]}>
+            Notification Settings
+          </Text>
 
           <MenuItem
             icon="🔔"
@@ -474,6 +581,7 @@ export default function ProfileScreen({ navigation }) {
             type="switch"
             value={settings.pushNotifications}
             onPress={() => toggleSetting('pushNotifications')}
+            colors={colors}
           />
 
           <MenuItem
@@ -482,6 +590,7 @@ export default function ProfileScreen({ navigation }) {
             type="switch"
             value={settings.emailNotifications}
             onPress={() => toggleSetting('emailNotifications')}
+            colors={colors}
           />
 
           <MenuItem
@@ -490,6 +599,7 @@ export default function ProfileScreen({ navigation }) {
             type="switch"
             value={settings.smsNotifications}
             onPress={() => toggleSetting('smsNotifications')}
+            colors={colors}
           />
 
           <MenuItem
@@ -498,21 +608,32 @@ export default function ProfileScreen({ navigation }) {
             type="switch"
             value={settings.soundAlerts}
             onPress={() => toggleSetting('soundAlerts')}
+            colors={colors}
           />
 
-          {/* ✅ TEST NOTIFICATION BUTTON - Only show if token exists */}
+          <MenuItem
+            icon="⚙️"
+            title="Advanced Settings"
+            subtitle="Configure notification types"
+            onPress={() => navigation.navigate('NotificationSettings')}
+            colors={colors}
+          />
+
           {pushToken && (
             <MenuItem
               icon="📱"
               title="Test Notification"
               subtitle="Send a test push notification"
               onPress={handleTestNotification}
+              colors={colors}
             />
           )}
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>App Settings</Text>
+        <View style={[styles.section, { backgroundColor: colors.card }]}>
+          <Text style={[styles.sectionTitle, { color: colors.text, borderBottomColor: colors.border }]}>
+            App Settings
+          </Text>
 
           <MenuItem
             icon="📍"
@@ -521,14 +642,16 @@ export default function ProfileScreen({ navigation }) {
             type="switch"
             value={settings.locationSharing}
             onPress={() => toggleSetting('locationSharing')}
+            colors={colors}
           />
 
           <MenuItem
             icon="🌙"
             title="Dark Mode"
             type="switch"
-            value={settings.darkMode}
-            onPress={() => toggleSetting('darkMode')}
+            value={isDarkMode}
+            onPress={toggleTheme}
+            colors={colors}
           />
 
           <MenuItem
@@ -537,18 +660,16 @@ export default function ProfileScreen({ navigation }) {
             type="switch"
             value={settings.autoRefresh}
             onPress={() => toggleSetting('autoRefresh')}
+            colors={colors}
           />
 
           <MenuItem
             icon="🗑️"
             title="Clear Cache"
             subtitle="Free up storage space"
-            onPress={() => {
-              cache.clearAll();
-              Alert.alert('Cache Cleared', 'App cache has been cleared');
-            }}
-            value="128 MB"
+            onPress={handleClearCache}
             type="value"
+            colors={colors}
           />
 
           <MenuItem
@@ -557,50 +678,57 @@ export default function ProfileScreen({ navigation }) {
             value="1.0.0"
             type="value"
             onPress={() => {}}
+            colors={colors}
           />
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Support</Text>
+        <View style={[styles.section, { backgroundColor: colors.card }]}>
+          <Text style={[styles.sectionTitle, { color: colors.text, borderBottomColor: colors.border }]}>
+            Support
+          </Text>
 
           <MenuItem
             icon="❓"
             title="Help Center"
             subtitle="Get help with the app"
-            onPress={() => Alert.alert('Help Center', 'Coming soon')}
+            onPress={() => navigation.navigate('HelpCenter')}
+            colors={colors}
           />
 
           <MenuItem
             icon="💬"
             title="Contact Support"
             subtitle="Send us a message"
-            onPress={() => Alert.alert('Contact Support', 'support@smartschool.com')}
+            onPress={() => navigation.navigate('ContactSupport')}
+            colors={colors}
           />
 
           <MenuItem
             icon="📄"
             title="Terms of Service"
-            onPress={() => Alert.alert('Terms of Service', 'Coming soon')}
+            onPress={() => navigation.navigate('TermsOfService')}
+            colors={colors}
           />
 
           <MenuItem
             icon="🔒"
             title="Privacy Policy"
-            onPress={() => Alert.alert('Privacy Policy', 'Coming soon')}
+            onPress={() => navigation.navigate('PrivacyPolicy')}
+            colors={colors}
           />
         </View>
 
         <View style={styles.actionButtons}>
-          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-            <Text style={styles.logoutText}>Logout</Text>
+          <TouchableOpacity style={[styles.logoutButton, { borderColor: colors.danger }]} onPress={handleLogout}>
+            <Text style={[styles.logoutText, { color: colors.danger }]}>Logout</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteAccount}>
-            <Text style={styles.deleteText}>Delete Account</Text>
+          <TouchableOpacity style={[styles.deleteButton, { borderColor: colors.textSecondary }]} onPress={handleDeleteAccount}>
+            <Text style={[styles.deleteText, { color: colors.textSecondary }]}>Delete Account</Text>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.copyright}>
+        <Text style={[styles.copyright, { color: colors.textSecondary }]}>
           © 2026 Smart School Transport. All rights reserved.
         </Text>
       </ScrollView>
@@ -610,62 +738,64 @@ export default function ProfileScreen({ navigation }) {
         user={user}
         onSave={handleUpdateProfile}
         onClose={() => setShowEditModal(false)}
+        colors={colors}
       />
 
       <ChangePasswordModal
         visible={showPasswordModal}
         onSave={handleChangePassword}
         onClose={() => setShowPasswordModal(false)}
+        colors={colors}
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  container: { flex: 1 },
   header: { paddingTop: 50, paddingBottom: 20, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
   backIcon: { fontSize: 24, color: '#fff' },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  profileCard: { backgroundColor: '#fff', margin: 20, marginTop: -30, padding: 20, borderRadius: 15, alignItems: 'center', elevation: 4 },
+  profileCard: { margin: 20, marginTop: -30, padding: 20, borderRadius: 15, alignItems: 'center', elevation: 4 },
   imageContainer: { position: 'relative', marginTop: -40, marginBottom: 10 },
   profileImage: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: '#fff' },
-  profileImagePlaceholder: { width: 80, height: 80, borderRadius: 40, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#fff' },
+  profileImagePlaceholder: { width: 80, height: 80, borderRadius: 40, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#fff' },
   placeholderText: { fontSize: 32, fontWeight: 'bold', color: '#fff' },
-  editBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: COLORS.secondary, width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
+  editBadge: { position: 'absolute', bottom: 0, right: 0, width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
   editIcon: { fontSize: 14 },
-  userName: { fontSize: 20, fontWeight: 'bold', color: '#333', marginBottom: 4 },
-  userEmail: { fontSize: 14, color: '#666', marginBottom: 2 },
-  userPhone: { fontSize: 14, color: '#666', marginBottom: 12 },
-  statsRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f0f0f0' },
+  userName: { fontSize: 20, fontWeight: 'bold', marginBottom: 4 },
+  userEmail: { fontSize: 14, marginBottom: 2 },
+  userPhone: { fontSize: 14, marginBottom: 12 },
+  statsRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingTop: 10, borderTopWidth: 1 },
   statItem: { alignItems: 'center', paddingHorizontal: 20 },
-  statNumber: { fontSize: 16, fontWeight: 'bold', color: COLORS.primary },
-  statLabel: { fontSize: 11, color: '#666', marginTop: 2 },
-  statDivider: { width: 1, height: 20, backgroundColor: '#f0f0f0' },
-  section: { backgroundColor: '#fff', marginHorizontal: 15, marginBottom: 15, paddingVertical: 10, borderRadius: 10, elevation: 2 },
-  sectionTitle: { fontSize: 16, fontWeight: '600', color: '#333', paddingHorizontal: 15, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
-  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 15, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  statNumber: { fontSize: 16, fontWeight: 'bold' },
+  statLabel: { fontSize: 11, marginTop: 2 },
+  statDivider: { width: 1, height: 20 },
+  section: { marginHorizontal: 15, marginBottom: 15, paddingVertical: 10, borderRadius: 10, elevation: 2 },
+  sectionTitle: { fontSize: 16, fontWeight: '600', paddingHorizontal: 15, paddingVertical: 10, borderBottomWidth: 1 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 15, borderBottomWidth: 1 },
   menuIcon: { fontSize: 20, width: 35 },
   menuContent: { flex: 1 },
-  menuTitle: { fontSize: 14, fontWeight: '500', color: '#333' },
-  menuSubtitle: { fontSize: 11, color: '#999', marginTop: 2 },
-  menuArrow: { fontSize: 18, color: '#999' },
-  menuValue: { fontSize: 14, color: '#666' },
+  menuTitle: { fontSize: 14, fontWeight: '500' },
+  menuSubtitle: { fontSize: 11, marginTop: 2 },
+  menuArrow: { fontSize: 18 },
+  menuValue: { fontSize: 14 },
   actionButtons: { marginHorizontal: 15, marginBottom: 15 },
-  logoutButton: { backgroundColor: '#fff', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10, borderWidth: 1, borderColor: '#f44336' },
-  logoutText: { color: '#f44336', fontSize: 16, fontWeight: '600' },
-  deleteButton: { backgroundColor: '#fff', paddingVertical: 14, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: '#999' },
-  deleteText: { color: '#666', fontSize: 14, fontWeight: '500' },
-  copyright: { textAlign: 'center', color: '#999', fontSize: 11, marginBottom: 20 },
+  logoutButton: { backgroundColor: '#fff', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10, borderWidth: 1 },
+  logoutText: { fontSize: 16, fontWeight: '600' },
+  deleteButton: { backgroundColor: '#fff', paddingVertical: 14, borderRadius: 10, alignItems: 'center', borderWidth: 1 },
+  deleteText: { fontSize: 14, fontWeight: '500' },
+  copyright: { textAlign: 'center', fontSize: 11, marginBottom: 20 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalContent: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '80%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#333' },
-  modalClose: { fontSize: 20, color: '#999', padding: 5 },
+  modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '80%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold' },
+  modalClose: { fontSize: 20, padding: 5 },
   modalBody: { padding: 20 },
   inputContainer: { marginBottom: 15 },
-  inputLabel: { fontSize: 13, color: '#666', marginBottom: 5 },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, fontSize: 14, backgroundColor: '#f9f9f9' },
+  inputLabel: { fontSize: 13, marginBottom: 5 },
+  input: { borderWidth: 1, borderRadius: 8, padding: 12, fontSize: 14 },
   saveButton: { height: 48, borderRadius: 8, overflow: 'hidden', marginTop: 10, marginBottom: 20 },
   gradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },

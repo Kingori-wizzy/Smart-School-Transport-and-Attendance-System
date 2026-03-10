@@ -4,6 +4,14 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
+// Helper function to send email (you'll need to implement this)
+const sendEmail = async (to, subject, body) => {
+  // TODO: Implement email sending (using nodemailer, sendgrid, etc.)
+  console.log(`📧 Email to ${to}: ${subject} - ${body}`);
+  // For development, just log it
+  return true;
+};
+
 // 📝 Register a new user (Admin or Parent)
 router.post('/register', async (req, res) => {
   try {
@@ -83,7 +91,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// 🔐 Login User - FIXED VERSION
+// 🔐 Login User
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -100,7 +108,6 @@ router.post('/login', async (req, res) => {
     }
 
     // Find user and include password field for comparison
-    // Using lean() to get a plain object and avoid model validation
     const user = await User.findOne({ email }).select('+password').lean();
 
     if (!user) {
@@ -140,7 +147,7 @@ router.post('/login', async (req, res) => {
     // Remove password from response
     delete user.password;
 
-    // Update last login in the background (don't await)
+    // Update last login in the background
     User.findByIdAndUpdate(user._id, { lastLogin: new Date() }).catch(err => 
       console.log('⚠️ Failed to update last login:', err.message)
     );
@@ -189,6 +196,137 @@ router.get('/verify', async (req, res) => {
 router.post('/logout', (req, res) => {
   console.log('🚪 Logout request received');
   res.json({ message: 'Logged out successfully' });
+});
+
+// ============================================
+// FORGOT PASSWORD ENDPOINTS
+// ============================================
+
+// 📧 Send reset code
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+
+    const user = await User.findOne({ email });
+    
+    // For security, don't reveal if user exists or not
+    if (!user) {
+      console.log(`❌ Forgot password attempt for non-existent email: ${email}`);
+      return res.json({ 
+        success: true, 
+        message: 'If your email exists in our system, you will receive a verification code.' 
+      });
+    }
+
+    // Generate 6-digit code
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const resetCodeExpiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+    user.resetCode = resetCode;
+    user.resetCodeExpiry = resetCodeExpiry;
+    await user.save();
+
+    // Send email with code
+    await sendEmail(
+      email,
+      'Password Reset Code',
+      `Your verification code is: ${resetCode}\n\nThis code will expire in 15 minutes.`
+    );
+
+    console.log(`✅ Reset code sent to ${email}`);
+    
+    res.json({ 
+      success: true, 
+      message: 'If your email exists in our system, you will receive a verification code.' 
+    });
+  } catch (error) {
+    console.error('❌ Forgot password error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ✅ Verify reset code
+router.post('/verify-reset-code', async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    
+    if (!email || !code) {
+      return res.status(400).json({ message: 'Email and code are required' });
+    }
+
+    const user = await User.findOne({ 
+      email,
+      resetCode: code,
+      resetCodeExpiry: { $gt: new Date() }
+    });
+
+    if (!user) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid or expired verification code' 
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Code verified successfully' 
+    });
+  } catch (error) {
+    console.error('❌ Verify reset code error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// 🔐 Reset password
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { email, code, newPassword } = req.body;
+    
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ 
+        message: 'Email, code, and new password are required' 
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ 
+        message: 'Password must be at least 6 characters long' 
+      });
+    }
+
+    const user = await User.findOne({ 
+      email,
+      resetCode: code,
+      resetCodeExpiry: { $gt: new Date() }
+    });
+
+    if (!user) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid or expired verification code' 
+      });
+    }
+
+    // Update password and clear reset fields
+    user.password = newPassword;
+    user.resetCode = null;
+    user.resetCodeExpiry = null;
+    await user.save();
+
+    console.log(`✅ Password reset successful for ${email}`);
+
+    res.json({ 
+      success: true, 
+      message: 'Password reset successfully. You can now login with your new password.' 
+    });
+  } catch (error) {
+    console.error('❌ Reset password error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
 });
 
 module.exports = router;

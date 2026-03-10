@@ -24,6 +24,14 @@ import AddChildScreen from '../screens/Child/AddChildScreen';
 import ChildHistoryScreen from '../screens/Child/ChildHistoryScreen';
 import EditChildScreen from '../screens/Child/EditChildScreen';
 
+// Settings Screens
+import NotificationSettingsScreen from '../screens/Settings/NotificationSettingsScreen';
+
+import HelpCenterScreen from '../screens/Support/HelpCenterScreen';
+import TermsOfServiceScreen from '../screens/Support/TermsOfServiceScreen';
+import PrivacyPolicyScreen from '../screens/Support/PrivacyPolicyScreen';
+import ContactSupportScreen from '../screens/Support/ContactSupportScreen';
+
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -79,7 +87,6 @@ const MainTabs = () => {
   );
 };
 
-// ✅ FIXED: NO NavigationContainer here!
 const AppNavigator = () => {
   const { user, loading } = useAuth();
 
@@ -108,6 +115,11 @@ const AppNavigator = () => {
           <Stack.Screen name="Profile" component={ProfileScreen} />
           <Stack.Screen name="Messages" component={MessagesScreen} />
           <Stack.Screen name="Transport" component={TransportScreen} />
+          <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
+          <Stack.Screen name="HelpCenter" component={HelpCenterScreen} />
+          <Stack.Screen name="TermsOfService" component={TermsOfServiceScreen} />
+          <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
+          <Stack.Screen name="ContactSupport" component={ContactSupportScreen} />
         </>
       )}
     </Stack.Navigator>

@@ -71,10 +71,24 @@ const userSchema = new mongoose.Schema({
   },
 
   // ===============================
+  // PASSWORD RESET
+  // ===============================
+  resetCode: {
+    type: String,
+    default: null
+  },
+
+  resetCodeExpiry: {
+    type: Date,
+    default: null
+  },
+
+  // ===============================
   // ADDITIONAL FIELDS
   // ===============================
   profileImage: {
-    type: String  // URL to profile picture
+    type: String,  // URL to profile picture
+    default: null
   },
 
   lastLogin: {
@@ -101,6 +115,8 @@ const userSchema = new mongoose.Schema({
     transform: function(doc, ret) {
       delete ret.password;
       delete ret.__v;
+      delete ret.resetCode;
+      delete ret.resetCodeExpiry;
       return ret;
     }
   }

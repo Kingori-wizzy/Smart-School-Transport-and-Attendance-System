@@ -15,6 +15,7 @@ import firebase from '@react-native-firebase/app';
 
 import { AuthProvider } from './src/context/AuthContext';
 import { SocketProvider } from './src/context/SocketContext';
+import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import notificationService from './src/services/notifications';
 import { COLORS } from './src/constants/config';
@@ -53,9 +54,6 @@ export default function App() {
             setTimeout(() => reject(new Error('Notification init timeout')), 5000)
           )
         ]).catch(e => console.log('Notification init warning:', e.message));
-
-        // ✅ FIX: Set navigation ref AFTER container is ready
-        // We'll do this in a separate useEffect
         
       } catch (e) {
         console.warn('Initialization warning:', e);
@@ -70,14 +68,12 @@ export default function App() {
     return () => cleanupNotificationListeners();
   }, []);
 
-  // ✅ NEW: Set navigation ref when both ready and container is mounted
   useEffect(() => {
     if (isReady && navigationRef.current) {
       notificationService.setNavigationRef(navigationRef.current);
     }
   }, [isReady]);
 
-  // Hide splash screen when ready
   useEffect(() => {
     if (isReady) {
       SplashScreen.hideAsync().catch(() => {});
@@ -120,7 +116,6 @@ export default function App() {
     }
   };
 
-  // Don't render until ready
   if (!isReady) {
     return null;
   }
@@ -128,14 +123,15 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <StatusBar style="light" backgroundColor={COLORS.primary} />
-        <AuthProvider>
-          <SocketProvider>
-            <NavigationContainer ref={navigationRef}>
-              <AppNavigator />
-            </NavigationContainer>
-          </SocketProvider>
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <SocketProvider>
+              <NavigationContainer ref={navigationRef}>
+                <AppNavigator />
+              </NavigationContainer>
+            </SocketProvider>
+          </AuthProvider>
+        </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

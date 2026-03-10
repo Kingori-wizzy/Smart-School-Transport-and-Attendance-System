@@ -47,7 +47,6 @@ const api = {
         if (response.status === 401) {
           console.log('🔑 Token expired or invalid, clearing storage');
           await AsyncStorage.multiRemove(['@auth_token', '@user', '@user_role']);
-          // You might want to navigate to login here
         }
         
         throw new Error(errorMessage);
@@ -118,7 +117,7 @@ const api = {
     deleteAccount: () => 
       api.request('/user/account', { method: 'DELETE' }),
     
-    // New: Get push token status
+    // Get push token status
     getPushTokenStatus: () => 
       api.request('/user/push-token', { method: 'GET' }),
   },
@@ -151,11 +150,27 @@ const api = {
     register: (userData) => 
       api.request('/auth/register', { method: 'POST', body: JSON.stringify(userData) }),
     
+    // Step 1: Send forgot password email
     forgotPassword: (email) => 
       api.request('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
     
-    resetPassword: (token, newPassword) => 
-      api.request('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword }) }),
+    // Step 2: Verify the reset code
+    verifyResetCode: (email, code) => 
+      api.request('/auth/verify-reset-code', { method: 'POST', body: JSON.stringify({ email, code }) }),
+    
+    // Step 3: Reset password with verified code
+    resetPassword: (email, code, newPassword) => 
+      api.request('/auth/reset-password', { 
+        method: 'POST', 
+        body: JSON.stringify({ email, code, newPassword }) 
+      }),
+    
+    // Legacy reset password (kept for compatibility)
+    resetPasswordWithToken: (token, newPassword) => 
+      api.request('/auth/reset-password', { 
+        method: 'POST', 
+        body: JSON.stringify({ token, newPassword }) 
+      }),
     
     verify: async () => {
       try {
@@ -177,13 +192,13 @@ const api = {
       }
     },
     
-    // New: Check if user is authenticated
+    // Check if user is authenticated
     isAuthenticated: async () => {
       const token = await AsyncStorage.getItem('@auth_token');
       return !!token;
     },
     
-    // New: Get current user
+    // Get current user
     getCurrentUser: async () => {
       const userStr = await AsyncStorage.getItem('@user');
       return userStr ? JSON.parse(userStr) : null;
@@ -317,7 +332,7 @@ const api = {
   patch: (endpoint, body) => api.request(endpoint, { method: 'PATCH', body: JSON.stringify(body) }),
   
   // ==================== AUTH TOKEN MANAGEMENT ====================
-  // Helper to manually set token (useful after social login, etc.)
+  // Helper to manually set token
   setAuthToken: async (token) => {
     if (token) {
       await AsyncStorage.setItem('@auth_token', token);

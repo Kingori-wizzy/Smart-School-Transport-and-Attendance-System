@@ -22,9 +22,11 @@ export default function EditChildScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState({
+    firstName: '',
+    lastName: '',
     name: '',
     studentId: '',
-    class: '',
+    classLevel: '',
     school: '',
     busNumber: '',
     pickupPoint: '',
@@ -39,12 +41,14 @@ export default function EditChildScreen({ route, navigation }) {
   }, []);
 
   const loadChildData = () => {
-    const child = childrenList.find(c => c.id === childId);
+    const child = childrenList.find(c => c.id === childId || c._id === childId);
     if (child) {
       setFormData({
-        name: child.name || '',
-        studentId: child.studentId || '',
-        class: child.class || '',
+        firstName: child.firstName || '',
+        lastName: child.lastName || '',
+        name: child.name || `${child.firstName || ''} ${child.lastName || ''}`.trim(),
+        studentId: child.studentId || child.admissionNumber || '',
+        classLevel: child.classLevel || child.class || '',
         school: child.school || '',
         busNumber: child.busNumber || '',
         pickupPoint: child.pickupPoint || '',
@@ -72,14 +76,35 @@ export default function EditChildScreen({ route, navigation }) {
   ];
 
   const handleSave = async () => {
+    // Validate required fields
+    if (!formData.firstName || !formData.lastName) {
+      Alert.alert('Error', 'First name and last name are required');
+      return;
+    }
+
     setSaving(true);
     try {
-      await api.put(`/children/${childId}`, formData);
+      const payload = {
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        name: `${formData.firstName} ${formData.lastName}`.trim(),
+        studentId: formData.studentId,
+        classLevel: formData.classLevel,
+        school: formData.school,
+        busNumber: formData.busNumber,
+        pickupPoint: formData.pickupPoint,
+        dropoffPoint: formData.dropoffPoint,
+        emergencyContact: formData.emergencyContact,
+        emergencyPhone: formData.emergencyPhone,
+        medicalNotes: formData.medicalNotes,
+      };
+
+      await api.parent.updateChild(childId, payload);
       await fetchChildren();
       Alert.alert('Success', 'Child information updated');
       navigation.goBack();
     } catch (error) {
-      Alert.alert('Error', 'Failed to update child information');
+      Alert.alert('Error', error.message || 'Failed to update child information');
     } finally {
       setSaving(false);
     }
@@ -115,20 +140,30 @@ export default function EditChildScreen({ route, navigation }) {
             <Text style={styles.sectionTitle}>Basic Information</Text>
             
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Child's Full Name</Text>
+              <Text style={styles.label}>First Name</Text>
               <TextInput
                 style={styles.input}
-                value={formData.name}
-                onChangeText={(text) => setFormData({ ...formData, name: text })}
+                value={formData.firstName}
+                onChangeText={(text) => setFormData({ ...formData, firstName: text, name: `${text} ${formData.lastName}`.trim() })}
               />
             </View>
 
             <View style={styles.inputContainer}>
-              <Text style={styles.label}>Student ID</Text>
+              <Text style={styles.label}>Last Name</Text>
+              <TextInput
+                style={styles.input}
+                value={formData.lastName}
+                onChangeText={(text) => setFormData({ ...formData, lastName: text, name: `${formData.firstName} ${text}`.trim() })}
+              />
+            </View>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Student ID / Admission Number</Text>
               <TextInput
                 style={styles.input}
                 value={formData.studentId}
                 onChangeText={(text) => setFormData({ ...formData, studentId: text })}
+                editable={false} // Usually shouldn't be edited
               />
             </View>
 
@@ -136,8 +171,8 @@ export default function EditChildScreen({ route, navigation }) {
               <Text style={styles.label}>Class/Grade</Text>
               <View style={styles.pickerContainer}>
                 <Picker
-                  selectedValue={formData.class}
-                  onValueChange={(value) => setFormData({ ...formData, class: value })}
+                  selectedValue={formData.classLevel}
+                  onValueChange={(value) => setFormData({ ...formData, classLevel: value })}
                 >
                   <Picker.Item label="Select class" value="" />
                   {classes.map((cls, index) => (
