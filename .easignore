@@ -1,19 +1,17 @@
-# Ignore everything by default
-/*
+# Allow the driver-mobile-app folder and its root files
+!/package.json
+!/app.json
+!/eas.json
+!/assets/
+!/src/
+!/App.js
+!/index.js
 
-# But allow the parent-mobile-app folder
-!/parent-mobile-app
+# If you want to allow everything in the current folder:
+!/*
 
-# Allow the .git folder (needed for EAS)
-!.git
-
-# Allow .easignore itself
-!.easignore
-
-# Now ignore specific patterns within parent-mobile-app
-parent-mobile-app/node_modules/
-parent-mobile-app/.expo/
-parent-mobile-app/android/
-parent-mobile-app/ios/
-parent-mobile-app/web-build/
-parent-mobile-app/.env
+# Standard ignores
+node_modules/
+.expo/
+android/
+ios/
