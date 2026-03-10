@@ -611,6 +611,23 @@ export default function ProfileScreen({ navigation }) {
             colors={colors}
           />
 
+          // Add these in the App Settings section or create a new "Safety" section
+          <MenuItem
+            icon="📍"
+            title="Geofence Alerts"
+            subtitle="Manage location-based notifications"
+            onPress={() => navigation.navigate('GeofenceSettings')}
+            colors={colors}
+          />
+
+          <MenuItem
+            icon="📋"
+            title="Geofence History"
+            subtitle="View past geofence events"
+            onPress={() => navigation.navigate('GeofenceHistory')}
+            colors={colors}
+          />
+
           <MenuItem
             icon="⚙️"
             title="Advanced Settings"
@@ -669,6 +686,14 @@ export default function ProfileScreen({ navigation }) {
             subtitle="Free up storage space"
             onPress={handleClearCache}
             type="value"
+            colors={colors}
+          />
+
+         <MenuItem
+            icon="🗺️"
+            title="Route History"
+            subtitle="View past trips and routes"
+            onPress={() => navigation.navigate('RouteHistory')}
             colors={colors}
           />
 

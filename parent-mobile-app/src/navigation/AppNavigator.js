@@ -32,6 +32,20 @@ import TermsOfServiceScreen from '../screens/Support/TermsOfServiceScreen';
 import PrivacyPolicyScreen from '../screens/Support/PrivacyPolicyScreen';
 import ContactSupportScreen from '../screens/Support/ContactSupportScreen';
 
+import ConversationsScreen from '../screens/Messages/ConversationsScreen';
+import ChatScreen from '../screens/Messages/ChatScreen';
+import NewMessageScreen from '../screens/Messages/NewMessageScreen';
+
+import DriverRatingScreen from '../screens/Rating/DriverRatingScreen';
+import RatingHistoryScreen from '../screens/Rating/RatingHistoryScreen';
+import RatingDetailScreen from '../screens/Rating/RatingDetailScreen';
+
+import RouteHistoryScreen from '../screens/History/RouteHistoryScreen';
+import RouteDetailScreen from '../screens/History/RouteDetailScreen';
+
+import GeofenceSettingsScreen from '../screens/Geofence/GeofenceSettingsScreen';
+import GeofenceHistoryScreen from '../screens/Geofence/GeofenceHistoryScreen';
+
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -120,6 +134,16 @@ const AppNavigator = () => {
           <Stack.Screen name="TermsOfService" component={TermsOfServiceScreen} />
           <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
           <Stack.Screen name="ContactSupport" component={ContactSupportScreen} />
+          <Stack.Screen name="Conversations" component={ConversationsScreen} />
+          <Stack.Screen name="Chat" component={ChatScreen} />
+          <Stack.Screen name="NewMessage" component={NewMessageScreen} />
+          <Stack.Screen name="DriverRating" component={DriverRatingScreen} />
+          <Stack.Screen name="RatingHistory" component={RatingHistoryScreen} />
+          <Stack.Screen name="RatingDetail" component={RatingDetailScreen} />
+          <Stack.Screen name="RouteHistory" component={RouteHistoryScreen} />
+          <Stack.Screen name="RouteDetail" component={RouteDetailScreen} />
+          <Stack.Screen name="GeofenceSettings" component={GeofenceSettingsScreen} />
+          <Stack.Screen name="GeofenceHistory" component={GeofenceHistoryScreen} />
         </>
       )}
     </Stack.Navigator>
