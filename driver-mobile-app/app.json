@@ -63,7 +63,11 @@
           "android": {
             "minSdkVersion": 23,
             "compileSdkVersion": 34,
-            "targetSdkVersion": 34
+            "targetSdkVersion": 34,
+            "kotlinVersion": "1.8.10",
+            "extraGradleArguments": {
+              "android.suppressUnsupportedCompileSdk": "34"
+            }
           },
           "ios": {
             "useFrameworks": "static"
