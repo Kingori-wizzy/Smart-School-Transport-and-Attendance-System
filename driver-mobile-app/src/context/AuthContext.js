@@ -42,19 +42,36 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      const response = await api.post('/auth/driver/login', { email, password });
-      const { token, driver } = response.data;
+      console.log('🔐 AuthContext: Attempting login with', email);
+      
+      // ✅ FIXED: Use the correct endpoint
+      const response = await api.post('/auth/login', { email, password });
+      
+      console.log('✅ AuthContext: Login response:', response.data);
+      
+      const { token, user } = response.data;
+      
+      if (!token) {
+        console.error('❌ AuthContext: No token in response');
+        return { 
+          success: false, 
+          message: 'Invalid server response: no token received' 
+        };
+      }
       
       await AsyncStorage.multiSet([
         ['@auth_token', token],
-        ['@driver', JSON.stringify(driver)]
+        ['@driver', JSON.stringify(user)]
       ]);
       
-      setDriver(driver);
+      setDriver(user);
       await fetchCurrentTrip();
       
       return { success: true };
     } catch (error) {
+      console.error('❌ AuthContext: Login error:', error.message);
+      console.error('❌ Response:', error.response?.data);
+      
       return { 
         success: false, 
         message: error.response?.data?.message || 'Login failed' 

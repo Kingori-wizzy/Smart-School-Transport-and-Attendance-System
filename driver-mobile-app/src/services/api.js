@@ -3,6 +3,12 @@ import { API_URL } from '../utils/constants';
 
 const api = {
   async request(endpoint, options = {}) {
+    // TEMPORARY FIX: Intercept any calls to old driver-specific endpoint
+    if (endpoint.includes('/auth/driver/login')) {
+      console.log('⚠️ Intercepted old driver login endpoint, redirecting to /auth/login');
+      endpoint = '/auth/login';
+    }
+    
     try {
       const token = await AsyncStorage.getItem('@auth_token');
       
@@ -13,6 +19,9 @@ const api = {
       
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
+        console.log(`🔑 Token attached to request: ${endpoint}`);
+      } else {
+        console.log(`⚠️ No auth token for request: ${endpoint}`);
       }
 
       console.log(`🌐 API Request: ${options.method || 'GET'} ${API_URL}${endpoint}`);
@@ -22,7 +31,7 @@ const api = {
         headers,
       });
 
-      console.log(`📥 Response status: ${response.status}`);
+      console.log(`📥 Response status: ${response.status} for ${endpoint}`);
 
       const responseText = await response.text();
       
@@ -31,20 +40,30 @@ const api = {
         try {
           if (responseText) {
             const errorData = JSON.parse(responseText);
-            errorMessage = errorData.message || errorMessage;
+            errorMessage = errorData.message || errorData.error || errorMessage;
           }
         } catch (e) {
           errorMessage = responseText || errorMessage;
         }
+        
+        // Handle 401 Unauthorized - token expired or invalid
+        if (response.status === 401) {
+          console.log('🔑 Token expired or invalid, clearing storage');
+          await AsyncStorage.multiRemove(['@auth_token', '@user']);
+        }
+        
         throw new Error(errorMessage);
       }
 
       if (!responseText) {
+        console.log('⚠️ Empty response from server');
         return {};
       }
 
       try {
         const data = JSON.parse(responseText);
+        console.log(`✅ Response parsed successfully for ${endpoint}`);
+        console.log(`📦 Response data structure:`, Object.keys(data));
         return data;
       } catch (parseError) {
         console.error('❌ JSON Parse Error:', parseError.message);
@@ -61,18 +80,88 @@ const api = {
     }
   },
 
-  // Auth endpoints - UPDATED with correct login
+  // Auth endpoints with comprehensive debugging
   auth: {
-    login: (email, password) => {
-      // Use the working login endpoint without dummy data
-      return api.request('/auth/login', { 
-        method: 'POST', 
-        body: JSON.stringify({ 
-          email, 
-          password
-          // No firstName/lastName needed - backend fixed
-        }) 
-      });
+    login: async (email, password) => {
+      console.log('🔐 LOGIN FUNCTION CALLED - using endpoint: /auth/login');
+      console.log(`📧 Email: ${email}`);
+      
+      try {
+        const response = await api.request('/auth/login', { 
+          method: 'POST', 
+          body: JSON.stringify({ email, password }) 
+        });
+        
+        console.log('✅ Login response received:');
+        console.log('📦 Response type:', typeof response);
+        console.log('🔑 Response keys:', Object.keys(response));
+        console.log('📄 Full response:', JSON.stringify(response, null, 2));
+        
+        // Check for token in various possible locations
+        const token = response.token || 
+                     response.data?.token || 
+                     response.accessToken || 
+                     response.access_token ||
+                     response.Token;
+        
+        // Check for user data in various possible locations
+        const user = response.user || 
+                    response.data?.user || 
+                    response.profile ||
+                    response.userData;
+        
+        console.log('🔍 Extracted token:', token ? '✅ Found' : '❌ Not found');
+        console.log('🔍 Extracted user:', user ? '✅ Found' : '❌ Not found');
+        
+        if (token) {
+          console.log('✅ Token found in response, storing...');
+          console.log('📝 Token value (first 20 chars):', token.substring(0, 20) + '...');
+          
+          await AsyncStorage.setItem('@auth_token', token);
+          console.log('✅ Token stored successfully');
+          
+          if (user) {
+            console.log('✅ User data found, storing...');
+            await AsyncStorage.setItem('@user', JSON.stringify(user));
+            console.log('✅ User data stored successfully');
+          } else {
+            console.log('⚠️ No user data in response, storing token only');
+          }
+          
+          return { 
+            success: true, 
+            token, 
+            user,
+            message: response.message || 'Login successful'
+          };
+        } else {
+          console.log('❌ No token found in response!');
+          console.log('📄 Response structure:', JSON.stringify(response, null, 2));
+          
+          // Check if response has any auth-related fields
+          const possibleAuthFields = Object.keys(response).filter(key => 
+            key.toLowerCase().includes('token') || 
+            key.toLowerCase().includes('auth') || 
+            key.toLowerCase().includes('key')
+          );
+          
+          if (possibleAuthFields.length > 0) {
+            console.log('🔍 Possible auth fields found:', possibleAuthFields);
+          }
+          
+          return { 
+            success: false, 
+            message: 'Invalid server response: no token received',
+            response 
+          };
+        }
+      } catch (error) {
+        console.error('❌ Login error:', error.message);
+        return { 
+          success: false, 
+          message: error.message 
+        };
+      }
     },
     
     verifyPin: (pin) => 
@@ -175,11 +264,26 @@ const api = {
       }),
   },
 
-  // HTTP method shortcuts
-  get: (endpoint) => api.request(endpoint, { method: 'GET' }),
-  post: (endpoint, body) => api.request(endpoint, { method: 'POST', body: JSON.stringify(body) }),
-  put: (endpoint, body) => api.request(endpoint, { method: 'PUT', body: JSON.stringify(body) }),
-  delete: (endpoint) => api.request(endpoint, { method: 'DELETE' }),
+  // HTTP method shortcuts - FIXED to return data in expected format
+  get: async (endpoint) => {
+    const result = await api.request(endpoint, { method: 'GET' });
+    return { data: result };
+  },
+
+  post: async (endpoint, body) => {
+    const result = await api.request(endpoint, { method: 'POST', body: JSON.stringify(body) });
+    return { data: result };
+  },
+
+  put: async (endpoint, body) => {
+    const result = await api.request(endpoint, { method: 'PUT', body: JSON.stringify(body) });
+    return { data: result };
+  },
+
+  delete: async (endpoint) => {
+    const result = await api.request(endpoint, { method: 'DELETE' });
+    return { data: result };
+  },
 };
 
 export default api;

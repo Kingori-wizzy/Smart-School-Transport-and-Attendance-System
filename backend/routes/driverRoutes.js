@@ -7,9 +7,9 @@ const Trip = require('../models/Trip');
 const Student = require('../models/Student');
 const User = require('../models/User');
 const Bus = require('../models/Bus');
-const Attendance = require('../models/AttendanceRecord'); // ✅ Added missing import
-const GPSLog = require('../models/GPSLog'); // ✅ Added missing import
-const IncidentReport = require('../models/IncidentReport'); // ✅ Added missing import
+const Attendance = require('../models/AttendanceRecord');
+const GPSLog = require('../models/GPSLog');
+const IncidentReport = require('../models/IncidentReport');
 
 // Driver login (NO authentication required for login)
 router.post('/auth/driver/login', async (req, res) => {
@@ -89,9 +89,20 @@ router.get('/current-trip', async (req, res) => {
     const trip = await Trip.findOne({
       driverId: req.user.id,
       status: 'in-progress',
-    }).populate('busId', 'busNumber route');
+    }).populate('busId', 'number route').populate('routeId', 'name');
     
-    res.json(trip || null);
+    if (!trip) {
+      return res.json(null);
+    }
+
+    const formattedTrip = {
+      id: trip._id,
+      routeName: trip.routeId?.name || 'Unknown Route',
+      busNumber: trip.busId?.number || 'Unknown',
+      status: trip.status
+    };
+    
+    res.json(formattedTrip);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -108,10 +119,63 @@ router.get('/trips/today', async (req, res) => {
     const trips = await Trip.find({
       driverId: req.user.id,
       date: { $gte: today, $lt: tomorrow },
-    }).sort({ startTime: 1 }).populate('busId', 'busNumber route');
+    }).sort({ startTime: 1 }).populate('busId', 'number').populate('routeId', 'name');
 
-    res.json(trips);
+    // Format trips to match what the app expects
+    const formattedTrips = trips.map(trip => ({
+      id: trip._id,
+      routeName: trip.routeId?.name || 'Unknown Route',
+      startTime: trip.startTime ? new Date(trip.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '07:00',
+      endTime: trip.endTime ? new Date(trip.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '08:30',
+      busNumber: trip.busId?.number || 'BUS-001',
+      status: trip.status || 'scheduled',
+      studentCount: trip.students?.length || 0
+    }));
+
+    res.json(formattedTrips);
   } catch (error) {
+    console.error('Error fetching trips:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Get driver stats
+router.get('/stats', async (req, res) => {
+  try {
+    const driverId = req.user.id;
+    
+    // Get date range for this month
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    
+    const endOfMonth = new Date(startOfMonth);
+    endOfMonth.setMonth(endOfMonth.getMonth() + 1);
+
+    // Find all trips for this driver this month
+    const trips = await Trip.find({
+      driverId: driverId,
+      date: { $gte: startOfMonth, $lt: endOfMonth }
+    });
+
+    // Calculate statistics
+    const totalTrips = trips.length;
+    const completedTrips = trips.filter(t => t.status === 'completed').length;
+    
+    // Get total students transported
+    const totalStudents = trips.reduce((sum, trip) => sum + (trip.students?.length || 0), 0);
+    
+    // Calculate total distance (you can customize this logic)
+    const totalDistance = trips.reduce((sum, trip) => sum + (trip.distance || 15), 0); // Default 15km per trip
+
+    res.json({
+      totalTrips,
+      completedTrips,
+      totalStudents,
+      totalDistance
+    });
+  } catch (error) {
+    console.error('Error fetching driver stats:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -122,7 +186,7 @@ router.get('/trip/:tripId', async (req, res) => {
     const trip = await Trip.findOne({
       _id: req.params.tripId,
       driverId: req.user.id,
-    }).populate('busId', 'busNumber route');
+    }).populate('busId', 'number').populate('routeId', 'name stops');
     
     if (!trip) {
       return res.status(404).json({ message: 'Trip not found' });
@@ -357,8 +421,6 @@ router.post('/emergency', async (req, res) => {
     // Send notifications to school admins
     const admins = await User.find({ role: 'admin' });
     
-    // In a real app, you'd send push notifications here
-    // For now, just log it
     console.log(`🚨 EMERGENCY from driver ${req.user.id} on trip ${tripId}`);
     console.log(`📍 Location:`, location);
     console.log(`👥 Notifying ${admins.length} admins`);

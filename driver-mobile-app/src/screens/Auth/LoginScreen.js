@@ -39,27 +39,48 @@ export default function LoginScreen({ navigation }) {
       return;
     }
 
+    console.log('📱 LoginScreen: Attempting login with email:', email);
     setLoading(true);
-    const result = await login(email, password);
-    setLoading(false);
-
-    if (result.success) {
-      await saveCredentials(email, password);
-      Alert.alert('Success', 'Logged in successfully');
-    } else {
-      Alert.alert('Login Failed', result.message);
+    
+    try {
+      const result = await login(email, password);
+      console.log('📱 LoginScreen: Login result:', result);
+      
+      if (result && result.success) {
+        console.log('📱 LoginScreen: Login successful, saving credentials...');
+        if (biometricSupported) {
+          await saveCredentials(email, password);
+        }
+        Alert.alert('Success', 'Logged in successfully');
+        // Navigation should be handled by AuthContext
+      } else {
+        console.log('📱 LoginScreen: Login failed:', result?.message || 'Unknown error');
+        Alert.alert('Login Failed', result?.message || 'Invalid credentials');
+      }
+    } catch (error) {
+      console.error('📱 LoginScreen: Unexpected error:', error);
+      Alert.alert('Error', 'An unexpected error occurred');
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleBiometricLogin = async () => {
     setLoading(true);
-    const result = await loginWithBiometrics();
-    setLoading(false);
-
-    if (result.success) {
-      Alert.alert('Success', 'Logged in with biometrics');
-    } else {
-      Alert.alert('Biometric Failed', result.message);
+    try {
+      const result = await loginWithBiometrics();
+      console.log('📱 LoginScreen: Biometric login result:', result);
+      
+      if (result.success) {
+        Alert.alert('Success', 'Logged in with biometrics');
+      } else {
+        Alert.alert('Biometric Failed', result.message);
+      }
+    } catch (error) {
+      console.error('📱 LoginScreen: Biometric error:', error);
+      Alert.alert('Error', 'Biometric login failed');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -81,7 +102,7 @@ export default function LoginScreen({ navigation }) {
           <Text style={styles.label}>Email</Text>
           <TextInput
             style={styles.input}
-            placeholder="driver@school.com"
+            placeholder="driver@demo.com"
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
