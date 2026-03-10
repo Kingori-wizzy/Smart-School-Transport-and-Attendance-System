@@ -14,6 +14,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.smartschool.driver",
+      "buildNumber": "1.0.0",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to location to track bus routes",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "This app needs access to location for background tracking",
@@ -28,6 +29,7 @@
         "backgroundColor": "#667eea"
       },
       "package": "com.smartschool.driver",
+      "versionCode": 1,
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
@@ -53,6 +55,19 @@
         "expo-barcode-scanner",
         {
           "cameraPermission": "Allow Driver App to access camera to scan student QR codes."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 23,
+            "compileSdkVersion": 34,
+            "targetSdkVersion": 34
+          },
+          "ios": {
+            "useFrameworks": "static"
+          }
         }
       ]
     ],
