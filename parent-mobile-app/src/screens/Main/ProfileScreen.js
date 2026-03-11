@@ -21,7 +21,6 @@ import { useTheme } from '../../context/ThemeContext';
 import api from '../../services/api';
 import notificationService from '../../services/notifications';
 import cache from '../../services/cache';
-import { COLORS } from '../../constants/config';
 
 const MenuItem = ({ icon, title, subtitle, onPress, value, type = 'arrow', colors }) => (
   <TouchableOpacity style={[styles.menuItem, { borderBottomColor: colors.border }]} onPress={onPress}>
@@ -611,7 +610,6 @@ export default function ProfileScreen({ navigation }) {
             colors={colors}
           />
 
-          // Add these in the App Settings section or create a new "Safety" section
           <MenuItem
             icon="📍"
             title="Geofence Alerts"
@@ -685,11 +683,10 @@ export default function ProfileScreen({ navigation }) {
             title="Clear Cache"
             subtitle="Free up storage space"
             onPress={handleClearCache}
-            type="value"
             colors={colors}
           />
 
-         <MenuItem
+          <MenuItem
             icon="🗺️"
             title="Route History"
             subtitle="View past trips and routes"

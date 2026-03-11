@@ -70,7 +70,7 @@ app.use('/api/geofences', geofenceRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/parents', parentRoutes);
 app.use('/api/users', userRoutes);
-app.use('/api/drivers', driverRoutes);
+app.use('/api/driver', driverRoutes);
 app.use('/api/sms', smsRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/user', userRoutes);
