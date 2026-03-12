@@ -13,6 +13,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useAuth } from '../../context/AuthContext';
+import { useTheme } from '../../context/ThemeContext';
 import { COLORS } from '../../constants/config';
 
 export default function LoginScreen({ navigation }) {
@@ -22,6 +23,7 @@ export default function LoginScreen({ navigation }) {
   const [biometricSupported, setBiometricSupported] = useState(false);
   
   const { login, loginWithBiometrics, biometricAvailable, saveCredentials } = useAuth();
+  const { colors, isDarkMode } = useTheme();
 
   useEffect(() => {
     checkBiometricSupport();
@@ -51,8 +53,7 @@ export default function LoginScreen({ navigation }) {
         if (biometricSupported) {
           await saveCredentials(email, password);
         }
-        Alert.alert('Success', 'Logged in successfully');
-        // Navigation should be handled by AuthContext
+        // Navigation handled by AuthContext
       } else {
         console.log('📱 LoginScreen: Login failed:', result?.message || 'Unknown error');
         Alert.alert('Login Failed', result?.message || 'Invalid credentials');
@@ -86,23 +87,28 @@ export default function LoginScreen({ navigation }) {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: colors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <LinearGradient colors={[COLORS.primary, COLORS.secondary]} style={styles.header}>
+      <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.header}>
         <Text style={styles.appName}>Driver App</Text>
         <Text style={styles.tagline}>Smart School Transport</Text>
       </LinearGradient>
 
       <View style={styles.formContainer}>
-        <Text style={styles.title}>Driver Login</Text>
-        <Text style={styles.subtitle}>Sign in to start your trips</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Driver Login</Text>
+        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Sign in to start your trips</Text>
 
         <View style={styles.inputContainer}>
-          <Text style={styles.label}>Email</Text>
+          <Text style={[styles.label, { color: colors.text }]}>Email</Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, { 
+              borderColor: colors.border,
+              backgroundColor: colors.card,
+              color: colors.text
+            }]}
             placeholder="driver@demo.com"
+            placeholderTextColor={colors.textSecondary}
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
@@ -112,10 +118,15 @@ export default function LoginScreen({ navigation }) {
         </View>
 
         <View style={styles.inputContainer}>
-          <Text style={styles.label}>Password</Text>
+          <Text style={[styles.label, { color: colors.text }]}>Password</Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, { 
+              borderColor: colors.border,
+              backgroundColor: colors.card,
+              color: colors.text
+            }]}
             placeholder="••••••••"
+            placeholderTextColor={colors.textSecondary}
             value={password}
             onChangeText={setPassword}
             secureTextEntry
@@ -123,23 +134,35 @@ export default function LoginScreen({ navigation }) {
           />
         </View>
 
+        {/* Forgot Password Link - NEW */}
+        <TouchableOpacity
+          style={styles.forgotPassword}
+          onPress={() => navigation.navigate('ForgotPassword')}
+        >
+          <Text style={[styles.forgotPasswordText, { color: colors.primary }]}>
+            Forgot Password?
+          </Text>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={styles.loginButton}
           onPress={handleLogin}
           disabled={loading}
         >
-          <LinearGradient colors={[COLORS.primary, COLORS.secondary]} style={styles.gradient}>
+          <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.gradient}>
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.loginText}>Sign In</Text>}
           </LinearGradient>
         </TouchableOpacity>
 
         {biometricSupported && biometricAvailable && (
           <TouchableOpacity
-            style={styles.biometricButton}
+            style={[styles.biometricButton, { borderColor: colors.primary }]}
             onPress={handleBiometricLogin}
             disabled={loading}
           >
-            <Text style={styles.biometricText}>🔒 Login with Fingerprint</Text>
+            <Text style={[styles.biometricText, { color: colors.primary }]}>
+              🔒 Login with Fingerprint
+            </Text>
           </TouchableOpacity>
         )}
       </View>
@@ -148,19 +171,21 @@ export default function LoginScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1 },
   header: { height: 200, justifyContent: 'center', alignItems: 'center', borderBottomLeftRadius: 30, borderBottomRightRadius: 30 },
   appName: { fontSize: 24, fontWeight: 'bold', color: '#fff', marginBottom: 5 },
   tagline: { fontSize: 14, color: 'rgba(255,255,255,0.8)' },
   formContainer: { flex: 1, paddingHorizontal: 20, paddingTop: 30 },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#333', marginBottom: 5 },
-  subtitle: { fontSize: 16, color: '#666', marginBottom: 30 },
+  title: { fontSize: 28, fontWeight: 'bold', marginBottom: 5 },
+  subtitle: { fontSize: 16, marginBottom: 30 },
   inputContainer: { marginBottom: 20 },
-  label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 5 },
-  input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 10, padding: 12, fontSize: 16, backgroundColor: '#f9f9f9' },
+  label: { fontSize: 14, fontWeight: '600', marginBottom: 5 },
+  input: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 16 },
+  forgotPassword: { alignItems: 'flex-end', marginBottom: 20 },
+  forgotPasswordText: { fontSize: 14, fontWeight: '500' },
   loginButton: { height: 50, borderRadius: 10, overflow: 'hidden', marginBottom: 15 },
   gradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loginText: { color: '#fff', fontSize: 18, fontWeight: '600' },
-  biometricButton: { height: 50, borderRadius: 10, borderWidth: 1, borderColor: COLORS.primary, justifyContent: 'center', alignItems: 'center' },
-  biometricText: { color: COLORS.primary, fontSize: 16, fontWeight: '500' },
+  biometricButton: { height: 50, borderRadius: 10, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
+  biometricText: { fontSize: 16, fontWeight: '500' },
 });

@@ -8,8 +8,10 @@ import { NavigationContainer } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { AuthProvider } from './src/context/AuthContext';
 import { TripProvider } from './src/context/TripContext';
+import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { COLORS } from './src/constants/config';
+
 
 // Add this right after your imports
 if (__DEV__) {
@@ -98,13 +100,15 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StatusBar style="light" backgroundColor={COLORS.primary} />
-        <AuthProvider>
-          <TripProvider>
-            <NavigationContainer ref={navigationRef}>
-              <AppNavigator />
-            </NavigationContainer>
-          </TripProvider>
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <TripProvider>
+              <NavigationContainer ref={navigationRef}>
+                <AppNavigator />
+              </NavigationContainer>
+            </TripProvider>
+          </AuthProvider>
+        </ThemeProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

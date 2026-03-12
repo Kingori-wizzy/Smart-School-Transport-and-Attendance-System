@@ -4,11 +4,18 @@ const User = require('../models/User');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
+
+// Ensure uploads directory exists
+const uploadDir = 'uploads';
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, 'uploads/');
+    cb(null, uploadDir);
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -68,7 +75,7 @@ router.post('/push-token', async (req, res) => {
     res.json({ 
       success: true, 
       message: 'Push token saved successfully',
-      user: updatedUser
+      user: updatedUser 
     });
   } catch (error) {
     console.error('❌ Error saving push token:', error);
@@ -157,9 +164,16 @@ router.get('/profile', async (req, res) => {
       });
     }
 
+    // Add full URL to profile image if exists
+    const userObj = user.toObject();
+    if (userObj.profileImage) {
+      // You might want to add base URL here
+      userObj.profileImageUrl = userObj.profileImage;
+    }
+
     res.json({ 
       success: true, 
-      user 
+      user: userObj
     });
   } catch (error) {
     console.error('❌ Error fetching profile:', error);
@@ -210,17 +224,38 @@ router.put('/profile', async (req, res) => {
   }
 });
 
-// 📸 Upload profile photo
-router.post('/profile/photo', upload.single('photo'), async (req, res) => {
+// 📸 Upload profile photo - FIXED with better error handling
+router.post('/profile/photo', authMiddleware, upload.single('photo'), async (req, res) => {
   try {
+    if (!req.file) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'No file uploaded' 
+      });
+    }
+
     const userId = req.user.id;
+    
+    // Get the old user to delete previous photo if needed
+    const oldUser = await User.findById(userId);
+    
+    // Construct the photo URL
     const photoUrl = `/uploads/${req.file.filename}`;
     
+    // Update user with new profile image
     const user = await User.findByIdAndUpdate(
       userId,
       { profileImage: photoUrl },
       { new: true }
-    ).select('-password -pushToken -__v -resetCode -resetCodeExpiry');
+    ).select('-password');
+    
+    // Optionally delete old photo file
+    if (oldUser && oldUser.profileImage) {
+      const oldFilePath = path.join(__dirname, '..', oldUser.profileImage);
+      if (fs.existsSync(oldFilePath)) {
+        fs.unlinkSync(oldFilePath);
+      }
+    }
     
     res.json({ 
       success: true, 
@@ -229,10 +264,10 @@ router.post('/profile/photo', upload.single('photo'), async (req, res) => {
       user 
     });
   } catch (error) {
-    console.error('❌ Error uploading profile photo:', error);
+    console.error('❌ Error uploading photo:', error);
     res.status(500).json({ 
       success: false, 
-      message: error.message 
+      error: error.message 
     });
   }
 });
@@ -243,7 +278,6 @@ router.post('/change-password', async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     const userId = req.user.id;
     
-    // Validate input
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ 
         success: false, 
@@ -347,5 +381,8 @@ router.get('/activity-summary', async (req, res) => {
     });
   }
 });
+
+// Serve uploaded files statically (add this to your server.js)
+// app.use('/uploads', express.static('uploads'));
 
 module.exports = router;

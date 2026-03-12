@@ -10,12 +10,14 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../context/AuthContext';
+import { useTheme } from '../../context/ThemeContext';
 import api from '../../services/api';
 import { COLORS } from '../../constants/config';
 import { format } from 'date-fns';
 
 export default function DashboardScreen({ navigation }) {
   const { driver, currentTrip, logout, fetchCurrentTrip } = useAuth();
+  const { colors } = useTheme();
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [todayTrips, setTodayTrips] = useState([]);
@@ -32,13 +34,36 @@ export default function DashboardScreen({ navigation }) {
 
   const loadDashboardData = async () => {
     try {
-      const tripsRes = await api.get('/driver/trips/today');
-      setTodayTrips(tripsRes.data);
+      console.log('📊 Loading dashboard data...');
+      
+      // Fetch today's trips
+      const tripsResponse = await api.get('/driver/trips/today');
+      console.log('✅ Trips response:', tripsResponse);
+      
+      // Handle both possible response structures
+      const tripsData = tripsResponse.data || tripsResponse;
+      console.log('📊 Trips data:', tripsData);
+      setTodayTrips(Array.isArray(tripsData) ? tripsData : []);
 
-      const statsRes = await api.get('/driver/stats');
-      setStats(statsRes.data);
+      // Fetch stats
+      const statsResponse = await api.get('/driver/stats');
+      console.log('✅ Stats response:', statsResponse);
+      
+      // Handle both possible response structures
+      const statsData = statsResponse.data || statsResponse;
+      setStats({
+        totalTrips: statsData.totalTrips || 0,
+        completedTrips: statsData.completedTrips || 0,
+        totalStudents: statsData.totalStudents || 0,
+        totalDistance: statsData.totalDistance || 0,
+      });
+
     } catch (error) {
-      console.error('Error loading dashboard:', error);
+      console.error('❌ Error loading dashboard:', error);
+      console.error('Error details:', error.message);
+      if (error.response) {
+        console.error('Response data:', error.response.data);
+      }
     }
   };
 
@@ -58,7 +83,7 @@ export default function DashboardScreen({ navigation }) {
         {
           text: 'Start',
           onPress: async () => {
-            const result = await startTrip(trip.id);
+            const result = await api.trip.start(trip.id);
             if (result.success) {
               navigation.navigate('Trip', { trip: result.trip });
             }
@@ -98,8 +123,8 @@ export default function DashboardScreen({ navigation }) {
   );
 
   return (
-    <View style={styles.container}>
-      <LinearGradient colors={[COLORS.primary, COLORS.secondary]} style={styles.header}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.header}>
         <View style={styles.headerTop}>
           <View>
             <Text style={styles.greeting}>Welcome,</Text>
@@ -121,27 +146,30 @@ export default function DashboardScreen({ navigation }) {
 
       <ScrollView
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        contentContainerStyle={styles.scrollContent}
       >
         <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.totalTrips}</Text>
-            <Text style={styles.statLabel}>Total Trips</Text>
+          <View style={[styles.statCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.statValue, { color: colors.primary }]}>{stats.totalTrips}</Text>
+            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Total Trips</Text>
           </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.completedTrips}</Text>
-            <Text style={styles.statLabel}>Completed</Text>
+          <View style={[styles.statCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.statValue, { color: colors.primary }]}>{stats.completedTrips}</Text>
+            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Completed</Text>
           </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.totalStudents}</Text>
-            <Text style={styles.statLabel}>Students</Text>
+          <View style={[styles.statCard, { backgroundColor: colors.card }]}>
+            <Text style={[styles.statValue, { color: colors.primary }]}>{stats.totalStudents}</Text>
+            <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Students</Text>
           </View>
         </View>
 
-        <Text style={styles.sectionTitle}>Today's Trips</Text>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Today's Trips</Text>
         {todayTrips.length > 0 ? (
           todayTrips.map(trip => <TripCard key={trip.id} trip={trip} />)
         ) : (
-          <Text style={styles.noTripsText}>No trips scheduled for today</Text>
+          <Text style={[styles.noTripsText, { color: colors.textSecondary }]}>
+            No trips scheduled for today
+          </Text>
         )}
       </ScrollView>
     </View>
@@ -149,23 +177,74 @@ export default function DashboardScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  header: { paddingTop: 50, paddingBottom: 20, paddingHorizontal: 20 },
-  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  container: { flex: 1 },
+  header: { 
+    paddingTop: 40, // Reduced from 50
+    paddingBottom: 15, // Reduced from 20
+    paddingHorizontal: 20 
+  },
+  headerTop: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 8 // Reduced from 10
+  },
   greeting: { fontSize: 14, color: 'rgba(255,255,255,0.8)' },
   driverName: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  logoutButton: { padding: 10 },
+  logoutButton: { padding: 8 }, // Reduced padding
   logoutText: { fontSize: 24 },
-  activeTripBanner: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.2)', padding: 10, borderRadius: 8, marginTop: 10 },
+  activeTripBanner: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    backgroundColor: 'rgba(255,255,255,0.2)', 
+    padding: 8, // Reduced padding
+    borderRadius: 8, 
+    marginTop: 8 // Reduced margin
+  },
   activeTripText: { color: '#fff', fontSize: 14, fontWeight: '500' },
   viewTripText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
-  statsContainer: { flexDirection: 'row', justifyContent: 'space-around', margin: 15 },
-  statCard: { backgroundColor: '#fff', padding: 15, borderRadius: 10, alignItems: 'center', flex: 1, marginHorizontal: 5, elevation: 2 },
-  statValue: { fontSize: 24, fontWeight: 'bold', color: COLORS.primary },
-  statLabel: { fontSize: 12, color: '#666', marginTop: 4 },
-  sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#333', marginHorizontal: 15, marginBottom: 10 },
-  tripCard: { backgroundColor: '#fff', marginHorizontal: 15, marginBottom: 10, padding: 15, borderRadius: 10, elevation: 2 },
-  tripHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  scrollContent: { 
+    paddingBottom: 20,
+    paddingTop: 5 // Added small top padding
+  },
+  statsContainer: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-around', 
+    marginHorizontal: 15,
+    marginTop: 10, // Added top margin
+    marginBottom: 15 
+  },
+  statCard: { 
+    padding: 15, 
+    borderRadius: 10, 
+    alignItems: 'center', 
+    flex: 1, 
+    marginHorizontal: 5, 
+    elevation: 2 
+  },
+  statValue: { fontSize: 24, fontWeight: 'bold' },
+  statLabel: { fontSize: 12, marginTop: 4 },
+  sectionTitle: { 
+    fontSize: 18, 
+    fontWeight: 'bold', 
+    marginHorizontal: 15, 
+    marginBottom: 10 
+  },
+  tripCard: { 
+    marginHorizontal: 15, 
+    marginBottom: 10, 
+    padding: 15, 
+    borderRadius: 10, 
+    elevation: 2,
+    backgroundColor: '#fff' 
+  },
+  tripHeader: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 10 
+  },
   tripRoute: { fontSize: 16, fontWeight: 'bold', color: '#333' },
   tripStatus: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
   tripStatusText: { color: '#fff', fontSize: 11, fontWeight: '600' },
@@ -173,7 +252,7 @@ const styles = StyleSheet.create({
   tripTime: { fontSize: 13, color: '#666', marginBottom: 4 },
   tripBus: { fontSize: 13, color: '#666', marginBottom: 4 },
   tripStudents: { fontSize: 13, color: '#666' },
-  startButton: { backgroundColor: COLORS.primary, padding: 12, borderRadius: 8, alignItems: 'center' },
+  startButton: { padding: 12, borderRadius: 8, alignItems: 'center' },
   startButtonText: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  noTripsText: { textAlign: 'center', color: '#999', marginTop: 20 },
+  noTripsText: { textAlign: 'center', marginTop: 20 },
 });

@@ -1,8 +1,9 @@
-import React from 'react';
-import { Text } from 'react-native';
+import React, { useEffect } from 'react';
+import { Text, Alert } from 'react-native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useAuth } from '../context/AuthContext';
+import api from '../services/api';
 
 // Auth Screens
 import LoginScreen from '../screens/Auth/LoginScreen';
@@ -16,6 +17,11 @@ import BoardingScreen from '../screens/Main/BoardingScreen';
 import ReportScreen from '../screens/Main/ReportScreen';
 import ProfileScreen from '../screens/Main/ProfileScreen';
 import QRScanScreen from '../screens/Main/QRScanScreen';
+import OSMNavigationScreen from '../screens/Main/OSMNavigationScreen';
+
+// Support Screens
+import HelpCenterScreen from '../screens/Support/HelpCenterScreen';
+import ContactDispatchScreen from '../screens/Support/ContactDispatchScreen';
 
 // Emergency Screens
 import SOSScreen from '../screens/Emergency/SOSScreen';
@@ -55,7 +61,34 @@ const MainTabs = () => {
 };
 
 const AppNavigator = () => {
-  const { driver, loading } = useAuth();
+  const { driver, loading, logout } = useAuth();
+
+  // Role verification effect
+  useEffect(() => {
+    const verifyRole = async () => {
+      if (driver) {
+        // Check if user has driver role
+        if (driver.role !== 'driver') {
+          Alert.alert(
+            'Access Denied',
+            'This app is for drivers only. You will be logged out.',
+            [
+              {
+                text: 'OK',
+                onPress: async () => {
+                  await logout();
+                }
+              }
+            ]
+          );
+        } else {
+          console.log('✅ Driver role verified:', driver.firstName);
+        }
+      }
+    };
+
+    verifyRole();
+  }, [driver]);
 
   if (loading) {
     return null;
@@ -75,17 +108,19 @@ const AppNavigator = () => {
           <Stack.Screen name="Navigation" component={NavigationScreen} />
           <Stack.Screen name="Boarding" component={BoardingScreen} />
           <Stack.Screen name="Report" component={ReportScreen} />
+          <Stack.Screen name="OSMNavigation" component={OSMNavigationScreen} />
           <Stack.Screen name="SOS" component={SOSScreen} />
-          {/* 👇 Add QR Scan screen here - it will be accessible from anywhere */}
           <Stack.Screen 
             name="QRScan" 
             component={QRScanScreen} 
             options={{
-              // Keep header hidden, make it a full screen modal
               presentation: 'fullScreenModal',
               cardStyle: { backgroundColor: 'transparent' }
             }}
           />
+          {/* Support Screens */}
+          <Stack.Screen name="HelpCenter" component={HelpCenterScreen} />
+          <Stack.Screen name="ContactDispatch" component={ContactDispatchScreen} />
         </>
       )}
     </Stack.Navigator>

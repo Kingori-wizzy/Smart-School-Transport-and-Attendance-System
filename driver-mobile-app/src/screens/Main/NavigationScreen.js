@@ -6,255 +6,388 @@ import {
   Dimensions,
   TouchableOpacity,
   Alert,
-  ActivityIndicator,
+  FlatList,
+  Linking,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { LinearGradient } from 'expo-linear-gradient';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
+import { useTheme } from '../../context/ThemeContext';
+import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
-import { COLORS } from '../../constants/config';
-import { Audio } from 'expo-av';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
+
+const StudentMarker = ({ student, onPress, colors }) => (
+  <Marker
+    coordinate={{
+      latitude: student.latitude || -1.2864,
+      longitude: student.longitude || 36.8172,
+    }}
+    onPress={() => onPress(student)}
+  >
+    <View style={[styles.studentMarker, { backgroundColor: student.boarded ? '#4CAF50' : colors.primary }]}>
+      <Text style={styles.studentMarkerText}>
+        {student.firstName?.charAt(0)}{student.lastName?.charAt(0)}
+      </Text>
+    </View>
+  </Marker>
+);
 
 export default function NavigationScreen({ route, navigation }) {
-  const { trip } = route.params;
+  // 🛡️ CRITICAL FIX: Provide default values to prevent 'undefined' errors
+  const { colors } = useTheme();
+  const { driver } = useAuth();
+  const { trip, students = [] } = route.params || {};
+
   const mapRef = useRef(null);
-  const [loading, setLoading] = useState(true);
-  const [routeCoords, setRouteCoords] = useState([]);
   const [currentLocation, setCurrentLocation] = useState(null);
-  const [nextStop, setNextStop] = useState(null);
-  const [distanceToNext, setDistanceToNext] = useState(null);
-  const [eta, setEta] = useState(null);
-  const [sound, setSound] = useState();
+  const [remainingStudents, setRemainingStudents] = useState([]);
+  const [nextStudent, setNextStudent] = useState(null);
 
+  // Log received data for debugging
   useEffect(() => {
-    loadRouteData();
-    startNavigation();
-
-    return () => {
-      if (sound) {
-        sound.unloadAsync();
-      }
-    };
+    console.log('🚀 NavigationScreen mounted');
+    console.log('📦 Received trip:', trip?.id);
+    console.log('📦 Received students count:', students?.length);
   }, []);
 
-  const loadRouteData = async () => {
-    try {
-      const response = await api.get(`/driver/route/${trip.routeId}/coordinates`);
-      setRouteCoords(response.data);
-      setLoading(false);
-    } catch (error) {
-      console.error('Error loading route:', error);
-      Alert.alert('Error', 'Failed to load route');
-    }
-  };
+  useEffect(() => {
+    startLocationTracking();
+  }, []);
 
-  const startNavigation = async () => {
+  // Update remaining students whenever the student list changes
+  useEffect(() => {
+    updateRemainingStudents();
+  }, [students]);
+
+  const startLocationTracking = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission denied', 'Location permission required');
+        Alert.alert('Permission denied', 'Location permission is required for navigation');
         return;
       }
 
       await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.High,
-          timeInterval: 3000,
+          timeInterval: 5000,
           distanceInterval: 10,
         },
-        handleLocationUpdate
+        (location) => {
+          setCurrentLocation({
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+          });
+        }
       );
     } catch (error) {
-      console.error('Navigation error:', error);
+      console.error('Error starting location tracking:', error);
     }
   };
 
-  const handleLocationUpdate = (location) => {
-    setCurrentLocation(location.coords);
-    calculateNextStop(location.coords);
-    updateMapRegion(location.coords);
-  };
+  const updateRemainingStudents = () => {
+    // ✅ FIX: Safely handle the students array
+    if (!Array.isArray(students)) {
+      console.log('⚠️ Students is not an array:', students);
+      setRemainingStudents([]);
+      setNextStudent(null);
+      return;
+    }
 
-  const calculateNextStop = (coords) => {
-    if (!routeCoords.length) return;
-
-    // Find the next stop based on current position
-    let minDistance = Infinity;
-    let nextStopIndex = -1;
-
-    routeCoords.forEach((stop, index) => {
-      const distance = calculateDistance(
-        coords.latitude,
-        coords.longitude,
-        stop.latitude,
-        stop.longitude
-      );
-      
-      if (distance < minDistance && distance > 50) { // 50 meters threshold
-        minDistance = distance;
-        nextStopIndex = index;
-      }
-    });
-
-    if (nextStopIndex !== -1) {
-      setNextStop({
-        ...routeCoords[nextStopIndex],
-        index: nextStopIndex + 1,
-        distance: Math.round(minDistance),
-      });
-      
-      // Calculate ETA (assuming average speed 30 km/h)
-      const etaMinutes = Math.round((minDistance / 1000) / 30 * 60);
-      setEta(etaMinutes);
-
-      // Speak navigation instruction
-      speakInstruction(nextStopIndex);
+    const unboarded = students.filter(s => !s.boarded);
+    console.log(`📊 Unboarded students: ${unboarded.length}`);
+    setRemainingStudents(unboarded);
+    
+    if (unboarded.length > 0) {
+      setNextStudent(unboarded[0]);
+    } else {
+      setNextStudent(null);
     }
   };
 
-  const calculateDistance = (lat1, lon1, lat2, lon2) => {
-    const R = 6371e3;
-    const φ1 = lat1 * Math.PI / 180;
-    const φ2 = lat2 * Math.PI / 180;
-    const Δφ = (lat2 - lat1) * Math.PI / 180;
-    const Δλ = (lon2 - lon1) * Math.PI / 180;
-
-    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return R * c;
+  const handleStudentPress = (student) => {
+    Alert.alert(
+      `${student.firstName || ''} ${student.lastName || ''}`,
+      `Class: ${student.classLevel || 'N/A'}\nPickup: ${student.pickupPoint || 'Not set'}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Navigate',
+          onPress: () => {
+            // Launch Google Maps for actual turn-by-turn directions
+            const url = `https://www.google.com/maps/dir/?api=1&destination=${student.latitude || -1.2864},${student.longitude || 36.8172}`;
+            Linking.openURL(url);
+          }
+        },
+        { text: 'Mark as Boarded', onPress: () => markAsBoarded(student) }
+      ]
+    );
   };
 
-  const speakInstruction = async (stopIndex) => {
+  const markAsBoarded = async (student) => {
     try {
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: 'https://your-server.com/audio/approach-stop.mp3' },
-        { shouldPlay: true }
-      );
-      setSound(sound);
+      if (!trip?.id) {
+        Alert.alert('Error', 'No active trip found');
+        return;
+      }
+
+      const result = await api.trip.boardStudent(trip.id, student.id, 'manual');
+      
+      if (result.success || result.data?.success) {
+        // Update local state to reflect boarding
+        const updatedRemaining = remainingStudents.filter(s => s.id !== student.id);
+        setRemainingStudents(updatedRemaining);
+        
+        if (updatedRemaining.length > 0) {
+          setNextStudent(updatedRemaining[0]);
+        } else {
+          setNextStudent(null);
+        }
+
+        Alert.alert('✅ Success', `${student.firstName} marked as boarded`);
+      } else {
+        Alert.alert('Error', result.message || 'Failed to mark student as boarded');
+      }
     } catch (error) {
-      console.error('Error playing sound:', error);
+      console.error('Error boarding student:', error);
+      Alert.alert('Error', 'Failed to mark student as boarded');
     }
   };
 
-  const updateMapRegion = (coords) => {
-    if (mapRef.current) {
-      mapRef.current.animateToRegion({
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      }, 1000);
+  const navigateToNext = () => {
+    if (nextStudent) {
+      const url = `https://www.google.com/maps/dir/?api=1&destination=${nextStudent.latitude || -1.2864},${nextStudent.longitude || 36.8172}`;
+      Linking.openURL(url);
+    } else {
+      Alert.alert('All Done!', 'All students have been boarded.');
     }
   };
 
-  const centerMap = () => {
-    if (currentLocation && mapRef.current) {
-      mapRef.current.animateToRegion({
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      }, 1000);
+  const fitToMarkers = () => {
+    if (mapRef.current && remainingStudents.length > 0) {
+      const coordinates = remainingStudents.map(s => ({
+        latitude: s.latitude || -1.2864,
+        longitude: s.longitude || 36.8172,
+      }));
+
+      if (currentLocation) {
+        coordinates.unshift(currentLocation);
+      }
+
+      mapRef.current.fitToCoordinates(coordinates, {
+        edgePadding: { top: 100, right: 100, bottom: 100, left: 100 },
+        animated: true,
+      });
     }
   };
 
-  if (loading) {
+  const StudentListItem = ({ student }) => (
+    <TouchableOpacity
+      style={[styles.studentListItem, { backgroundColor: colors.card }]}
+      onPress={() => handleStudentPress(student)}
+    >
+      <View style={[styles.studentListAvatar, { backgroundColor: colors.primary }]}>
+        <Text style={styles.studentListAvatarText}>
+          {student.firstName?.charAt(0)}{student.lastName?.charAt(0)}
+        </Text>
+      </View>
+      <View style={styles.studentListInfo}>
+        <Text style={[styles.studentListName, { color: colors.text }]}>
+          {student.firstName || ''} {student.lastName || ''}
+        </Text>
+        <Text style={[styles.studentListClass, { color: colors.textSecondary }]}>
+          {student.classLevel || 'N/A'} • {student.pickupPoint || 'Pickup not set'}
+        </Text>
+      </View>
+      <TouchableOpacity
+        style={[styles.navigateButton, { backgroundColor: colors.primary }]}
+        onPress={() => {
+          const url = `https://www.google.com/maps/dir/?api=1&destination=${student.latitude || -1.2864},${student.longitude || 36.8172}`;
+          Linking.openURL(url);
+        }}
+      >
+        <Text style={styles.navigateButtonText}>🚗</Text>
+      </TouchableOpacity>
+    </TouchableOpacity>
+  );
+
+  // If no trip data, show an error
+  if (!trip) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
-        <Text style={styles.loadingText}>Loading navigation...</Text>
+      <View style={[styles.container, { backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center' }]}>
+        <Text style={{ color: colors.text }}>No trip data available</Text>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <Text>Go Back</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
-      <MapView
-        ref={mapRef}
-        style={styles.map}
-        provider={PROVIDER_GOOGLE}
-        initialRegion={{
-          latitude: currentLocation?.latitude || -1.2864,
-          longitude: currentLocation?.longitude || 36.8172,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        }}
-        showsUserLocation={true}
-        showsMyLocationButton={false}
-      >
-        {/* Route Polyline */}
-        {routeCoords.length > 0 && (
-          <Polyline
-            coordinates={routeCoords}
-            strokeColor={COLORS.primary}
-            strokeWidth={4}
-          />
-        )}
-
-        {/* Stop Markers */}
-        {routeCoords.map((stop, index) => (
-          <Marker
-            key={index}
-            coordinate={{ latitude: stop.latitude, longitude: stop.longitude }}
-            title={`Stop ${index + 1}`}
-            description={stop.name}
-          >
-            <View style={[styles.stopMarker, index === 0 && styles.firstStop]}>
-              <Text style={styles.stopMarkerText}>{index + 1}</Text>
-            </View>
-          </Marker>
-        ))}
-      </MapView>
-
-      {/* Navigation Header */}
-      <LinearGradient colors={['rgba(0,0,0,0.7)', 'transparent']} style={styles.header}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Navigation</Text>
-        <TouchableOpacity onPress={centerMap} style={styles.centerButton}>
-          <Text style={styles.centerIcon}>🎯</Text>
+        <TouchableOpacity onPress={fitToMarkers} style={styles.fitButton}>
+          <Text style={styles.fitButtonIcon}>📍</Text>
         </TouchableOpacity>
       </LinearGradient>
 
-      {/* Navigation Instructions */}
-      {nextStop && (
-        <View style={styles.instructionCard}>
-          <Text style={styles.instructionTitle}>Next Stop</Text>
-          <Text style={styles.instructionStop}>Stop {nextStop.index}</Text>
-          <View style={styles.instructionDetails}>
-            <Text style={styles.instructionDistance}>📏 {nextStop.distance}m</Text>
-            <Text style={styles.instructionEta}>⏱️ {eta} min</Text>
-          </View>
-        </View>
+      <View style={styles.mapContainer}>
+        {currentLocation && (
+          <MapView
+            ref={mapRef}
+            style={styles.map}
+            provider={PROVIDER_GOOGLE}
+            initialRegion={{
+              latitude: currentLocation.latitude,
+              longitude: currentLocation.longitude,
+              latitudeDelta: 0.05,
+              longitudeDelta: 0.05,
+            }}
+            showsUserLocation={true}
+            showsMyLocationButton={true}
+          >
+            {remainingStudents.map((student) => (
+              <StudentMarker
+                key={student.id}
+                student={student}
+                onPress={handleStudentPress}
+                colors={colors}
+              />
+            ))}
+          </MapView>
+        )}
+      </View>
+
+      {nextStudent && (
+        <TouchableOpacity
+          style={[styles.nextStudentBanner, { backgroundColor: colors.primary }]}
+          onPress={navigateToNext}
+        >
+          <Text style={styles.nextStudentText}>
+            Next: {nextStudent.firstName || ''} {nextStudent.lastName || ''}
+          </Text>
+          <Text style={styles.nextStudentArrow}>→</Text>
+        </TouchableOpacity>
       )}
+
+      <View style={[styles.studentList, { backgroundColor: colors.card }]}>
+        <Text style={[styles.studentListTitle, { color: colors.text }]}>
+          Remaining Students ({remainingStudents.length})
+        </Text>
+        <FlatList
+          data={remainingStudents}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => <StudentListItem student={item} />}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.studentListContent}
+          ListEmptyComponent={
+            <Text style={{ textAlign: 'center', padding: 20, color: colors.textSecondary }}>
+              All students boarded! Trip complete.
+            </Text>
+          }
+        />
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  map: { width, height },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { marginTop: 10, fontSize: 16, color: '#666' },
-  header: { position: 'absolute', top: 0, left: 0, right: 0, paddingTop: 50, paddingHorizontal: 20, paddingBottom: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
+  header: {
+    paddingTop: 40,
+    paddingBottom: 15,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   backIcon: { fontSize: 24, color: '#fff' },
-  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
-  centerButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
-  centerIcon: { fontSize: 20 },
-  instructionCard: { position: 'absolute', bottom: 30, left: 20, right: 20, backgroundColor: '#fff', borderRadius: 15, padding: 20, elevation: 5 },
-  instructionTitle: { fontSize: 12, color: '#999', marginBottom: 4 },
-  instructionStop: { fontSize: 24, fontWeight: 'bold', color: '#333', marginBottom: 10 },
-  instructionDetails: { flexDirection: 'row', justifyContent: 'space-between' },
-  instructionDistance: { fontSize: 16, color: COLORS.primary, fontWeight: '600' },
-  instructionEta: { fontSize: 16, color: '#FF9800', fontWeight: '600' },
-  stopMarker: { backgroundColor: COLORS.primary, width: 30, height: 30, borderRadius: 15, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
-  firstStop: { backgroundColor: '#4CAF50' },
-  stopMarkerText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+  headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
+  fitButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fitButtonIcon: { fontSize: 18, color: '#fff' },
+  mapContainer: { height: 300 },
+  map: { flex: 1 },
+  studentMarker: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  studentMarkerText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  nextStudentBanner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 15,
+    margin: 15,
+    borderRadius: 10,
+  },
+  nextStudentText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  nextStudentArrow: { color: '#fff', fontSize: 20 },
+  studentList: {
+    flex: 1,
+    marginHorizontal: 15,
+    marginBottom: 15,
+    borderRadius: 10,
+    paddingTop: 10,
+  },
+  studentListTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    paddingHorizontal: 15,
+    paddingBottom: 10,
+  },
+  studentListContent: { paddingBottom: 10 },
+  studentListItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    marginHorizontal: 10,
+    marginBottom: 8,
+    borderRadius: 8,
+  },
+  studentListAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  studentListAvatarText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+  studentListInfo: { flex: 1 },
+  studentListName: { fontSize: 14, fontWeight: '600', marginBottom: 2 },
+  studentListClass: { fontSize: 11 },
+  navigateButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  navigateButtonText: { color: '#fff', fontSize: 18 },
 });

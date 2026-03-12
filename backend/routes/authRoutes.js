@@ -3,13 +3,46 @@ const router = express.Router();
 const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 
-// Helper function to send email (you'll need to implement this)
-const sendEmail = async (to, subject, body) => {
-  // TODO: Implement email sending (using nodemailer, sendgrid, etc.)
-  console.log(`📧 Email to ${to}: ${subject} - ${body}`);
-  // For development, just log it
-  return true;
+// Configure email transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASSWORD
+  }
+});
+
+// Helper function to send actual emails
+const sendEmail = async (to, subject, text) => {
+  try {
+    // For development, log the email
+    console.log(`📧 Sending email to ${to}:`);
+    console.log(`   Subject: ${subject}`);
+    console.log(`   Body: ${text}`);
+    
+    // If email credentials are configured, send actual email
+    if (process.env.EMAIL_USER && process.env.EMAIL_PASSWORD) {
+      const mailOptions = {
+        from: process.env.EMAIL_USER,
+        to,
+        subject,
+        text
+      };
+
+      const info = await transporter.sendMail(mailOptions);
+      console.log(`✅ Email sent: ${info.messageId}`);
+      return true;
+    } else {
+      console.log('⚠️ Email credentials not configured. Using console log only.');
+      return true;
+    }
+  } catch (error) {
+    console.error('❌ Email sending error:', error);
+    // Don't fail the request if email fails - just log it
+    return false;
+  }
 };
 
 // 📝 Register a new user (Admin or Parent)
@@ -234,10 +267,10 @@ router.post('/forgot-password', async (req, res) => {
     await sendEmail(
       email,
       'Password Reset Code',
-      `Your verification code is: ${resetCode}\n\nThis code will expire in 15 minutes.`
+      `Your password reset code is: ${resetCode}\n\nThis code will expire in 15 minutes.\n\nIf you did not request this, please ignore this email.`
     );
 
-    console.log(`✅ Reset code sent to ${email}`);
+    console.log(`✅ Reset code ${resetCode} sent to ${email}`);
     
     res.json({ 
       success: true, 
@@ -318,6 +351,13 @@ router.post('/reset-password', async (req, res) => {
     await user.save();
 
     console.log(`✅ Password reset successful for ${email}`);
+
+    // Send confirmation email
+    await sendEmail(
+      email,
+      'Password Reset Successful',
+      'Your password has been successfully reset. If you did not perform this action, please contact support immediately.'
+    );
 
     res.json({ 
       success: true, 

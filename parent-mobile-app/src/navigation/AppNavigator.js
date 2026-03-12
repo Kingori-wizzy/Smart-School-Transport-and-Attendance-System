@@ -1,8 +1,9 @@
-import React from 'react';
-import { Text } from 'react-native';
+import React, { useEffect } from 'react';
+import { Text, Alert } from 'react-native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useAuth } from '../context/AuthContext';
+import api from '../services/api';
 
 // Auth Screens
 import LoginScreen from '../screens/Auth/LoginScreen';
@@ -27,22 +28,27 @@ import EditChildScreen from '../screens/Child/EditChildScreen';
 // Settings Screens
 import NotificationSettingsScreen from '../screens/Settings/NotificationSettingsScreen';
 
+// Support Screens
 import HelpCenterScreen from '../screens/Support/HelpCenterScreen';
 import TermsOfServiceScreen from '../screens/Support/TermsOfServiceScreen';
 import PrivacyPolicyScreen from '../screens/Support/PrivacyPolicyScreen';
 import ContactSupportScreen from '../screens/Support/ContactSupportScreen';
 
+// Messages Screens
 import ConversationsScreen from '../screens/Messages/ConversationsScreen';
 import ChatScreen from '../screens/Messages/ChatScreen';
 import NewMessageScreen from '../screens/Messages/NewMessageScreen';
 
+// Rating Screens
 import DriverRatingScreen from '../screens/Rating/DriverRatingScreen';
 import RatingHistoryScreen from '../screens/Rating/RatingHistoryScreen';
 import RatingDetailScreen from '../screens/Rating/RatingDetailScreen';
 
+// History Screens
 import RouteHistoryScreen from '../screens/History/RouteHistoryScreen';
 import RouteDetailScreen from '../screens/History/RouteDetailScreen';
 
+// Geofence Screens
 import GeofenceSettingsScreen from '../screens/Geofence/GeofenceSettingsScreen';
 import GeofenceHistoryScreen from '../screens/Geofence/GeofenceHistoryScreen';
 
@@ -102,7 +108,34 @@ const MainTabs = () => {
 };
 
 const AppNavigator = () => {
-  const { user, loading } = useAuth();
+  const { user, loading, logout } = useAuth();
+
+  // Role verification effect
+  useEffect(() => {
+    const verifyRole = async () => {
+      if (user) {
+        // Check if user has parent role
+        if (user.role !== 'parent') {
+          Alert.alert(
+            'Access Denied',
+            'This app is for parents only. You will be logged out.',
+            [
+              {
+                text: 'OK',
+                onPress: async () => {
+                  await logout();
+                }
+              }
+            ]
+          );
+        } else {
+          console.log('✅ Parent role verified:', user.firstName);
+        }
+      }
+    };
+
+    verifyRole();
+  }, [user]);
 
   if (loading) {
     return null;

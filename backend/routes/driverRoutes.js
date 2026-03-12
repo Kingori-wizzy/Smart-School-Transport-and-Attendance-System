@@ -16,7 +16,6 @@ router.post('/auth/driver/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     
-    // Find driver user
     const driver = await User.findOne({ 
       email, 
       role: 'driver' 
@@ -26,22 +25,18 @@ router.post('/auth/driver/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Check password
     const isMatch = await bcrypt.compare(password, driver.password);
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Check if driver is active
     if (!driver.isActive) {
       return res.status(403).json({ message: 'Account is deactivated' });
     }
 
-    // Update last login
     driver.lastLogin = new Date();
     await driver.save();
 
-    // Generate token
     const token = jwt.sign(
       { id: driver._id, role: driver.role },
       process.env.JWT_SECRET,
@@ -79,6 +74,7 @@ router.get('/profile', async (req, res) => {
     const driver = await User.findById(req.user.id).select('-password');
     res.json(driver);
   } catch (error) {
+    console.error('Error fetching driver profile:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -89,21 +85,22 @@ router.get('/current-trip', async (req, res) => {
     const trip = await Trip.findOne({
       driverId: req.user.id,
       status: 'in-progress',
-    }).populate('busId', 'number route').populate('routeId', 'name');
-    
+    });
+
     if (!trip) {
       return res.json(null);
     }
 
     const formattedTrip = {
       id: trip._id,
-      routeName: trip.routeId?.name || 'Unknown Route',
-      busNumber: trip.busId?.number || 'Unknown',
+      routeName: trip.routeName || 'Unknown Route',
+      busNumber: trip.busNumber || 'BUS-001',
       status: trip.status
     };
     
     res.json(formattedTrip);
   } catch (error) {
+    console.error('Error fetching current trip:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -116,18 +113,33 @@ router.get('/trips/today', async (req, res) => {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
+    console.log('🔍 Searching for trips between:', today, 'and', tomorrow);
+
     const trips = await Trip.find({
       driverId: req.user.id,
-      date: { $gte: today, $lt: tomorrow },
-    }).sort({ startTime: 1 }).populate('busId', 'number').populate('routeId', 'name');
+      scheduledStartTime: { $gte: today, $lt: tomorrow },
+    }).sort({ scheduledStartTime: 1 });
 
-    // Format trips to match what the app expects
+    console.log(`📊 Found ${trips.length} trips for driver ${req.user.id}`);
+
     const formattedTrips = trips.map(trip => ({
       id: trip._id,
-      routeName: trip.routeId?.name || 'Unknown Route',
-      startTime: trip.startTime ? new Date(trip.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '07:00',
-      endTime: trip.endTime ? new Date(trip.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '08:30',
-      busNumber: trip.busId?.number || 'BUS-001',
+      routeName: trip.routeName || 'Unknown Route',
+      startTime: trip.scheduledStartTime 
+        ? new Date(trip.scheduledStartTime).toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            hour12: true 
+          }) 
+        : '07:00 AM',
+      endTime: trip.scheduledEndTime 
+        ? new Date(trip.scheduledEndTime).toLocaleTimeString([], { 
+            hour: '2-digit', 
+            minute: '2-digit',
+            hour12: true 
+          }) 
+        : '08:30 AM',
+      busNumber: trip.busNumber || 'BUS-001',
       status: trip.status || 'scheduled',
       studentCount: trip.students?.length || 0
     }));
@@ -144,7 +156,6 @@ router.get('/stats', async (req, res) => {
   try {
     const driverId = req.user.id;
     
-    // Get date range for this month
     const startOfMonth = new Date();
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
@@ -152,21 +163,17 @@ router.get('/stats', async (req, res) => {
     const endOfMonth = new Date(startOfMonth);
     endOfMonth.setMonth(endOfMonth.getMonth() + 1);
 
-    // Find all trips for this driver this month
     const trips = await Trip.find({
       driverId: driverId,
-      date: { $gte: startOfMonth, $lt: endOfMonth }
+      scheduledStartTime: { $gte: startOfMonth, $lt: endOfMonth }
     });
 
-    // Calculate statistics
     const totalTrips = trips.length;
     const completedTrips = trips.filter(t => t.status === 'completed').length;
-    
-    // Get total students transported
     const totalStudents = trips.reduce((sum, trip) => sum + (trip.students?.length || 0), 0);
-    
-    // Calculate total distance (you can customize this logic)
-    const totalDistance = trips.reduce((sum, trip) => sum + (trip.distance || 15), 0); // Default 15km per trip
+    const totalDistance = trips.reduce((sum, trip) => sum + (trip.distance || 15), 0);
+
+    console.log(`📊 Driver stats: ${totalTrips} total trips, ${completedTrips} completed`);
 
     res.json({
       totalTrips,
@@ -186,14 +193,25 @@ router.get('/trip/:tripId', async (req, res) => {
     const trip = await Trip.findOne({
       _id: req.params.tripId,
       driverId: req.user.id,
-    }).populate('busId', 'number').populate('routeId', 'name stops');
+    });
     
     if (!trip) {
       return res.status(404).json({ message: 'Trip not found' });
     }
     
-    res.json(trip);
+    let busInfo = null;
+    if (trip.busId) {
+      busInfo = await Bus.findById(trip.busId).select('number');
+    }
+    
+    const tripWithDetails = {
+      ...trip.toObject(),
+      busNumber: busInfo?.number || trip.busNumber || 'Unknown'
+    };
+    
+    res.json(tripWithDetails);
   } catch (error) {
+    console.error('Error fetching trip details:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -207,10 +225,9 @@ router.get('/trip/:tripId/students', async (req, res) => {
     }
 
     const students = await Student.find({ busId: trip.busId }).select(
-      'firstName lastName classLevel pickupPoint dropOffPoint'
+      'firstName lastName classLevel pickupPoint dropOffPoint latitude longitude'
     );
 
-    // Check which students have already boarded from attendance records
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -231,6 +248,8 @@ router.get('/trip/:tripId/students', async (req, res) => {
       classLevel: s.classLevel,
       pickupPoint: s.pickupPoint,
       dropOffPoint: s.dropOffPoint,
+      latitude: s.latitude || -1.2864 + (Math.random() * 0.1),
+      longitude: s.longitude || 36.8172 + (Math.random() * 0.1),
       boarded: boardedSet.has(s._id.toString()),
     }));
 
@@ -261,8 +280,9 @@ router.post('/trip/:tripId/start', async (req, res) => {
       return res.status(404).json({ message: 'Trip not found or already started' });
     }
 
-    // Update bus status
-    await Bus.findByIdAndUpdate(trip.busId, { status: 'on-trip' });
+    if (trip.busId) {
+      await Bus.findByIdAndUpdate(trip.busId, { status: 'on-trip' });
+    }
 
     res.json(trip);
   } catch (error) {
@@ -291,8 +311,9 @@ router.post('/trip/:tripId/end', async (req, res) => {
       return res.status(404).json({ message: 'Trip not found or not in progress' });
     }
 
-    // Update bus status
-    await Bus.findByIdAndUpdate(trip.busId, { status: 'active' });
+    if (trip.busId) {
+      await Bus.findByIdAndUpdate(trip.busId, { status: 'active' });
+    }
 
     res.json(trip);
   } catch (error) {
@@ -301,19 +322,17 @@ router.post('/trip/:tripId/end', async (req, res) => {
   }
 });
 
-// Board student
+// ✅ FIXED: Board student - Correct endpoint
 router.post('/trip/:tripId/board/:studentId', async (req, res) => {
   try {
     const { tripId, studentId } = req.params;
     const { method = 'qr' } = req.body;
 
-    // Verify trip belongs to driver
     const trip = await Trip.findOne({ _id: tripId, driverId: req.user.id });
     if (!trip) {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    // Record attendance
     const attendance = new Attendance({
       studentId,
       tripId,
@@ -323,6 +342,10 @@ router.post('/trip/:tripId/board/:studentId', async (req, res) => {
     });
     await attendance.save();
 
+    await Trip.findByIdAndUpdate(tripId, {
+      $addToSet: { students: studentId }
+    });
+
     res.json({ success: true, message: 'Student boarded successfully' });
   } catch (error) {
     console.error('Error boarding student:', error);
@@ -330,19 +353,48 @@ router.post('/trip/:tripId/board/:studentId', async (req, res) => {
   }
 });
 
-// Update GPS location
-router.post('/gps/update', async (req, res) => {
+// ✅ FIXED: Alight student
+router.post('/trip/:tripId/alight/:studentId', async (req, res) => {
   try {
-    const { tripId, lat, lon, speed, heading } = req.body;
+    const { tripId, studentId } = req.params;
+    const { method = 'qr' } = req.body;
 
-    // Verify trip belongs to driver
     const trip = await Trip.findOne({ _id: tripId, driverId: req.user.id });
     if (!trip) {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
+    const attendance = new Attendance({
+      studentId,
+      tripId,
+      eventType: 'alight',
+      timestamp: new Date(),
+      method,
+    });
+    await attendance.save();
+
+    res.json({ success: true, message: 'Student alighted successfully' });
+  } catch (error) {
+    console.error('Error alighting student:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Update GPS location - FIXED with fallback
+router.post('/gps/update', async (req, res) => {
+  try {
+    const { tripId, lat, lon, speed, heading } = req.body;
+
+    const trip = await Trip.findOne({ _id: tripId, driverId: req.user.id });
+    if (!trip) {
+      return res.status(404).json({ message: 'Trip not found' });
+    }
+
+    // Use trip.busId or create a default vehicle ID
+    const vehicleId = trip.busId || 'unknown-vehicle';
+    
     const gpsLog = new GPSLog({
-      vehicleId: trip.busId,
+      vehicleId: vehicleId,
       tripId,
       lat,
       lon,
@@ -351,6 +403,10 @@ router.post('/gps/update', async (req, res) => {
       timestamp: new Date(),
     });
     await gpsLog.save();
+
+    await Trip.findByIdAndUpdate(tripId, {
+      lastLocation: { lat, lon, timestamp: new Date() }
+    });
 
     res.json({ success: true });
   } catch (error) {
@@ -362,8 +418,6 @@ router.post('/gps/update', async (req, res) => {
 // Get route coordinates
 router.get('/route/:routeId/coordinates', async (req, res) => {
   try {
-    // This would come from your route planning system
-    // You might have a Route model to fetch actual coordinates
     const mockCoordinates = [
       { latitude: -1.2864, longitude: 36.8172 },
       { latitude: -1.2964, longitude: 36.8272 },
@@ -383,13 +437,11 @@ router.post('/report', async (req, res) => {
   try {
     const { tripId, type, description, photos } = req.body;
     
-    // Verify trip belongs to driver
     const trip = await Trip.findOne({ _id: tripId, driverId: req.user.id });
     if (!trip) {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    // Save incident report
     const report = new IncidentReport({
       tripId,
       type,
@@ -412,20 +464,17 @@ router.post('/emergency', async (req, res) => {
   try {
     const { tripId, location } = req.body;
 
-    // Verify trip belongs to driver
     const trip = await Trip.findOne({ _id: tripId, driverId: req.user.id });
     if (!trip) {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    // Send notifications to school admins
     const admins = await User.find({ role: 'admin' });
     
     console.log(`🚨 EMERGENCY from driver ${req.user.id} on trip ${tripId}`);
     console.log(`📍 Location:`, location);
     console.log(`👥 Notifying ${admins.length} admins`);
 
-    // Create emergency incident report
     const report = new IncidentReport({
       tripId,
       type: 'emergency',

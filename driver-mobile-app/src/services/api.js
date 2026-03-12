@@ -63,7 +63,6 @@ const api = {
       try {
         const data = JSON.parse(responseText);
         console.log(`✅ Response parsed successfully for ${endpoint}`);
-        console.log(`📦 Response data structure:`, Object.keys(data));
         return data;
       } catch (parseError) {
         console.error('❌ JSON Parse Error:', parseError.message);
@@ -80,7 +79,7 @@ const api = {
     }
   },
 
-  // Auth endpoints with comprehensive debugging
+  // Auth endpoints with comprehensive debugging and role verification
   auth: {
     login: async (email, password) => {
       console.log('🔐 LOGIN FUNCTION CALLED - using endpoint: /auth/login');
@@ -93,40 +92,36 @@ const api = {
         });
         
         console.log('✅ Login response received:');
-        console.log('📦 Response type:', typeof response);
-        console.log('🔑 Response keys:', Object.keys(response));
-        console.log('📄 Full response:', JSON.stringify(response, null, 2));
+        console.log('📦 Response keys:', Object.keys(response));
         
-        // Check for token in various possible locations
-        const token = response.token || 
-                     response.data?.token || 
-                     response.accessToken || 
-                     response.access_token ||
-                     response.Token;
-        
-        // Check for user data in various possible locations
-        const user = response.user || 
-                    response.data?.user || 
-                    response.profile ||
-                    response.userData;
+        // Check for token in response
+        const token = response.token || response.data?.token;
+        const user = response.user || response.data?.user;
         
         console.log('🔍 Extracted token:', token ? '✅ Found' : '❌ Not found');
         console.log('🔍 Extracted user:', user ? '✅ Found' : '❌ Not found');
         
         if (token) {
-          console.log('✅ Token found in response, storing...');
-          console.log('📝 Token value (first 20 chars):', token.substring(0, 20) + '...');
+          // Verify user role is driver
+          if (user && user.role !== 'driver') {
+            console.log('❌ User role is not driver. Actual role:', user.role);
+            return { 
+              success: false, 
+              message: 'Access denied. This app is for drivers only.' 
+            };
+          }
           
+          console.log('✅ Token found, storing...');
           await AsyncStorage.setItem('@auth_token', token);
-          console.log('✅ Token stored successfully');
           
           if (user) {
             console.log('✅ User data found, storing...');
             await AsyncStorage.setItem('@user', JSON.stringify(user));
-            console.log('✅ User data stored successfully');
-          } else {
-            console.log('⚠️ No user data in response, storing token only');
           }
+          
+          // Verify token was stored
+          const storedToken = await AsyncStorage.getItem('@auth_token');
+          console.log('🔑 Verified stored token exists:', !!storedToken);
           
           return { 
             success: true, 
@@ -135,24 +130,10 @@ const api = {
             message: response.message || 'Login successful'
           };
         } else {
-          console.log('❌ No token found in response!');
-          console.log('📄 Response structure:', JSON.stringify(response, null, 2));
-          
-          // Check if response has any auth-related fields
-          const possibleAuthFields = Object.keys(response).filter(key => 
-            key.toLowerCase().includes('token') || 
-            key.toLowerCase().includes('auth') || 
-            key.toLowerCase().includes('key')
-          );
-          
-          if (possibleAuthFields.length > 0) {
-            console.log('🔍 Possible auth fields found:', possibleAuthFields);
-          }
-          
+          console.log('❌ No token in response!');
           return { 
             success: false, 
-            message: 'Invalid server response: no token received',
-            response 
+            message: 'Invalid server response: no token received' 
           };
         }
       } catch (error) {
@@ -169,6 +150,32 @@ const api = {
     
     setPin: (pin) => 
       api.request('/auth/driver/set-pin', { method: 'POST', body: JSON.stringify({ pin }) }),
+    
+    // Helper to check if current user is authenticated and has correct role
+    checkAuth: async () => {
+      const token = await AsyncStorage.getItem('@auth_token');
+      const userStr = await AsyncStorage.getItem('@user');
+      
+      if (!token || !userStr) {
+        return { authenticated: false };
+      }
+      
+      try {
+        const user = JSON.parse(userStr);
+        return {
+          authenticated: true,
+          user,
+          isDriver: user.role === 'driver'
+        };
+      } catch (error) {
+        return { authenticated: false };
+      }
+    },
+    
+    logout: async () => {
+      await AsyncStorage.multiRemove(['@auth_token', '@user']);
+      console.log('✅ User logged out');
+    },
   },
 
   // Driver endpoints
@@ -264,7 +271,7 @@ const api = {
       }),
   },
 
-  // HTTP method shortcuts - FIXED to return data in expected format
+  // HTTP method shortcuts
   get: async (endpoint) => {
     const result = await api.request(endpoint, { method: 'GET' });
     return { data: result };
@@ -283,6 +290,17 @@ const api = {
   delete: async (endpoint) => {
     const result = await api.request(endpoint, { method: 'DELETE' });
     return { data: result };
+  },
+  
+  // Helper to get auth status (useful for debugging)
+  getAuthStatus: async () => {
+    const token = await AsyncStorage.getItem('@auth_token');
+    const userStr = await AsyncStorage.getItem('@user');
+    return {
+      hasToken: !!token,
+      hasUser: !!userStr,
+      user: userStr ? JSON.parse(userStr) : null
+    };
   },
 };
 

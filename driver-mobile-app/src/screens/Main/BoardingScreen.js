@@ -83,7 +83,6 @@ export default function BoardingScreen({ route, navigation }) {
       await AsyncStorage.setItem('@offline_boarding_queue', JSON.stringify(updatedQueue));
       setOfflineQueue(updatedQueue);
       
-      // Show offline indicator
       Alert.alert(
         '📱 Offline Mode',
         `Student scan saved locally. ${updatedQueue.length} scan(s) waiting to sync.`,
@@ -111,27 +110,25 @@ export default function BoardingScreen({ route, navigation }) {
         }
 
         try {
-          await api.post(`/driver/student/${item.studentId}/board`, {
-            tripId: item.tripId,
-            timestamp: item.timestamp,
-            method: item.method,
-            syncedFromOffline: true
-          });
+          // ✅ FIXED: Use correct endpoint
+          await api.trip.boardStudent(
+            item.tripId,
+            item.studentId,
+            'qr'
+          );
           
           item.synced = true;
           syncedItems.push(item);
         } catch (error) {
           item.retryCount = (item.retryCount || 0) + 1;
           if (item.retryCount < 3) {
-            failedItems.push(item); // Will retry later
+            failedItems.push(item);
           } else {
-            // Max retries reached, keep for manual review
             syncedItems.push({ ...item, failed: true });
           }
         }
       }
 
-      // Update queue - keep failed items for retry, remove synced ones
       const newQueue = [
         ...failedItems,
         ...queue.filter(item => !item.synced && item.retryCount < 3)
@@ -155,7 +152,7 @@ export default function BoardingScreen({ route, navigation }) {
   };
 
   const handleBarCodeScanned = async ({ type, data }) => {
-    if (scanned || !scanning || isProcessing) return;
+    if (scanned || !scanning || isProcessing || !trip?.id) return;
 
     setScanned(true);
     Vibration.vibrate();
@@ -166,21 +163,17 @@ export default function BoardingScreen({ route, navigation }) {
       let studentId = data;
       let scanData = { raw: data };
       
-      // Try to parse JSON if it's a complex QR
       try {
         const parsed = JSON.parse(data);
         studentId = parsed.studentId || parsed.id || data;
         scanData = parsed;
       } catch (e) {
-        // Not JSON, remove prefix if exists
         studentId = data.replace('STU-', '').replace('STD-', '');
       }
 
       if (!isOnline) {
-        // Offline mode - save to queue
         await saveToOfflineQueue(studentId, scanData);
         
-        // Show temporary success message
         setStudent({
           id: studentId,
           firstName: 'Offline Scan',
@@ -188,7 +181,6 @@ export default function BoardingScreen({ route, navigation }) {
           classLevel: 'Saved locally'
         });
         
-        // Reset scanner after delay
         setTimeout(() => {
           setScanned(false);
           setStudent(null);
@@ -197,77 +189,51 @@ export default function BoardingScreen({ route, navigation }) {
         return;
       }
 
-      // Online mode - verify with server
       setIsProcessing(true);
-      const response = await api.get(`/driver/student/${studentId}`);
-      setStudent(response.data);
-
-      // Show confirmation dialog
-      Alert.alert(
-        'Student Found',
-        `${response.data.firstName} ${response.data.lastName}\nClass: ${response.data.classLevel}`,
-        [
-          {
-            text: 'Cancel',
-            onPress: () => {
-              setScanned(false);
-              setStudent(null);
-              setIsProcessing(false);
-            },
-            style: 'cancel',
-          },
-          {
-            text: 'Confirm Boarding',
-            onPress: async () => {
-              await confirmBoarding(response.data.id);
-              setIsProcessing(false);
-            },
-          },
-        ]
+      
+      // ✅ FIXED: Use the correct boardStudent method
+      const result = await api.trip.boardStudent(
+        trip.id,
+        studentId,
+        'qr'
       );
+      
+      if (result.success || result.data?.success) {
+        Alert.alert(
+          '✅ Success',
+          'Student boarded successfully',
+          [
+            { 
+              text: 'OK', 
+              onPress: () => {
+                setScanned(false);
+                setStudent(null);
+                setIsProcessing(false);
+              }
+            }
+          ]
+        );
+      } else {
+        throw new Error(result.message || 'Failed to board student');
+      }
+      
     } catch (error) {
+      console.error('Error boarding student:', error);
+      
       if (!isOnline) {
-        // Network error - save offline
-        await saveToOfflineQueue(data, { raw: data });
+        const studentId = data.replace('STU-', '').replace('STD-', '');
+        await saveToOfflineQueue(studentId, { raw: data });
         Alert.alert(
           '📱 Offline Mode',
           'Network unavailable. Scan saved for later sync.',
           [{ text: 'OK', onPress: () => setScanned(false) }]
         );
       } else {
-        Alert.alert('Error', 'Student not found or invalid QR code');
+        Alert.alert('❌ Error', error.message || 'Failed to record boarding');
         setScanned(false);
       }
+    } finally {
       setIsProcessing(false);
-    }
-  };
-
-  const confirmBoarding = async (studentId) => {
-    try {
-      await api.post(`/driver/student/${studentId}/board`, {
-        tripId: trip.id,
-        timestamp: new Date().toISOString(),
-        method: 'qr',
-      });
-
-      Alert.alert('✅ Success', 'Student boarded successfully', [
-        { 
-          text: 'OK', 
-          onPress: () => {
-            setScanned(false);
-            setStudent(null);
-          }
-        }
-      ]);
-      
-      // Optional: Go back to trip screen after short delay
-      setTimeout(() => {
-        navigation.goBack();
-      }, 1500);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to record boarding');
-      setScanned(false);
-      setStudent(null);
     }
   };
 
@@ -278,28 +244,25 @@ export default function BoardingScreen({ route, navigation }) {
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Find Student',
+          text: 'Board Student',
           onPress: async (studentId) => {
-            if (!studentId) return;
+            if (!studentId || !trip?.id) return;
             
             try {
               setIsProcessing(true);
-              const response = await api.get(`/driver/student/${studentId}`);
-              setStudent(response.data);
-              
-              Alert.alert(
-                'Confirm Boarding',
-                `${response.data.firstName} ${response.data.lastName}`,
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'Confirm',
-                    onPress: () => confirmBoarding(response.data.id)
-                  }
-                ]
+              const result = await api.trip.boardStudent(
+                trip.id,
+                studentId,
+                'manual'
               );
+              
+              if (result.success || result.data?.success) {
+                Alert.alert('✅ Success', 'Student boarded successfully');
+              } else {
+                Alert.alert('Error', result.message || 'Failed to board student');
+              }
             } catch (error) {
-              Alert.alert('Error', 'Student not found');
+              Alert.alert('Error', 'Student not found or invalid ID');
             } finally {
               setIsProcessing(false);
             }
@@ -312,11 +275,6 @@ export default function BoardingScreen({ route, navigation }) {
 
   const toggleTorch = () => {
     setTorchOn(!torchOn);
-  };
-
-  const navigateToQRScanScreen = () => {
-    // Navigate to the new QRScanScreen we created
-    navigation.navigate('QRScan', { tripId: trip.id });
   };
 
   if (hasPermission === null) {
@@ -352,7 +310,6 @@ export default function BoardingScreen({ route, navigation }) {
         torchMode={torchOn ? 'on' : 'off'}
       />
 
-      {/* Network Status Bar */}
       {!isOnline && (
         <View style={styles.offlineBar}>
           <Ionicons name="cloud-offline" size={20} color="#fff" />
@@ -360,7 +317,6 @@ export default function BoardingScreen({ route, navigation }) {
         </View>
       )}
 
-      {/* Scanner Overlay */}
       <View style={styles.overlay}>
         <View style={styles.scanArea}>
           <View style={styles.cornerTL} />
@@ -370,7 +326,6 @@ export default function BoardingScreen({ route, navigation }) {
         </View>
       </View>
 
-      {/* Header */}
       <LinearGradient colors={['rgba(0,0,0,0.7)', 'transparent']} style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
@@ -405,12 +360,10 @@ export default function BoardingScreen({ route, navigation }) {
         </View>
       </LinearGradient>
 
-      {/* Instructions */}
       <View style={styles.instructions}>
         <Text style={styles.instructionText}>Position QR code within the frame</Text>
       </View>
 
-      {/* Action Buttons */}
       <View style={styles.actionButtons}>
         <TouchableOpacity 
           style={styles.manualButton} 
@@ -425,23 +378,8 @@ export default function BoardingScreen({ route, navigation }) {
             <Text style={styles.buttonText}>Enter ID Manually</Text>
           </LinearGradient>
         </TouchableOpacity>
-
-        <TouchableOpacity 
-          style={styles.enhancedScanButton} 
-          onPress={navigateToQRScanScreen}
-          disabled={isProcessing}
-        >
-          <LinearGradient 
-            colors={['#4CAF50', '#45a049']} 
-            style={styles.buttonGradient}
-          >
-            <Ionicons name="qr-code" size={20} color="#fff" />
-            <Text style={styles.buttonText}>Enhanced Scanner</Text>
-          </LinearGradient>
-        </TouchableOpacity>
       </View>
 
-      {/* Processing Indicator */}
       {isProcessing && (
         <View style={styles.processingOverlay}>
           <ActivityIndicator size="large" color="#fff" />
@@ -449,7 +387,6 @@ export default function BoardingScreen({ route, navigation }) {
         </View>
       )}
 
-      {/* Recent Scan Result */}
       {student && (
         <View style={styles.resultCard}>
           <Ionicons 
@@ -657,10 +594,6 @@ const styles = StyleSheet.create({
   manualButton: { 
     borderRadius: 10, 
     overflow: 'hidden' 
-  },
-  enhancedScanButton: {
-    borderRadius: 10,
-    overflow: 'hidden'
   },
   buttonGradient: { 
     paddingVertical: 15, 
