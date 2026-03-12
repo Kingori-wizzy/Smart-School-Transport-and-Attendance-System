@@ -21,6 +21,7 @@ import { useTheme } from '../../context/ThemeContext';
 import api from '../../services/api';
 import notificationService from '../../services/notifications';
 import cache from '../../services/cache';
+import { getImageUrl } from '../../utils/imageUtils';
 
 const MenuItem = ({ icon, title, subtitle, onPress, value, type = 'arrow', colors }) => (
   <TouchableOpacity style={[styles.menuItem, { borderBottomColor: colors.border }]} onPress={onPress}>
@@ -506,10 +507,14 @@ export default function ProfileScreen({ navigation }) {
       </LinearGradient>
 
       <ScrollView showsVerticalScrollIndicator={false}>
+        {/* Profile Card with Fixed Image Display */}
         <View style={[styles.profileCard, { backgroundColor: colors.card }]}>
           <TouchableOpacity onPress={showImageOptions} style={styles.imageContainer}>
             {profileImage ? (
-              <Image source={{ uri: profileImage }} style={styles.profileImage} />
+              <Image 
+                source={{ uri: getImageUrl(profileImage) }} 
+                style={styles.profileImage} 
+              />
             ) : (
               <View style={[styles.profileImagePlaceholder, { backgroundColor: colors.primary }]}>
                 <Text style={styles.placeholderText}>
@@ -775,25 +780,43 @@ export default function ProfileScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { paddingTop: 50, paddingBottom: 20, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  header: { 
+    paddingTop: 45, 
+    paddingBottom: 15, 
+    paddingHorizontal: 20, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between' 
+  },
   backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
   backIcon: { fontSize: 24, color: '#fff' },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  profileCard: { margin: 20, marginTop: -30, padding: 20, borderRadius: 15, alignItems: 'center', elevation: 4 },
-  imageContainer: { position: 'relative', marginTop: -40, marginBottom: 10 },
-  profileImage: { width: 80, height: 80, borderRadius: 40, borderWidth: 3, borderColor: '#fff' },
-  profileImagePlaceholder: { width: 80, height: 80, borderRadius: 40, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#fff' },
-  placeholderText: { fontSize: 32, fontWeight: 'bold', color: '#fff' },
-  editBadge: { position: 'absolute', bottom: 0, right: 0, width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
-  editIcon: { fontSize: 14 },
-  userName: { fontSize: 20, fontWeight: 'bold', marginBottom: 4 },
+  profileCard: { 
+    margin: 20, 
+    marginTop: 10,
+    padding: 20, 
+    borderRadius: 15, 
+    alignItems: 'center', 
+    elevation: 4 
+  },
+  imageContainer: { 
+    position: 'relative', 
+    marginTop: 0,
+    marginBottom: 10 
+  },
+  profileImage: { width: 100, height: 100, borderRadius: 50, borderWidth: 3, borderColor: '#fff' },
+  profileImagePlaceholder: { width: 100, height: 100, borderRadius: 50, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#fff' },
+  placeholderText: { fontSize: 40, fontWeight: 'bold', color: '#fff' },
+  editBadge: { position: 'absolute', bottom: 0, right: 0, width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
+  editIcon: { fontSize: 16 },
+  userName: { fontSize: 22, fontWeight: 'bold', marginBottom: 4 },
   userEmail: { fontSize: 14, marginBottom: 2 },
   userPhone: { fontSize: 14, marginBottom: 12 },
-  statsRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingTop: 10, borderTopWidth: 1 },
+  statsRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingTop: 15, borderTopWidth: 1, width: '100%' },
   statItem: { alignItems: 'center', paddingHorizontal: 20 },
-  statNumber: { fontSize: 16, fontWeight: 'bold' },
-  statLabel: { fontSize: 11, marginTop: 2 },
-  statDivider: { width: 1, height: 20 },
+  statNumber: { fontSize: 20, fontWeight: 'bold' },
+  statLabel: { fontSize: 12, marginTop: 2 },
+  statDivider: { width: 1, height: 30 },
   section: { marginHorizontal: 15, marginBottom: 15, paddingVertical: 10, borderRadius: 10, elevation: 2 },
   sectionTitle: { fontSize: 16, fontWeight: '600', paddingHorizontal: 15, paddingVertical: 10, borderBottomWidth: 1 },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 15, borderBottomWidth: 1 },

@@ -16,6 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import api from '../../services/api';
+import { getImageUrl } from '../../utils/imageUtils';
 
 const MenuItem = ({ icon, title, subtitle, onPress, value, type = 'arrow', colors }) => (
   <TouchableOpacity style={[styles.menuItem, { borderBottomColor: colors.border }]} onPress={onPress}>
@@ -30,6 +31,7 @@ const MenuItem = ({ icon, title, subtitle, onPress, value, type = 'arrow', color
         value={value}
         onValueChange={onPress}
         trackColor={{ false: colors.border, true: colors.primary }}
+        thumbColor={value ? '#fff' : '#f4f3f4'}
       />
     )}
   </TouchableOpacity>
@@ -142,10 +144,12 @@ export default function ProfileScreen({ navigation }) {
         name: `driver_${driver?.id}_${Date.now()}.jpg`,
       });
       
+      // Use the correct API endpoint
       const response = await fetch(`${api.baseURL}/user/profile/photo`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${await AsyncStorage.getItem('@auth_token')}`,
+          'Content-Type': 'multipart/form-data',
         },
         body: formData,
       });
@@ -155,6 +159,9 @@ export default function ProfileScreen({ navigation }) {
         setProfileImage(data.photoUrl);
         await AsyncStorage.setItem(`@driver_profile_image_${driver?.id}`, data.photoUrl);
         Alert.alert('Success', 'Profile picture updated');
+      } else {
+        const errorData = await response.json();
+        Alert.alert('Error', errorData.message || 'Failed to upload photo');
       }
     } catch (error) {
       console.error('Error uploading photo:', error);
@@ -205,10 +212,14 @@ export default function ProfileScreen({ navigation }) {
       </LinearGradient>
 
       <ScrollView showsVerticalScrollIndicator={false}>
+        {/* Profile Card with Fixed Image Display */}
         <View style={[styles.profileCard, { backgroundColor: colors.card }]}>
           <TouchableOpacity onPress={showImageOptions} style={styles.imageContainer}>
             {profileImage ? (
-              <Image source={{ uri: profileImage }} style={styles.profileImage} />
+              <Image 
+                source={{ uri: getImageUrl(profileImage) }} 
+                style={styles.profileImage} 
+              />
             ) : (
               <View style={[styles.profileImagePlaceholder, { backgroundColor: colors.primary }]}>
                 <Text style={styles.placeholderText}>
@@ -320,8 +331,8 @@ export default function ProfileScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   header: { 
-    paddingTop: 40, // Reduced from 50
-    paddingBottom: 20, 
+    paddingTop: 45, 
+    paddingBottom: 15, 
     paddingHorizontal: 20, 
     flexDirection: 'row', 
     alignItems: 'center', 
@@ -330,21 +341,26 @@ const styles = StyleSheet.create({
   backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
   backIcon: { fontSize: 24, color: '#fff' },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
+  // Fixed margins for profile card
   profileCard: { 
     margin: 20, 
-    marginTop: -20, // Reduced from -30
+    marginTop: 10, // Changed from -20 to 10
     padding: 20, 
     borderRadius: 15, 
     alignItems: 'center', 
     elevation: 4 
   },
-  imageContainer: { position: 'relative', marginBottom: 10 },
-  profileImage: { width: 100, height: 100, borderRadius: 50, borderWidth: 3, borderColor: '#fff' },
-  profileImagePlaceholder: { width: 100, height: 100, borderRadius: 50, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#fff' },
-  placeholderText: { fontSize: 40, fontWeight: 'bold', color: '#fff' },
-  editBadge: { position: 'absolute', bottom: 0, right: 0, width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
-  editIcon: { fontSize: 16 },
-  driverName: { fontSize: 22, fontWeight: 'bold', marginBottom: 4 },
+  imageContainer: { 
+    position: 'relative', 
+    marginTop: 0, // Removed negative margin
+    marginBottom: 15 
+  },
+  profileImage: { width: 120, height: 120, borderRadius: 60, borderWidth: 3, borderColor: '#fff' },
+  profileImagePlaceholder: { width: 120, height: 120, borderRadius: 60, justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#fff' },
+  placeholderText: { fontSize: 48, fontWeight: 'bold', color: '#fff' },
+  editBadge: { position: 'absolute', bottom: 0, right: 0, width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#fff' },
+  editIcon: { fontSize: 18 },
+  driverName: { fontSize: 24, fontWeight: 'bold', marginBottom: 4 },
   driverEmail: { fontSize: 14, marginBottom: 2 },
   driverPhone: { fontSize: 14, marginBottom: 12 },
   statsRow: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', paddingTop: 15, borderTopWidth: 1, width: '100%' },

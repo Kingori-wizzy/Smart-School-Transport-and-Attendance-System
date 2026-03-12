@@ -4,12 +4,12 @@ const incidentReportSchema = new mongoose.Schema({
   tripId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Trip',
-    required: true,
+    required: false, // Changed to false to allow parent alerts without trip
     index: true
   },
   type: {
     type: String,
-    enum: ['accident', 'mechanical', 'student', 'traffic', 'weather', 'emergency', 'other'],
+    enum: ['accident', 'mechanical', 'student', 'traffic', 'weather', 'emergency', 'other', 'parent_alert'], // Added 'parent_alert'
     required: true
   },
   description: {
@@ -54,7 +54,18 @@ const incidentReportSchema = new mongoose.Schema({
       type: Date,
       default: Date.now
     }
-  }]
+  }],
+  // New fields for parent alerts
+  parentInfo: {
+    childId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Student'
+    },
+    alertType: {
+      type: String,
+      enum: ['late', 'emergency', 'route', 'other']
+    }
+  }
 }, {
   timestamps: true
 });
@@ -62,5 +73,6 @@ const incidentReportSchema = new mongoose.Schema({
 // Index for efficient querying
 incidentReportSchema.index({ tripId: 1, createdAt: -1 });
 incidentReportSchema.index({ status: 1, severity: 1 });
+incidentReportSchema.index({ type: 1, createdAt: -1 }); // Added for parent alerts
 
 module.exports = mongoose.model('IncidentReport', incidentReportSchema);

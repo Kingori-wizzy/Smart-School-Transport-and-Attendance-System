@@ -443,9 +443,9 @@ const styles = StyleSheet.create({
   loadingText: { marginTop: 10, fontSize: 16 },
   // ✅ FIXED: Reduced header padding
   header: { 
-    paddingTop: 40, 
+    paddingTop: 35, 
     paddingBottom: 15, 
-    paddingHorizontal: 20 
+    paddingHorizontal: 10 
   },
   headerTop: { 
     flexDirection: 'row', 
