@@ -13,14 +13,27 @@ function authMiddleware(req, res, next) {
   }
 }
 
-// ✅ Role checking middleware (e.g. Admin only)
+// Generic Role checking middleware
 function authorizeRoles(...allowedRoles) {
   return (req, res, next) => {
-    if (!allowedRoles.includes(req.user.role)) {
+    if (!req.user || !allowedRoles.includes(req.user.role)) {
       return res.status(403).json({ message: 'Access denied. Insufficient permissions.' });
     }
     next();
   };
 }
 
-module.exports = { authMiddleware, authorizeRoles };
+// ✅ Define the specific helpers your routes expect
+const isAdmin = authorizeRoles('admin');
+const isParent = authorizeRoles('parent');
+const isDriver = authorizeRoles('driver');
+const isAdminOrDriver = authorizeRoles('admin', 'driver');
+
+module.exports = { 
+  authMiddleware, 
+  authorizeRoles, 
+  isAdmin, 
+  isParent, 
+  isDriver, 
+  isAdminOrDriver 
+};

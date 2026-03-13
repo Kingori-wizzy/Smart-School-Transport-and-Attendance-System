@@ -361,21 +361,45 @@ export default function DashboardScreen({ navigation }) {
       >
         <View style={styles.content}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Your Children</Text>
+          
           {childrenList.length === 0 ? (
             <View style={[styles.emptyState, { backgroundColor: colors.card }]}>
               <Text style={[styles.emptyIcon, { color: colors.textSecondary }]}>👶</Text>
               <Text style={[styles.emptyTitle, { color: colors.text }]}>No Children Added</Text>
               <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                Add your children to start tracking their school transport
+                Link your child using the admission number provided by your school
               </Text>
+              
+              {/* TWO OPTIONS FOR ADDING CHILDREN */}
+              <TouchableOpacity
+                style={styles.linkButton}
+                onPress={() => navigation.navigate('LinkChild')}
+              >
+                <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.linkButtonGradient}>
+                  <Text style={styles.linkButtonIcon}>🔗</Text>
+                  <Text style={styles.linkButtonText}>Link with Admission Number</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+
+              <View style={styles.orDivider}>
+                <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
+                <Text style={[styles.orText, { color: colors.textSecondary }]}>OR</Text>
+                <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
+              </View>
+
               <TouchableOpacity
                 style={styles.addButton}
                 onPress={() => navigation.navigate('AddChild')}
               >
-                <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.addButtonGradient}>
-                  <Text style={styles.addButtonText}>+ Add Child</Text>
+                <LinearGradient colors={[colors.success, '#45a049']} style={styles.addButtonGradient}>
+                  <Text style={styles.addButtonIcon}>+</Text>
+                  <Text style={styles.addButtonText}>Manual Registration</Text>
                 </LinearGradient>
               </TouchableOpacity>
+
+              <Text style={[styles.noteText, { color: colors.textSecondary }]}>
+                Note: Manual registration requires school approval
+              </Text>
             </View>
           ) : (
             <>
@@ -384,13 +408,23 @@ export default function DashboardScreen({ navigation }) {
                 return <ChildCard key={childId} child={child} />;
               })}
               
-              <TouchableOpacity
-                style={[styles.addChildButton, { borderColor: colors.primary }]}
-                onPress={() => navigation.navigate('AddChild')}
-              >
-                <Text style={[styles.addChildIcon, { color: colors.primary }]}>+</Text>
-                <Text style={[styles.addChildText, { color: colors.primary }]}>Add Another Child</Text>
-              </TouchableOpacity>
+              <View style={styles.addButtonsContainer}>
+                <TouchableOpacity
+                  style={[styles.addChildButton, { borderColor: colors.primary }]}
+                  onPress={() => navigation.navigate('LinkChild')}
+                >
+                  <Text style={[styles.addChildIcon, { color: colors.primary }]}>🔗</Text>
+                  <Text style={[styles.addChildText, { color: colors.primary }]}>Link Another Child</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.addChildButton, { borderColor: colors.success, marginTop: 8 }]}
+                  onPress={() => navigation.navigate('AddChild')}
+                >
+                  <Text style={[styles.addChildIcon, { color: colors.success }]}>+</Text>
+                  <Text style={[styles.addChildText, { color: colors.success }]}>Add Manually</Text>
+                </TouchableOpacity>
+              </View>
             </>
           )}
 
@@ -436,12 +470,11 @@ export default function DashboardScreen({ navigation }) {
   );
 }
 
-// ✅ FIXED: Updated styles with reduced header height
+// ✅ UPDATED STYLES with new button styles
 const styles = StyleSheet.create({
   container: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 10, fontSize: 16 },
-  // ✅ FIXED: Reduced header padding
   header: { 
     paddingTop: 35, 
     paddingBottom: 15, 
@@ -523,15 +556,46 @@ const styles = StyleSheet.create({
   emptyState: { 
     alignItems: 'center', 
     justifyContent: 'center', 
-    paddingVertical: 40, 
-    borderRadius: 15 
+    paddingVertical: 30, 
+    borderRadius: 15,
+    paddingHorizontal: 20
   },
   emptyIcon: { fontSize: 50, marginBottom: 15 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 8 },
-  emptyText: { fontSize: 14, textAlign: 'center', marginBottom: 20, paddingHorizontal: 30 },
-  addButton: { width: '80%', height: 45, borderRadius: 10, overflow: 'hidden' },
-  addButtonGradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  emptyText: { fontSize: 14, textAlign: 'center', marginBottom: 20 },
+  linkButton: { width: '100%', height: 50, borderRadius: 10, overflow: 'hidden', marginBottom: 10 },
+  linkButtonGradient: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
+  linkButtonIcon: { fontSize: 18, marginRight: 8, color: '#fff' },
+  linkButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  addButton: { width: '100%', height: 50, borderRadius: 10, overflow: 'hidden' },
+  addButtonGradient: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
+  addButtonIcon: { fontSize: 20, marginRight: 8, color: '#fff' },
   addButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  orDivider: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    marginVertical: 15,
+    width: '100%'
+  },
+  dividerLine: { 
+    flex: 1, 
+    height: 1 
+  },
+  orText: { 
+    marginHorizontal: 10, 
+    fontSize: 12,
+    fontWeight: '500'
+  },
+  noteText: { 
+    fontSize: 11, 
+    marginTop: 15,
+    fontStyle: 'italic',
+    textAlign: 'center'
+  },
+  addButtonsContainer: {
+    marginTop: 5,
+    marginBottom: 15
+  },
   addChildButton: { 
     flexDirection: 'row', 
     alignItems: 'center', 
@@ -540,10 +604,9 @@ const styles = StyleSheet.create({
     padding: 15, 
     borderRadius: 10, 
     borderWidth: 1, 
-    borderStyle: 'dashed', 
-    marginBottom: 20 
+    borderStyle: 'dashed'
   },
-  addChildIcon: { fontSize: 20, marginRight: 8, fontWeight: 'bold' },
+  addChildIcon: { fontSize: 18, marginRight: 8, fontWeight: 'bold' },
   addChildText: { fontSize: 14, fontWeight: '500' },
   alertsSection: { marginTop: 10, marginBottom: 20 },
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },

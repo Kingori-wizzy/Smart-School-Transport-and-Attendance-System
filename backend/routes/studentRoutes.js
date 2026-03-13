@@ -1,68 +1,375 @@
 const express = require('express');
 const router = express.Router();
 const Student = require('../models/Student');
+const User = require('../models/User');
 
-// Get all students
-router.get('/', async (req, res) => {
+// ✅ FIXED IMPORTS: Pulling everything from a single object as defined in your authMiddleware.js
+const { 
+  authMiddleware, 
+  isAdmin, 
+  isParent, 
+  isAdminOrDriver 
+} = require('../middleware/authMiddleware');
+
+// Apply auth middleware to all routes
+router.use(authMiddleware);
+
+// ==================== PUBLIC/VERIFICATION ENDPOINTS ====================
+
+/**
+ * @route   POST /api/students/verify-admission
+ * @desc    Verify admission number and link student to parent
+ * @access  Private (Parents only)
+ */
+router.post('/verify-admission', isParent, async (req, res) => {
   try {
-    const students = await Student.find();
-    res.json(students);
+    const { admissionNumber, studentName } = req.body;
+    const parentId = req.user.id;
+
+    if (!admissionNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Admission number is required'
+      });
+    }
+
+    console.log(`🔍 Verifying admission: ${admissionNumber} for parent: ${parentId}`);
+
+    const student = await Student.findOne({ 
+      admissionNumber: admissionNumber.toString().trim().toUpperCase()
+    }).populate('transportDetails.busId', 'busNumber registrationNumber');
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invalid admission number. Please check and try again.'
+      });
+    }
+
+    if (!student.usesTransport) {
+      return res.status(400).json({
+        success: false,
+        message: 'This student is not registered for school transport. Please contact the school administration.'
+      });
+    }
+
+    if (student.parentId) {
+      if (student.parentId.toString() === parentId) {
+        return res.status(200).json({
+          success: true,
+          message: 'Student already linked to your account',
+          data: {
+            studentId: student._id,
+            name: `${student.firstName} ${student.lastName}`.trim(),
+            firstName: student.firstName,
+            lastName: student.lastName,
+            class: student.classLevel,
+            stream: student.stream,
+            admissionNumber: student.admissionNumber,
+            alreadyLinked: true
+          }
+        });
+      }
+
+      return res.status(409).json({
+        success: false,
+        message: 'This student is already linked to another parent. Please contact the school administration.'
+      });
+    }
+
+    if (studentName) {
+      const fullName = `${student.firstName} ${student.lastName}`.trim().toLowerCase();
+      const providedName = studentName.trim().toLowerCase();
+      
+      if (fullName !== providedName && !fullName.includes(providedName) && !providedName.includes(fullName)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Name does not match admission number. Please check both and try again.'
+        });
+      }
+    }
+
+    if (!student.qrCode) {
+      const timestamp = Date.now();
+      student.qrCode = `STU-${student.admissionNumber}-${timestamp}`;
+    }
+
+    student.parentId = parentId;
+    await student.save();
+
+    console.log(`✅ Student ${student.admissionNumber} linked to parent ${parentId}`);
+
+    res.json({
+      success: true,
+      message: 'Student successfully linked to your account',
+      data: {
+        studentId: student._id,
+        name: `${student.firstName} ${student.lastName}`.trim(),
+        firstName: student.firstName,
+        lastName: student.lastName,
+        class: student.classLevel,
+        stream: student.stream,
+        admissionNumber: student.admissionNumber,
+        pickupPoint: student.transportDetails?.pickupPoint?.name || student.pickupPoint,
+        dropoffPoint: student.transportDetails?.dropoffPoint?.name || student.dropOffPoint,
+        busAssigned: !!(student.transportDetails?.busId || student.busId),
+        busNumber: student.transportDetails?.busId?.busNumber || student.busNumber,
+        qrCode: student.qrCode,
+        alreadyLinked: false
+      }
+    });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('❌ Error verifying admission:', error);
+    res.status(500).json({
+      success: false,
+      message: 'An error occurred while verifying admission number'
+    });
   }
 });
 
-// Get single student
+// ==================== BASIC CRUD OPERATIONS ====================
+
+router.get('/', isAdmin, async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 50, 
+      class: className, 
+      stream, 
+      usesTransport,
+      transportStatus,
+      search 
+    } = req.query;
+
+    const query = {};
+    if (className) query.classLevel = className;
+    if (stream) query.stream = stream;
+    if (usesTransport !== undefined) query.usesTransport = usesTransport === 'true';
+    if (transportStatus) query['transportDetails.status'] = transportStatus;
+    
+    if (search) {
+      query.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { admissionNumber: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    const [students, total] = await Promise.all([
+      Student.find(query)
+        .populate('parentId', 'name email phone')
+        .populate('transportDetails.busId', 'busNumber registrationNumber')
+        .populate('transportDetails.routeId', 'name')
+        .limit(parseInt(limit))
+        .skip(skip)
+        .sort('-createdAt'),
+      Student.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      count: students.length,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit)),
+      data: students
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/transport', isAdminOrDriver, async (req, res) => {
+  try {
+    const students = await Student.find({ 
+      usesTransport: true,
+      'transportDetails.status': 'active',
+      isActive: true
+    })
+    .populate('parentId', 'name phone')
+    .populate('transportDetails.busId', 'busNumber')
+    .select('firstName lastName classLevel admissionNumber transportDetails qrCode');
+
+    res.json({ success: true, count: students.length, data: students });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/unlinked', isAdmin, async (req, res) => {
+  try {
+    const students = await Student.find({ 
+      parentId: { $exists: false },
+      usesTransport: true 
+    })
+    .select('firstName lastName admissionNumber classLevel transportDetails');
+
+    res.json({ success: true, count: students.length, data: students });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/by-bus/:busId', isAdminOrDriver, async (req, res) => {
+  try {
+    const { busId } = req.params;
+    const students = await Student.find({
+      $or: [{ 'transportDetails.busId': busId }, { busId: busId }],
+      usesTransport: true,
+      isActive: true
+    })
+    .populate('parentId', 'name phone')
+    .select('firstName lastName classLevel admissionNumber transportDetails qrCode');
+
+    res.json({ success: true, count: students.length, data: students });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/by-parent/:parentId', async (req, res) => {
+  try {
+    const { parentId } = req.params;
+    if (req.user.role === 'parent' && req.user.id !== parentId) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    const students = await Student.find({ parentId, isActive: true })
+    .populate('transportDetails.busId', 'busNumber registrationNumber')
+    .select('firstName lastName classLevel admissionNumber transportDetails qrCode');
+
+    res.json({ success: true, count: students.length, data: students });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
-    const student = await Student.findById(req.params.id);
-    if (!student) {
-      return res.status(404).json({ message: 'Student not found' });
+    const student = await Student.findById(req.params.id)
+      .populate('parentId', 'name email phone')
+      .populate('transportDetails.busId', 'busNumber registrationNumber')
+      .populate('transportDetails.routeId', 'name')
+      .populate('notes.author', 'name');
+
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+
+    if (req.user.role === 'parent' && student.parentId?._id.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
     }
-    res.json(student);
+
+    res.json({ success: true, data: student });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// Create student
-router.post('/', async (req, res) => {
+router.post('/', isAdmin, async (req, res) => {
   try {
-    const student = new Student(req.body);
+    const existingStudent = await Student.findOne({ 
+      admissionNumber: req.body.admissionNumber?.toUpperCase() 
+    });
+    
+    if (existingStudent) {
+      return res.status(409).json({ success: false, message: 'Admission number already exists' });
+    }
+
+    const studentData = {
+      ...req.body,
+      admissionNumber: req.body.admissionNumber?.toUpperCase(),
+      usesTransport: req.body.usesTransport || false
+    };
+
+    if (studentData.usesTransport) {
+      studentData.transportDetails = {
+        ...studentData.transportDetails,
+        status: 'pending',
+        registrationDate: new Date()
+      };
+    }
+
+    const student = new Student(studentData);
     const newStudent = await student.save();
-    res.status(201).json(newStudent);
+    res.status(201).json({ success: true, message: 'Student created successfully', data: newStudent });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 });
 
-// Update student
-router.put('/:id', async (req, res) => {
+router.put('/:id', isAdmin, async (req, res) => {
   try {
     const student = await Student.findByIdAndUpdate(
-      req.params.id, 
-      req.body, 
+      req.params.id,
+      { ...req.body, admissionNumber: req.body.admissionNumber?.toUpperCase() },
       { new: true, runValidators: true }
     );
-    if (!student) {
-      return res.status(404).json({ message: 'Student not found' });
-    }
-    res.json(student);
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    res.json({ success: true, message: 'Student updated successfully', data: student });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    res.status(400).json({ success: false, message: error.message });
   }
 });
 
-// Delete student
-router.delete('/:id', async (req, res) => {
+router.patch('/:id/transport', isAdmin, async (req, res) => {
   try {
-    const student = await Student.findByIdAndDelete(req.params.id);
-    if (!student) {
-      return res.status(404).json({ message: 'Student not found' });
-    }
-    res.json({ message: 'Student deleted successfully' });
+    const { usesTransport, transportDetails } = req.body;
+    const updateData = {};
+    if (usesTransport !== undefined) updateData.usesTransport = usesTransport;
+    if (transportDetails) updateData.transportDetails = transportDetails;
+
+    const student = await Student.findByIdAndUpdate(req.params.id, updateData, { new: true });
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    res.json({ success: true, message: 'Transport status updated', data: student });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.status(400).json({ success: false, message: error.message });
+  }
+});
+
+router.delete('/:id', isAdmin, async (req, res) => {
+  try {
+    const student = await Student.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    res.json({ success: true, message: 'Student deactivated successfully' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.post('/:id/generate-qr', isAdmin, async (req, res) => {
+  try {
+    const student = await Student.findById(req.params.id);
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    const timestamp = Date.now();
+    student.qrCode = `STU-${student.admissionNumber}-${timestamp}`;
+    await student.save();
+    res.json({ success: true, message: 'QR code generated successfully', qrCode: student.qrCode });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/stats/summary', isAdmin, async (req, res) => {
+  try {
+    const [totalStudents, transportStudents, unlinkedStudents] = await Promise.all([
+      Student.countDocuments({ isActive: true }),
+      Student.countDocuments({ usesTransport: true, isActive: true }),
+      Student.countDocuments({ parentId: { $exists: false }, usesTransport: true, isActive: true })
+    ]);
+
+    const byClass = await Student.aggregate([
+      { $match: { isActive: true } },
+      { $group: { _id: '$classLevel', count: { $sum: 1 } } },
+      { $sort: { _id: 1 } }
+    ]);
+
+    res.json({
+      success: true,
+      data: { total: totalStudents, transportStudents, unlinkedTransportStudents: unlinkedStudents, byClass }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 

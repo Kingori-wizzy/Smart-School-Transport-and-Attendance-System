@@ -1,16 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const User = require('../models/User');
-const { authMiddleware } = require('../middleware/authMiddleware');
+const mongoose = require('mongoose');
+const { body, validationResult } = require('express-validator');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const fs = require('fs').promises;
+const { authMiddleware } = require('../middleware/authMiddleware');
+const { isAdmin } = require('../middleware/authMiddleware');
+const User = require('../models/User');  // ✅ Only need this once
 
 // Ensure uploads directory exists
-const uploadDir = 'uploads';
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+const uploadDir = path.join(__dirname, '..', 'uploads', 'profiles');
+const ensureUploadDir = async () => {
+  try {
+    await fs.mkdir(uploadDir, { recursive: true });
+  } catch (error) {
+    console.error('Error creating upload directory:', error);
+  }
+};
+ensureUploadDir();
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -38,21 +46,294 @@ const upload = multer({
   }
 });
 
+// Validation rules
+const validatePushToken = [
+  body('token').notEmpty().withMessage('Token is required')
+];
+
+const validateProfile = [
+  body('firstName').optional().trim().isLength({ min: 1, max: 50 }),
+  body('lastName').optional().trim().isLength({ min: 1, max: 50 }),
+  body('phone').optional().matches(/^\+?[\d\s-]{10,}$/).withMessage('Valid phone number required')
+];
+
+const validatePassword = [
+  body('currentPassword').notEmpty().withMessage('Current password is required'),
+  body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters')
+];
+
+// ==================== DRIVER CREATION VALIDATION ====================
+const validateDriver = [
+  body('name').notEmpty().withMessage('Name is required'),
+  body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
+  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  body('phone').optional().matches(/^\+?[\d\s-]{10,}$/).withMessage('Valid phone number required'),
+  body('driverDetails.licenseNumber').optional().notEmpty(),
+  body('driverDetails.licenseExpiry').optional().isISO8601().toDate()
+];
+
 // All user routes require authentication
 router.use(authMiddleware);
 
-// 📱 Save push notification token
-router.post('/push-token', async (req, res) => {
-  try {
-    const { token } = req.body;
-    const userId = req.user.id;
+// ==================== ADMIN USER MANAGEMENT ENDPOINTS ====================
 
-    if (!token) {
-      return res.status(400).json({ 
+/**
+ * @route   GET /api/users
+ * @desc    Get all users with optional role filter
+ * @access  Private (Admin only)
+ */
+router.get('/', isAdmin, async (req, res) => {
+  try {
+    const { role, page = 1, limit = 50, search } = req.query;
+    const query = {};
+    
+    if (role) query.role = role;
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    const [users, total] = await Promise.all([
+      User.find(query)
+        .select('-password -pushToken -resetCode -resetCodeExpiry')
+        .skip(skip)
+        .limit(parseInt(limit))
+        .sort('-createdAt'),
+      User.countDocuments(query)
+    ]);
+
+    res.json({
+      success: true,
+      data: users,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+/**
+ * @route   GET /api/users/:id
+ * @desc    Get single user by ID
+ * @access  Private (Admin only)
+ */
+router.get('/:id', isAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id)
+      .select('-password -pushToken -resetCode -resetCodeExpiry');
+
+    if (!user) {
+      return res.status(404).json({ 
         success: false, 
-        message: 'Token is required' 
+        message: 'User not found' 
       });
     }
+
+    res.json({
+      success: true,
+      data: user
+    });
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+/**
+ * @route   POST /api/users
+ * @desc    Create new user (driver, parent, admin)
+ * @access  Private (Admin only)
+ */
+router.post('/', isAdmin, validateDriver, async (req, res) => {
+  try {
+    // Check validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ 
+        success: false, 
+        errors: errors.array() 
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email: req.body.email });
+    if (existingUser) {
+      return res.status(409).json({ 
+        success: false, 
+        message: 'User with this email already exists' 
+      });
+    }
+
+    // Create user
+    const user = new User(req.body);
+    const newUser = await user.save();
+
+    // Remove password from response
+    const userResponse = newUser.toObject();
+    delete userResponse.password;
+
+    console.log(`✅ New user created: ${newUser.email} (${newUser.role})`);
+
+    res.status(201).json({
+      success: true,
+      message: 'User created successfully',
+      data: userResponse
+    });
+  } catch (error) {
+    console.error('Error creating user:', error);
+    res.status(400).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+/**
+ * @route   PUT /api/users/:id
+ * @desc    Update user
+ * @access  Private (Admin only)
+ */
+router.put('/:id', isAdmin, async (req, res) => {
+  try {
+    // Don't allow password update through this endpoint
+    const { password, ...updateData } = req.body;
+
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    ).select('-password -pushToken -resetCode -resetCodeExpiry');
+
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    console.log(`✅ User updated: ${user.email}`);
+
+    res.json({
+      success: true,
+      message: 'User updated successfully',
+      data: user
+    });
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(400).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+/**
+ * @route   DELETE /api/users/:id
+ * @desc    Delete user (soft delete)
+ * @access  Private (Admin only)
+ */
+router.delete('/:id', isAdmin, async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { 
+        isActive: false,
+        deletedAt: new Date()
+      },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    console.log(`✅ User deactivated: ${user.email}`);
+
+    res.json({ 
+      success: true, 
+      message: 'User deactivated successfully' 
+    });
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+/**
+ * @route   PATCH /api/users/:id/status
+ * @desc    Toggle user active status
+ * @access  Private (Admin only)
+ */
+router.patch('/:id/status', isAdmin, async (req, res) => {
+  try {
+    const { isActive } = req.body;
+    
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { isActive },
+      { new: true }
+    ).select('-password -pushToken -resetCode -resetCodeExpiry');
+
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `User ${isActive ? 'activated' : 'deactivated'} successfully`,
+      data: user
+    });
+  } catch (error) {
+    console.error('Error updating user status:', error);
+    res.status(400).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+// ==================== PROFILE MANAGEMENT ENDPOINTS (for logged-in user) ====================
+
+// 📱 Save push notification token
+router.post('/push-token', validatePushToken, async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ 
+        success: false, 
+        errors: errors.array() 
+      });
+    }
+
+    const { token } = req.body;
+    const userId = req.user.id;
 
     const updatedUser = await User.findByIdAndUpdate(
       userId, 
@@ -70,12 +351,12 @@ router.post('/push-token', async (req, res) => {
       });
     }
 
-    console.log(`✅ Push token saved for user ${userId}: ${token}`);
+    console.log(`✅ Push token saved for user ${userId}`);
 
     res.json({ 
       success: true, 
       message: 'Push token saved successfully',
-      user: updatedUser 
+      data: updatedUser 
     });
   } catch (error) {
     console.error('❌ Error saving push token:', error);
@@ -94,8 +375,7 @@ router.delete('/push-token', async (req, res) => {
     const updatedUser = await User.findByIdAndUpdate(
       userId,
       { 
-        pushToken: null,
-        pushTokenUpdatedAt: null 
+        $unset: { pushToken: 1, pushTokenUpdatedAt: 1 }
       },
       { new: true }
     ).select('-password');
@@ -138,8 +418,10 @@ router.get('/push-token', async (req, res) => {
 
     res.json({ 
       success: true, 
-      pushToken: user.pushToken || null,
-      updatedAt: user.pushTokenUpdatedAt || null
+      data: {
+        pushToken: user.pushToken || null,
+        updatedAt: user.pushTokenUpdatedAt || null
+      }
     });
   } catch (error) {
     console.error('❌ Error fetching push token:', error);
@@ -167,13 +449,13 @@ router.get('/profile', async (req, res) => {
     // Add full URL to profile image if exists
     const userObj = user.toObject();
     if (userObj.profileImage) {
-      // You might want to add base URL here
-      userObj.profileImageUrl = userObj.profileImage;
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      userObj.profileImageUrl = `${baseUrl}${userObj.profileImage}`;
     }
 
     res.json({ 
       success: true, 
-      user: userObj
+      data: userObj
     });
   } catch (error) {
     console.error('❌ Error fetching profile:', error);
@@ -185,19 +467,28 @@ router.get('/profile', async (req, res) => {
 });
 
 // ✏️ Update user profile
-router.put('/profile', async (req, res) => {
+router.put('/profile', validateProfile, async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ 
+        success: false, 
+        errors: errors.array() 
+      });
+    }
+
     const { firstName, lastName, phone } = req.body;
     const userId = req.user.id;
     
+    const updateData = {};
+    if (firstName) updateData.firstName = firstName;
+    if (lastName) updateData.lastName = lastName;
+    if (firstName && lastName) updateData.name = `${firstName} ${lastName}`.trim();
+    if (phone) updateData.phone = phone;
+    
     const updatedUser = await User.findByIdAndUpdate(
       userId,
-      { 
-        firstName, 
-        lastName, 
-        phone,
-        name: `${firstName} ${lastName}`.trim()
-      },
+      updateData,
       { new: true, runValidators: true }
     ).select('-password -pushToken -__v -resetCode -resetCodeExpiry');
 
@@ -213,7 +504,7 @@ router.put('/profile', async (req, res) => {
     res.json({ 
       success: true, 
       message: 'Profile updated successfully',
-      user: updatedUser 
+      data: updatedUser 
     });
   } catch (error) {
     console.error('❌ Error updating profile:', error);
@@ -224,7 +515,7 @@ router.put('/profile', async (req, res) => {
   }
 });
 
-// 📸 Upload profile photo - FIXED with better error handling
+// 📸 Upload profile photo
 router.post('/profile/photo', authMiddleware, upload.single('photo'), async (req, res) => {
   try {
     if (!req.file) {
@@ -240,7 +531,7 @@ router.post('/profile/photo', authMiddleware, upload.single('photo'), async (req
     const oldUser = await User.findById(userId);
     
     // Construct the photo URL
-    const photoUrl = `/uploads/${req.file.filename}`;
+    const photoUrl = `/uploads/profiles/${req.file.filename}`;
     
     // Update user with new profile image
     const user = await User.findByIdAndUpdate(
@@ -252,16 +543,23 @@ router.post('/profile/photo', authMiddleware, upload.single('photo'), async (req
     // Optionally delete old photo file
     if (oldUser && oldUser.profileImage) {
       const oldFilePath = path.join(__dirname, '..', oldUser.profileImage);
-      if (fs.existsSync(oldFilePath)) {
-        fs.unlinkSync(oldFilePath);
+      try {
+        await fs.unlink(oldFilePath);
+      } catch (unlinkError) {
+        console.warn('Could not delete old profile image:', unlinkError.message);
       }
     }
+    
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
     
     res.json({ 
       success: true, 
       message: 'Profile photo updated successfully',
-      photoUrl,
-      user 
+      data: {
+        photoUrl,
+        photoUrlFull: `${baseUrl}${photoUrl}`,
+        user
+      }
     });
   } catch (error) {
     console.error('❌ Error uploading photo:', error);
@@ -273,24 +571,18 @@ router.post('/profile/photo', authMiddleware, upload.single('photo'), async (req
 });
 
 // 🔐 Change password
-router.post('/change-password', async (req, res) => {
+router.post('/change-password', validatePassword, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
-    const userId = req.user.id;
-    
-    if (!currentPassword || !newPassword) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Current password and new password are required' 
+        errors: errors.array() 
       });
     }
 
-    if (newPassword.length < 6) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'New password must be at least 6 characters long' 
-      });
-    }
+    const { currentPassword, newPassword } = req.body;
+    const userId = req.user.id;
     
     const user = await User.findById(userId).select('+password');
     
@@ -327,21 +619,31 @@ router.post('/change-password', async (req, res) => {
   }
 });
 
-// 🗑️ Delete account
+// 🗑️ Delete account (soft delete)
 router.delete('/account', async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const deletedUser = await User.findByIdAndDelete(userId);
-    
-    if (!deletedUser) {
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { 
+        isActive: false,
+        deletedAt: new Date(),
+        pushToken: null,
+        email: `deleted_${userId}@deleted.user`,
+        phone: null
+      },
+      { new: true }
+    );
+
+    if (!updatedUser) {
       return res.status(404).json({ 
         success: false, 
         message: 'User not found' 
       });
     }
 
-    console.log(`✅ Account deleted for user ${userId}`);
+    console.log(`✅ Account soft deleted for user ${userId}`);
 
     res.json({ 
       success: true, 
@@ -361,14 +663,22 @@ router.get('/activity-summary', async (req, res) => {
   try {
     const userId = req.user.id;
     const user = await User.findById(userId)
-      .select('lastLogin createdAt pushTokenUpdatedAt')
+      .select('lastLogin createdAt pushTokenUpdatedAt isActive')
       .lean();
+
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
 
     res.json({
       success: true,
       data: {
         memberSince: user.createdAt,
         lastLogin: user.lastLogin,
+        accountActive: user.isActive,
         pushTokenRegistered: !!user.pushTokenUpdatedAt,
         pushTokenLastUpdated: user.pushTokenUpdatedAt
       }
@@ -382,7 +692,29 @@ router.get('/activity-summary', async (req, res) => {
   }
 });
 
-// Serve uploaded files statically (add this to your server.js)
-// app.use('/uploads', express.static('uploads'));
+// ✅ Verify account ownership
+router.get('/verify-account', async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('isActive');
+    
+    if (!user || !user.isActive) {
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Account not found or deactivated' 
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Account is active' 
+    });
+  } catch (error) {
+    console.error('❌ Error verifying account:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
 
 module.exports = router;

@@ -18,6 +18,7 @@ import NotificationsScreen from '../screens/Main/NotificationsScreen';
 import MessagesScreen from '../screens/Main/MessagesScreen';
 import ProfileScreen from '../screens/Main/ProfileScreen';
 import TransportScreen from '../screens/Main/TransportScreen';
+import LinkChildScreen from '../screens/Main/LinkChildScreen'; // NEW IMPORT
 
 // Child Screens
 import ChildDetailsScreen from '../screens/Child/ChildDetailsScreen';
@@ -154,6 +155,7 @@ const AppNavigator = () => {
           <Stack.Screen name="MainTabs" component={MainTabs} />
           <Stack.Screen name="ChildDetails" component={ChildDetailsScreen} />
           <Stack.Screen name="AddChild" component={AddChildScreen} />
+          <Stack.Screen name="LinkChild" component={LinkChildScreen} /> {/* NEW SCREEN */}
           <Stack.Screen name="ChildHistory" component={ChildHistoryScreen} />
           <Stack.Screen name="EditChild" component={EditChildScreen} />
           <Stack.Screen name="Tracking" component={TrackingScreen} />

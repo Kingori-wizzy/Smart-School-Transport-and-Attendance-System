@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react'; // Added useEffect import
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
@@ -8,6 +8,7 @@ import Login from './pages/Login/Login';
 import ProtectedRoute from './components/common/ProtectedRoute';
 import LoadingSpinner from './components/common/LoadingSpinner';
 import './assets/styles/index.css';
+import TransportStudents from './pages/Students/TransportStudents'; // ✅ Already added
 
 // Lazy load pages for better performance
 const Dashboard = lazy(() => import('./pages/Dashboard/Dashboard'));
@@ -18,6 +19,16 @@ const ReportsPage = lazy(() => import('./pages/Reports/ReportsPage'));
 const SettingsPage = lazy(() => import('./pages/Settings/SettingsPage'));
 
 function App() {
+  // Listen for auth changes from AuthContext
+  useEffect(() => {
+    const handleAuthChange = (event) => {
+      console.log('🔑 Auth change detected in App:', event.detail);
+    };
+
+    window.addEventListener('auth-change', handleAuthChange);
+    return () => window.removeEventListener('auth-change', handleAuthChange);
+  }, []);
+
   return (
     <BrowserRouter>
       <ThemeProvider>
@@ -57,6 +68,15 @@ function App() {
                     element={
                       <ProtectedRoute>
                         <TransportPage />
+                      </ProtectedRoute>
+                    } 
+                  />
+                  {/* ✅ NEW ROUTE - Add this line */}
+                  <Route 
+                    path="/students/transport" 
+                    element={
+                      <ProtectedRoute>
+                        <TransportStudents />
                       </ProtectedRoute>
                     } 
                   />

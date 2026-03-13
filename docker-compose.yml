@@ -1,38 +1,42 @@
 version: '3.8'
 
 services:
-  # Backend API Service
+  redis:
+    image: redis:7-alpine
+    container_name: smart-school-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - smart-school-network
+    restart: unless-stopped
+
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: ./backend
     ports:
       - "5000:5000"
     environment:
       - NODE_ENV=development
       - PORT=5000
       - MONGODB_URI=mongodb+srv://smartschool_system:364VTPjose@cluster0.4u783we.mongodb.net/smartSchoolDB?retryWrites=true&w=majority
-      - JWT_SECRET=supersecretkey12345
-      - SMS_SENDER_ID=SmartSchool
-      - SMSLEOPARD_API_KEY=63bs0AbP6SZ34Glk4FlH
-      - TEXTBEE_ENABLED=false
+      - REDIS_URL=redis://redis:6379
     volumes:
       - ./backend:/app
       - /app/node_modules
+      - backend-uploads:/app/uploads
+    depends_on:
+      - redis
     networks:
       - smart-school-network
     restart: unless-stopped
 
-  # Frontend Admin Dashboard
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    build: ./frontend
     ports:
       - "5173:5173"
     environment:
       - VITE_API_URL=http://localhost:5000/api
-      - VITE_HOST=0.0.0.0
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -45,3 +49,7 @@ services:
 networks:
   smart-school-network:
     driver: bridge
+
+volumes:
+  redis-data:
+  backend-uploads:

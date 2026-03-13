@@ -1,32 +1,50 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
+const { body, validationResult } = require('express-validator');
+
 const { authMiddleware } = require('../middleware/authMiddleware');
 const IncidentReport = require('../models/IncidentReport');
 const User = require('../models/User');
 const Student = require('../models/Student');
 const Trip = require('../models/Trip');
 const Bus = require('../models/Bus');
+const Route = require('../models/Route');
 
 // All transport routes require authentication
 router.use(authMiddleware);
+
+// Validation rules
+const validateReport = [
+  body('type').notEmpty().withMessage('Type is required'),
+  body('message').notEmpty().withMessage('Message is required'),
+  body('childId').optional().isMongoId().withMessage('Invalid child ID format')
+];
+
+const validateContactDriver = [
+  body('busId').isMongoId().withMessage('Valid bus ID required'),
+  body('message').notEmpty().withMessage('Message is required'),
+  body('childId').optional().isMongoId().withMessage('Invalid child ID format')
+];
 
 /**
  * @route   POST /api/transport/report
  * @desc    Report a problem from parent to driver
  * @access  Private (Parents only)
  */
-router.post('/report', async (req, res) => {
+router.post('/report', validateReport, async (req, res) => {
   try {
-    const { type, childId, message, location } = req.body;
-    const parentId = req.user.id;
-
-    // Validate input
-    if (!type || !message) {
+    // Check validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Type and message are required' 
+        errors: errors.array() 
       });
     }
+
+    const { type, childId, message, location } = req.body;
+    const parentId = req.user.id;
 
     console.log(`📢 Parent alert from ${parentId}:`, { type, childId, message });
 
@@ -42,7 +60,7 @@ router.post('/report', async (req, res) => {
         .populate('busId');
       
       if (student) {
-        studentName = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+        studentName = student.name || `${student.firstName || ''} ${student.lastName || ''}`.trim();
         
         // Try to find active trip
         if (student.currentTrip) {
@@ -98,9 +116,6 @@ router.post('/report', async (req, res) => {
     await report.save();
     console.log(`✅ Incident report saved with ID: ${report._id}`);
 
-    // Find admins to notify (optional)
-    const admins = await User.find({ role: 'admin' }).select('_id email');
-    
     // Find driver to notify via socket if available
     if (busId && req.io) {
       req.io.to(`bus-${busId}`).emit('parent-alert', {
@@ -140,22 +155,35 @@ router.get('/routes/:routeId', async (req, res) => {
   try {
     const { routeId } = req.params;
     
-    // Fetch route from database (you'll need to create a Route model)
-    // const route = await Route.findById(routeId);
-    
-    // For now, return mock data
+    // Validate routeId
+    if (!mongoose.Types.ObjectId.isValid(routeId)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid route ID format' 
+      });
+    }
+
+    const route = await Route.findById(routeId)
+      .populate('stops')
+      .populate('bus', 'busNumber');
+
+    if (!route) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Route not found' 
+      });
+    }
+
     res.json({ 
       success: true, 
-      data: { 
-        id: routeId,
-        name: 'Route information',
-        stops: [],
-        coordinates: []
-      } 
+      data: route 
     });
   } catch (error) {
     console.error('❌ Error fetching route:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 });
 
@@ -169,40 +197,76 @@ router.get('/schedule', async (req, res) => {
     const { date, childId } = req.query;
     const parentId = req.user.id;
     
+    // Validate date if provided
+    let startDate, endDate;
+    if (date) {
+      startDate = new Date(date);
+      if (isNaN(startDate.getTime())) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Invalid date format' 
+        });
+      }
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 1);
+    } else {
+      startDate = new Date();
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 1);
+    }
+    
     let query = {};
     
     // If childId provided, filter by that child
     if (childId) {
+      // Validate childId
+      if (!mongoose.Types.ObjectId.isValid(childId)) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Invalid child ID format' 
+        });
+      }
+
       const student = await Student.findOne({ 
         _id: childId, 
         parentId: parentId 
       });
       
-      if (student) {
-        // Find trips for this student
-        const trips = await Trip.find({
-          students: childId,
-          scheduledStartTime: { 
-            $gte: new Date(date || new Date().setHours(0,0,0,0)),
-            $lt: new Date(new Date(date || new Date()).setHours(23,59,59,999))
-          }
-        }).populate('busId', 'busNumber');
-        
-        return res.json({ 
-          success: true, 
-          data: trips.map(trip => ({
-            id: trip._id,
-            routeName: trip.routeName,
-            scheduledStartTime: trip.scheduledStartTime,
-            scheduledEndTime: trip.scheduledEndTime,
-            status: trip.status,
-            busNumber: trip.busId?.busNumber
-          }))
+      if (!student) {
+        return res.status(403).json({ 
+          success: false, 
+          message: 'Unauthorized access to child data' 
         });
       }
+      
+      // Find trips for this student
+      const trips = await Trip.find({
+        $or: [
+          { busId: student.busId },
+          { students: childId }
+        ],
+        scheduledStartTime: { 
+          $gte: startDate,
+          $lt: endDate
+        }
+      }).populate('busId', 'busNumber');
+      
+      return res.json({ 
+        success: true, 
+        data: trips.map(trip => ({
+          id: trip._id,
+          routeName: trip.routeName,
+          scheduledStartTime: trip.scheduledStartTime,
+          scheduledEndTime: trip.scheduledEndTime,
+          status: trip.status,
+          busNumber: trip.busId?.busNumber
+        }))
+      });
     }
     
-    // If no childId or child not found, return empty array
+    // If no childId, return empty array
     res.json({ 
       success: true, 
       data: [] 
@@ -210,7 +274,10 @@ router.get('/schedule', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error fetching schedule:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 });
 
@@ -219,17 +286,19 @@ router.get('/schedule', async (req, res) => {
  * @desc    Direct message to driver
  * @access  Private (Parents only)
  */
-router.post('/contact-driver', async (req, res) => {
+router.post('/contact-driver', validateContactDriver, async (req, res) => {
   try {
-    const { busId, message, childId } = req.body;
-    const parentId = req.user.id;
-
-    if (!busId || !message) {
+    // Check validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Bus ID and message are required' 
+        errors: errors.array() 
       });
     }
+
+    const { busId, message, childId } = req.body;
+    const parentId = req.user.id;
 
     // Find bus and driver
     const bus = await Bus.findById(busId).populate('driver');
@@ -249,7 +318,7 @@ router.post('/contact-driver', async (req, res) => {
     if (childId) {
       const student = await Student.findById(childId);
       if (student) {
-        childName = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+        childName = student.name || `${student.firstName || ''} ${student.lastName || ''}`.trim();
       }
     }
 
@@ -329,7 +398,10 @@ router.get('/buses', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error fetching buses:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 });
 
@@ -341,23 +413,27 @@ router.get('/buses', async (req, res) => {
 router.get('/reports/history', async (req, res) => {
   try {
     const parentId = req.user.id;
-    const { limit = 20, page = 1 } = req.query;
+    const { page = 1, limit = 20 } = req.query;
     
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit), 50);
+    const skip = (pageNum - 1) * limitNum;
     
-    const reports = await IncidentReport.find({ 
-      reportedBy: parentId,
-      type: 'parent_alert'
-    })
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(parseInt(limit))
-    .populate('parentInfo.childId', 'firstName lastName');
-    
-    const total = await IncidentReport.countDocuments({ 
-      reportedBy: parentId,
-      type: 'parent_alert'
-    });
+    const [reports, total] = await Promise.all([
+      IncidentReport.find({ 
+        reportedBy: parentId,
+        type: 'parent_alert'
+      })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .populate('parentInfo.childId', 'firstName lastName'),
+      
+      IncidentReport.countDocuments({ 
+        reportedBy: parentId,
+        type: 'parent_alert'
+      })
+    ]);
     
     res.json({ 
       success: true, 
@@ -375,16 +451,19 @@ router.get('/reports/history', async (req, res) => {
         })),
         pagination: {
           total,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          pages: Math.ceil(total / parseInt(limit))
+          page: pageNum,
+          limit: limitNum,
+          pages: Math.ceil(total / limitNum)
         }
       }
     });
     
   } catch (error) {
     console.error('❌ Error fetching report history:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
   }
 });
 

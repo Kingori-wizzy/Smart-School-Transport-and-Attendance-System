@@ -1,9 +1,12 @@
+/* eslint-disable no-unused-vars */
+/* eslint-disable react-hooks/exhaustive-deps */
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import Sidebar from '../../components/Layout/Sidebar';
 import LiveGPSMap from '../../components/Maps/LiveGPSMap';
+import TransportStatsWidget from '../../components/Dashboard/TransportStatsWidget';
 import { transportService } from '../../services/transport';
 import { attendanceService } from '../../services/attendance';
 import { studentService } from '../../services/student';
@@ -27,7 +30,11 @@ const Dashboard = () => {
     attendanceRate: 0,
     alerts: 0,
     avgSpeed: 0,
-    onTimeRate: 98
+    onTimeRate: 98,
+    transportStudents: 0,
+    linkedStudents: 0,
+    unlinkedStudents: 0,
+    activeTrips: 0
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -47,6 +54,7 @@ const Dashboard = () => {
       socket.on('fuelAlert', handleFuelAlert);
       socket.on('new-attendance', handleNewAttendance);
       socket.on('busStatusChange', handleBusStatusChange);
+      socket.on('student-linked', handleStudentLinked);
     }
 
     // Refresh data every 30 seconds if auto-refresh is enabled
@@ -64,6 +72,7 @@ const Dashboard = () => {
         socket.off('fuelAlert');
         socket.off('new-attendance');
         socket.off('busStatusChange');
+        socket.off('student-linked');
       }
       clearInterval(interval);
     };
@@ -139,14 +148,15 @@ const Dashboard = () => {
 
   const handleSpeedAlert = (alert) => {
     setStats(prev => ({ ...prev, alerts: prev.alerts + 1 }));
-    setRecentAlerts(prev => [{
+    addAlert({
       id: Date.now(),
       type: 'speed',
       message: `🚨 Speed alert: ${alert.message}`,
       timestamp: new Date(),
       data: alert,
-      busId: alert.vehicleId
-    }, ...prev].slice(0, 10));
+      busId: alert.vehicleId,
+      severity: 'high'
+    });
     
     toast.error(`🚨 Speed alert: ${alert.message}`, {
       duration: 5000,
@@ -157,14 +167,15 @@ const Dashboard = () => {
 
   const handleGeofenceAlert = (alert) => {
     setStats(prev => ({ ...prev, alerts: prev.alerts + 1 }));
-    setRecentAlerts(prev => [{
+    addAlert({
       id: Date.now(),
       type: 'geofence',
       message: `📍 Geofence alert: ${alert.message}`,
       timestamp: new Date(),
       data: alert,
-      busId: alert.vehicleId
-    }, ...prev].slice(0, 10));
+      busId: alert.vehicleId,
+      severity: 'medium'
+    });
     
     toast.warning(`📍 Geofence alert: ${alert.message}`, {
       duration: 5000,
@@ -175,18 +186,28 @@ const Dashboard = () => {
 
   const handleFuelAlert = (alert) => {
     setStats(prev => ({ ...prev, alerts: prev.alerts + 1 }));
-    setRecentAlerts(prev => [{
+    addAlert({
       id: Date.now(),
       type: 'fuel',
       message: `⛽ Fuel alert: ${alert.message}`,
       timestamp: new Date(),
       data: alert,
-      busId: alert.vehicleId
-    }, ...prev].slice(0, 10));
+      busId: alert.vehicleId,
+      severity: 'medium'
+    });
     
     toast.error(`⛽ Fuel alert: ${alert.message}`, {
       duration: 5000,
       icon: '⛽',
+      position: 'top-right'
+    });
+  };
+
+  const handleStudentLinked = (data) => {
+    fetchDashboardData(true);
+    toast.success(`👪 Student linked to parent`, {
+      duration: 3000,
+      icon: '👪',
       position: 'top-right'
     });
   };
@@ -198,6 +219,10 @@ const Dashboard = () => {
       icon: '📝',
       position: 'top-right'
     });
+  };
+
+  const addAlert = (alert) => {
+    setRecentAlerts(prev => [alert, ...prev].slice(0, 20));
   };
 
   const fetchDashboardData = async (silent = false) => {
@@ -213,8 +238,9 @@ const Dashboard = () => {
       setBuses(busesArray);
       
       // Fetch students
-      const studentsData = await studentService.getStudents();
-      const studentsArray = Array.isArray(studentsData) ? studentsData : [];
+      const studentsData = await studentService.getStudents({ limit: 1000 });
+      const studentsArray = Array.isArray(studentsData?.data) ? studentsData.data : 
+                           Array.isArray(studentsData) ? studentsData : [];
       setStudents(studentsArray);
       
       // Fetch attendance stats
@@ -223,9 +249,33 @@ const Dashboard = () => {
       // Fetch GPS stats
       const gpsStats = await transportService.getGPSStats();
       
+      // Fetch student stats for transport info
+      let transportStats = { transportStudents: 0, linkedStudents: 0, unlinkedStudents: 0 };
+      try {
+        const studentStatsRes = await studentService.getStats();
+        if (studentStatsRes?.data) {
+          transportStats = {
+            transportStudents: studentStatsRes.data.transportStudents || 0,
+            linkedStudents: studentStatsRes.data.linked || 0,
+            unlinkedStudents: studentStatsRes.data.unlinkedTransportStudents || 0
+          };
+        }
+      } catch (error) {
+        console.error('Error fetching student stats:', error);
+      }
+      
+      // Fetch active trips
+      let activeTrips = 0;
+      try {
+        const tripsRes = await transportService.getActiveTrips();
+        activeTrips = Array.isArray(tripsRes) ? tripsRes.length : 0;
+      } catch (error) {
+        console.error('Error fetching active trips:', error);
+      }
+      
       // Calculate moving/stopped stats
-      const movingCount = busesArray.filter(b => (b.currentLocation?.speed || 0) > 0).length;
-      const stoppedCount = busesArray.length - movingCount;
+      const movingCount = busesArray.filter(b => (b.currentLocation?.speed || 0) > 5).length;
+      const stoppedCount = busesArray.filter(b => (b.currentLocation?.speed || 0) <= 5).length;
       
       // Calculate average speed
       const speeds = busesArray
@@ -237,17 +287,21 @@ const Dashboard = () => {
       
       // Update stats
       setStats({
-        activeBuses: busesArray.filter(b => b.status === 'active' || b.status === 'online').length,
+        activeBuses: busesArray.filter(b => b.status === 'active' || b.status === 'online' || b.status === 'on_trip').length,
         movingBuses: movingCount,
         stoppedBuses: stoppedCount,
         totalStudents: studentsArray.length,
-        presentToday: attendanceStats?.uniqueStudents || 0,
+        presentToday: attendanceStats?.data?.today || attendanceStats?.presentToday || 0,
         attendanceRate: studentsArray.length > 0 
-          ? Math.round((attendanceStats?.uniqueStudents || 0) / studentsArray.length * 100) 
+          ? Math.round(((attendanceStats?.data?.today || attendanceStats?.presentToday || 0) / studentsArray.length) * 100) 
           : 0,
         alerts: gpsStats?.recentSpeedViolations || 0,
         avgSpeed: avgSpeed,
-        onTimeRate: 98
+        onTimeRate: 98,
+        transportStudents: transportStats.transportStudents,
+        linkedStudents: transportStats.linkedStudents,
+        unlinkedStudents: transportStats.unlinkedStudents,
+        activeTrips: activeTrips
       });
       
       setLastUpdated(new Date());
@@ -284,6 +338,7 @@ const Dashboard = () => {
 
   const handleBusSelect = (bus) => {
     setSelectedBus(bus);
+    toast.success(`Selected bus: ${bus.busNumber || bus.registrationNumber}`);
   };
 
   const handleViewAllBuses = () => {
@@ -341,7 +396,9 @@ const Dashboard = () => {
                 background: autoRefresh ? '#4CAF50' : '#f0f0f0',
                 color: autoRefresh ? 'white' : '#333',
                 borderRadius: '20px',
-                padding: '5px 15px'
+                padding: '5px 15px',
+                border: 'none',
+                cursor: 'pointer'
               }}
             >
               {autoRefresh ? '🔄 Auto' : '⏸️ Manual'}
@@ -350,10 +407,29 @@ const Dashboard = () => {
               onClick={handleRefresh} 
               className="refresh-btn"
               title="Refresh data"
+              style={{
+                background: '#2196F3',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '5px 10px',
+                cursor: 'pointer'
+              }}
             >
               🔄
             </button>
-            <button onClick={handleLogout} className="logout-btn">
+            <button 
+              onClick={handleLogout} 
+              className="logout-btn"
+              style={{
+                background: '#f44336',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '5px 15px',
+                cursor: 'pointer'
+              }}
+            >
               Logout
             </button>
           </div>
@@ -402,9 +478,9 @@ const Dashboard = () => {
             <div className="stat-card" style={{ borderLeft: '4px solid #4CAF50' }}>
               <h3>Total Students</h3>
               <div className="value">{stats.totalStudents}</div>
-              <small>Enrolled</small>
+              <small>{stats.transportStudents} use transport</small>
               <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
-                Avg Speed: {stats.avgSpeed} km/h
+                👪 {stats.linkedStudents} linked • 👤 {stats.unlinkedStudents} unlinked
               </div>
             </div>
             
@@ -413,18 +489,26 @@ const Dashboard = () => {
               <div className="value">{stats.presentToday}</div>
               <small>{stats.attendanceRate}% attendance</small>
               <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
-                {stats.presentToday} / {stats.totalStudents} students
+                📊 Avg speed: {stats.avgSpeed} km/h
               </div>
             </div>
             
             <div className="stat-card" style={{ borderLeft: '4px solid #f44336' }}>
               <h3>Active Alerts</h3>
               <div className="value">{stats.alerts}</div>
-              <small>Last 24 hours</small>
+              <small>{stats.activeTrips} active trips</small>
               <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
-                On-time rate: {stats.onTimeRate}%
+                ⏱️ On-time rate: {stats.onTimeRate}%
               </div>
             </div>
+          </div>
+
+          {/* Transport Stats Widget */}
+          <div style={{ marginBottom: '20px' }}>
+            <TransportStatsWidget 
+              onRefresh={handleRefresh}
+              refreshInterval={30000}
+            />
           </div>
 
           {/* Map Controls */}
@@ -577,13 +661,13 @@ const Dashboard = () => {
                   borderRadius: '12px',
                   fontSize: '12px'
                 }}>
-                  {buses.filter(b => b.status === 'active').length} online
+                  {buses.filter(b => b.status === 'active' || b.status === 'online' || b.status === 'on_trip').length} online
                 </span>
               </div>
               
-              {buses.filter(b => b.status === 'active').length > 0 ? (
+              {buses.filter(b => b.status === 'active' || b.status === 'online' || b.status === 'on_trip').length > 0 ? (
                 <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
-                  {buses.filter(b => b.status === 'active').map(bus => (
+                  {buses.filter(b => b.status === 'active' || b.status === 'online' || b.status === 'on_trip').map(bus => (
                     <div 
                       key={bus._id || bus.busNumber} 
                       onClick={() => handleBusSelect(bus)}
@@ -603,7 +687,7 @@ const Dashboard = () => {
                       onMouseLeave={(e) => e.currentTarget.style.transform = 'translateX(0)'}
                     >
                       <div>
-                        <strong style={{ fontSize: '16px' }}>{bus.busNumber}</strong>
+                        <strong style={{ fontSize: '16px' }}>{bus.busNumber || bus.registrationNumber}</strong>
                         <div style={{ fontSize: '12px', color: '#666' }}>
                           {bus.driverName || 'No driver'} • {bus.route || 'No route'}
                         </div>
@@ -615,14 +699,14 @@ const Dashboard = () => {
                       </div>
                       <div style={{ textAlign: 'right' }}>
                         <div style={{ 
-                          background: (bus.currentLocation?.speed || 0) > 0 ? '#4CAF50' : '#FF9800',
+                          background: (bus.currentLocation?.speed || 0) > 5 ? '#4CAF50' : '#FF9800',
                           color: 'white',
                           padding: '4px 10px',
                           borderRadius: '20px',
                           fontSize: '12px',
                           fontWeight: 'bold'
                         }}>
-                          {bus.currentLocation?.speed || 0} km/h
+                          {Math.round(bus.currentLocation?.speed || 0)} km/h
                         </div>
                         <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
                           Fuel: {bus.fuelLevel || 100}%
@@ -685,7 +769,9 @@ const Dashboard = () => {
                           borderRadius: '8px',
                           fontSize: '13px',
                           cursor: 'pointer',
-                          transition: 'all 0.3s ease'
+                          transition: 'all 0.3s ease',
+                          borderLeft: alert.severity === 'high' ? '4px solid #f44336' : 
+                                      alert.severity === 'medium' ? '4px solid #FF9800' : '4px solid #2196F3'
                         }}
                         onClick={() => bus && handleBusSelect(bus)}
                         onMouseEnter={(e) => e.currentTarget.style.transform = 'translateX(5px)'}
@@ -706,7 +792,7 @@ const Dashboard = () => {
                             alignItems: 'center',
                             gap: '5px'
                           }}>
-                            <span>🚌 {bus.busNumber}</span>
+                            <span>🚌 {bus.busNumber || bus.registrationNumber}</span>
                             <span>•</span>
                             <span>{bus.driverName || 'Unknown driver'}</span>
                           </div>
@@ -802,10 +888,26 @@ const Dashboard = () => {
               🚌 Manage Transport
             </button>
             <button
-              onClick={() => navigate('/attendance')}
+              onClick={() => navigate('/students/transport')}
               style={{
                 padding: '10px 20px',
                 background: '#4CAF50',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px'
+              }}
+            >
+              🎓 Transport Students
+            </button>
+            <button
+              onClick={() => navigate('/attendance')}
+              style={{
+                padding: '10px 20px',
+                background: '#FF9800',
                 color: 'white',
                 border: 'none',
                 borderRadius: '6px',
@@ -821,7 +923,7 @@ const Dashboard = () => {
               onClick={() => navigate('/reports')}
               style={{
                 padding: '10px 20px',
-                background: '#FF9800',
+                background: '#9C27B0',
                 color: 'white',
                 border: 'none',
                 borderRadius: '6px',

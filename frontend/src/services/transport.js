@@ -9,10 +9,31 @@ export const transportService = {
   getBuses: async () => {
     try {
       const response = await api.get('/buses');
-      return response.data;
+      return response.data?.data || response.data || [];
     } catch (error) {
       console.error('Error fetching buses:', error);
       return [];
+    }
+  },
+
+  // Get bus statistics summary (NEW)
+  getBusStats: async () => {
+    try {
+      const response = await api.get('/buses/stats/summary');
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching bus stats:', error);
+      return { 
+        success: false, 
+        data: { 
+          total: 0, 
+          active: 0, 
+          onTrip: 0, 
+          maintenance: 0,
+          byCampus: [],
+          byStatus: []
+        } 
+      };
     }
   },
 
@@ -20,7 +41,7 @@ export const transportService = {
   getActiveBuses: async () => {
     try {
       const response = await api.get('/buses/active');
-      return response.data;
+      return response.data?.data || response.data || [];
     } catch (error) {
       console.error('Error fetching active buses:', error);
       return [];
@@ -31,7 +52,7 @@ export const transportService = {
   getBusById: async (id) => {
     try {
       const response = await api.get(`/buses/${id}`);
-      return response.data;
+      return response.data?.data || response.data || null;
     } catch (error) {
       console.error('Error fetching bus:', error);
       return null;
@@ -90,7 +111,7 @@ export const transportService = {
   getLiveLocations: async () => {
     try {
       const response = await api.get('/gps/live');
-      return response.data.data || response.data;
+      return response.data?.data || response.data || [];
     } catch (error) {
       console.error('Error fetching live locations:', error);
       return [];
@@ -101,7 +122,7 @@ export const transportService = {
   getRecentLogs: async (vehicleId, limit = 50) => {
     try {
       const response = await api.get(`/gps/recent/${vehicleId}?limit=${limit}`);
-      return response.data.data || response.data;
+      return response.data?.data || response.data || [];
     } catch (error) {
       console.error('Error fetching recent logs:', error);
       return [];
@@ -116,10 +137,10 @@ export const transportService = {
       if (endDate) params.endDate = endDate;
       
       const response = await api.get(`/gps/history/${vehicleId}`, { params });
-      return response.data.data || response.data;
+      return response.data?.data || response.data || { logs: [], stats: {} };
     } catch (error) {
       console.error('Error fetching vehicle history:', error);
-      return [];
+      return { logs: [], stats: {} };
     }
   },
 
@@ -127,7 +148,7 @@ export const transportService = {
   getTripGPSLogs: async (tripId, limit = 100) => {
     try {
       const response = await api.get(`/gps/trip/${tripId}?limit=${limit}`);
-      return response.data.data || response.data;
+      return response.data?.data || response.data || [];
     } catch (error) {
       console.error('Error fetching trip GPS logs:', error);
       return [];
@@ -138,14 +159,21 @@ export const transportService = {
   getGPSStats: async () => {
     try {
       const response = await api.get('/gps/stats/summary');
-      return response.data.data || response.data;
+      return response.data?.data || response.data || {
+        totalLogsToday: 0,
+        activeVehiclesCount: 0,
+        activeVehicles: [],
+        recentSpeedViolations: 0,
+        totalDistanceToday: 0
+      };
     } catch (error) {
       console.error('Error fetching GPS stats:', error);
       return {
         totalLogsToday: 0,
         activeVehiclesCount: 0,
         activeVehicles: [],
-        recentSpeedViolations: 0
+        recentSpeedViolations: 0,
+        totalDistanceToday: 0
       };
     }
   },
@@ -153,10 +181,10 @@ export const transportService = {
   // Update bus location (for testing/drivers)
   updateLocation: async (busId, lat, lng, speed, heading, fuelLevel) => {
     try {
-      const response = await api.post('/gps/update', {
-        busId,
+      const response = await api.post('/gps', {
+        vehicleId: busId,
         lat,
-        lng,
+        lon: lng,
         speed,
         heading,
         fuelLevel
@@ -176,7 +204,7 @@ export const transportService = {
   getGeofences: async () => {
     try {
       const response = await api.get('/geofences');
-      return response.data.data || response.data;
+      return response.data?.data || response.data || [];
     } catch (error) {
       console.error('Error fetching geofences:', error);
       return [];
@@ -187,7 +215,7 @@ export const transportService = {
   getGeofenceByRoute: async (routeName) => {
     try {
       const response = await api.get(`/geofences/route/${routeName}`);
-      return response.data.data || response.data;
+      return response.data?.data || response.data || null;
     } catch (error) {
       console.error('Error fetching geofence:', error);
       return null;
@@ -198,7 +226,7 @@ export const transportService = {
   getGeofenceById: async (id) => {
     try {
       const response = await api.get(`/geofences/${id}`);
-      return response.data.data || response.data;
+      return response.data?.data || response.data || null;
     } catch (error) {
       console.error('Error fetching geofence:', error);
       return null;
@@ -257,7 +285,7 @@ export const transportService = {
   getTrips: async () => {
     try {
       const response = await api.get('/trips');
-      return response.data;
+      return response.data?.data || response.data || [];
     } catch (error) {
       console.error('Error fetching trips:', error);
       return [];
@@ -268,10 +296,21 @@ export const transportService = {
   getActiveTrips: async () => {
     try {
       const response = await api.get('/trips/active');
-      return response.data;
+      return response.data?.data || response.data || [];
     } catch (error) {
       console.error('Error fetching active trips:', error);
       return [];
+    }
+  },
+
+  // Get today's trips (NEW)
+  getTodayTrips: async () => {
+    try {
+      const response = await api.get('/trips/today/all');
+      return response.data || { count: 0, data: [] };
+    } catch (error) {
+      console.error('Error fetching today\'s trips:', error);
+      return { count: 0, data: [] };
     }
   },
 
@@ -279,7 +318,7 @@ export const transportService = {
   getTripById: async (id) => {
     try {
       const response = await api.get(`/trips/${id}`);
-      return response.data;
+      return response.data?.data || response.data || null;
     } catch (error) {
       console.error('Error fetching trip:', error);
       return null;
@@ -297,6 +336,28 @@ export const transportService = {
     }
   },
 
+  // Update trip
+  updateTrip: async (id, tripData) => {
+    try {
+      const response = await api.put(`/trips/${id}`, tripData);
+      return response.data;
+    } catch (error) {
+      console.error('Error updating trip:', error);
+      throw error;
+    }
+  },
+
+  // Start trip
+  startTrip: async (id) => {
+    try {
+      const response = await api.patch(`/trips/${id}/start`);
+      return response.data;
+    } catch (error) {
+      console.error('Error starting trip:', error);
+      throw error;
+    }
+  },
+
   // End trip
   endTrip: async (id) => {
     try {
@@ -304,6 +365,17 @@ export const transportService = {
       return response.data;
     } catch (error) {
       console.error('Error ending trip:', error);
+      throw error;
+    }
+  },
+
+  // Delete trip
+  deleteTrip: async (id) => {
+    try {
+      const response = await api.delete(`/trips/${id}`);
+      return response.data;
+    } catch (error) {
+      console.error('Error deleting trip:', error);
       throw error;
     }
   },
@@ -320,7 +392,7 @@ export const transportService = {
       if (endDate) params.endDate = endDate;
       
       const response = await api.get('/analytics/route-efficiency', { params });
-      return response.data;
+      return response.data || [];
     } catch (error) {
       console.error('Error fetching route efficiency:', error);
       return [];
@@ -335,7 +407,7 @@ export const transportService = {
       if (endDate) params.endDate = endDate;
       
       const response = await api.get('/analytics/speed-violations', { params });
-      return response.data;
+      return response.data || [];
     } catch (error) {
       console.error('Error fetching speed violations:', error);
       return [];

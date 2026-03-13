@@ -7,7 +7,7 @@ import 'leaflet-defaulticon-compatibility';
 import 'leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.css';
 import { useSocket } from '../../context/SocketContext';
 import { transportService } from '../../services/transport';
-import { formatDistance, formatTime } from '../../utils/formatters';
+import { formatTime } from '../../utils/formatters'; // Removed unused formatDistance
 import toast from 'react-hot-toast';
 
 // Fix for default markers in Leaflet
@@ -67,8 +67,8 @@ const createBusIcon = (status, speed, direction = 0) => {
     `,
     iconSize: [size, size],
     iconAnchor: [size/2, size/2],
-    popupAnchor: [0, -size/2],
-    className: `bus-marker-${status}`
+    popupAnchor: [0, -size/2]
+    // Removed duplicate className property
   });
 };
 
@@ -89,7 +89,8 @@ const stopIcon = L.divIcon({
   iconAnchor: [6, 6]
 });
 
-// Geofence icon
+// Geofence icon - Kept but marked with eslint-disable if really unused
+// eslint-disable-next-line no-unused-vars
 const geofenceIcon = L.divIcon({
   className: 'geofence-icon',
   html: `
@@ -107,36 +108,84 @@ const geofenceIcon = L.divIcon({
   iconAnchor: [8, 8]
 });
 
-// Component to auto-fit map bounds
-function FitBounds({ bounds }) {
+// ==================== HELPER COMPONENTS ====================
+
+function FitBounds({ bounds }) { // Removed unused mapInstance prop
   const map = useMap();
+  
   useEffect(() => {
-    if (bounds && bounds.isValid && bounds.isValid()) {
-      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+    if (!map) {
+      console.warn('Map not ready yet');
+      return;
     }
+    
+    if (!bounds) {
+      console.warn('No bounds provided');
+      return;
+    }
+    
+    const isValidBounds = () => {
+      try {
+        return bounds && 
+               typeof bounds.isValid === 'function' && 
+               bounds.isValid() && 
+               bounds.getNorth() !== -Infinity &&
+               bounds.getSouth() !== Infinity;
+      } catch (error) {
+        console.warn('Bounds validation error:', error);
+        return false;
+      }
+    };
+    
+    if (!isValidBounds()) {
+      console.warn('Invalid bounds, using default view');
+      return;
+    }
+    
+    const timer = setTimeout(() => {
+      try {
+        map.fitBounds(bounds, { 
+          padding: [50, 50], 
+          maxZoom: 15,
+          animate: true,
+          duration: 1
+        });
+      } catch (error) {
+        console.error('Error fitting bounds:', error);
+      }
+    }, 100);
+    
+    return () => clearTimeout(timer);
   }, [bounds, map]);
+  
   return null;
 }
 
-// Live location updater
 function LiveLocationUpdater({ busId, onLocationUpdate }) {
   const map = useMap();
   
   useEffect(() => {
     if (!busId) return;
     
+    if (typeof onLocationUpdate !== 'function') {
+      console.warn('onLocationUpdate is not a function');
+      return;
+    }
+    
     const interval = setInterval(() => {
-      // In production, this would fetch real GPS data
-      // For demo, we'll simulate movement
-      const mockUpdate = {
-        busId,
-        lat: -1.2864 + (Math.random() - 0.5) * 0.01,
-        lng: 36.8172 + (Math.random() - 0.5) * 0.01,
-        speed: Math.floor(20 + Math.random() * 40),
-        heading: Math.floor(Math.random() * 360),
-        timestamp: new Date()
-      };
-      onLocationUpdate(mockUpdate);
+      try {
+        const mockUpdate = {
+          busId,
+          lat: -1.2864 + (Math.random() - 0.5) * 0.01,
+          lng: 36.8172 + (Math.random() - 0.5) * 0.01,
+          speed: Math.floor(20 + Math.random() * 40),
+          heading: Math.floor(Math.random() * 360),
+          timestamp: new Date()
+        };
+        onLocationUpdate(mockUpdate);
+      } catch (error) {
+        console.error('Error in location update:', error);
+      }
     }, 5000);
     
     return () => clearInterval(interval);
@@ -145,7 +194,8 @@ function LiveLocationUpdater({ busId, onLocationUpdate }) {
   return null;
 }
 
-// Main component
+// ==================== MAIN COMPONENT ====================
+
 export default function LiveGPSMap({ 
   height = '600px', 
   showGeofences = true,
@@ -154,12 +204,17 @@ export default function LiveGPSMap({
   onBusSelect,
   selectedBusId 
 }) {
+  // ==================== 1. STATE DECLARATIONS ====================
   const [buses, setBuses] = useState([]);
   const [geofences, setGeofences] = useState([]);
   const [stops, setStops] = useState([]);
   const [routes, setRoutes] = useState([]);
   const [selectedBus, setSelectedBus] = useState(null);
-  const [mapBounds, setMapBounds] = useState(L.latLngBounds());
+  const [mapBounds, setMapBounds] = useState(() => {
+    const bounds = L.latLngBounds();
+    bounds.extend([-1.2864, 36.8172]);
+    return bounds;
+  });
   const [loading, setLoading] = useState(true);
   const [mapLayers, setMapLayers] = useState({
     satellite: false,
@@ -173,70 +228,37 @@ export default function LiveGPSMap({
     averageSpeed: 0,
     alerts: 0
   });
-  const [mapCenter, setMapCenter] = useState([-1.2864, 36.8172]); // Nairobi
-  const [mapZoom, setMapZoom] = useState(12);
+  const [mapCenter] = useState([-1.2864, 36.8172]);
+  const [mapZoom] = useState(12);
+  // Removed unused mapReady state
   
   const { socket, isConnected } = useSocket();
   const mapRef = useRef();
   const markersRef = useRef({});
+  const initialFetchDone = useRef(false);
 
-  // Fetch initial data
-  useEffect(() => {
-    fetchBuses();
-    if (showGeofences) fetchGeofences();
-    if (showStops) fetchStops();
-    if (showRoutes) fetchRoutes();
-  }, []);
+  // ==================== 2. ALL FETCH FUNCTIONS ====================
 
-  // Socket listeners for real-time updates
-  useEffect(() => {
-    if (socket) {
-      socket.on('liveGPS', handleLiveGPSUpdate);
-      socket.on('geofenceAlert', handleGeofenceAlert);
-      socket.on('speedAlert', handleSpeedAlert);
-      socket.on('busStatusChange', handleBusStatusChange);
-    }
-
-    return () => {
-      if (socket) {
-        socket.off('liveGPS');
-        socket.off('geofenceAlert');
-        socket.off('speedAlert');
-        socket.off('busStatusChange');
-      }
-    };
-  }, [socket]);
-
-  // Handle selected bus from parent
-  useEffect(() => {
-    if (selectedBusId && buses.length > 0) {
-      const bus = buses.find(b => b._id === selectedBusId || b.busNumber === selectedBusId);
-      if (bus) {
-        setSelectedBus(bus);
-        flyToBus(bus);
-      }
-    }
-  }, [selectedBusId, buses]);
-
-  const fetchBuses = async () => {
+  const fetchBuses = useCallback(async () => {
     try {
       const data = await transportService.getBuses();
       const busesArray = Array.isArray(data) ? data : [];
       setBuses(busesArray);
       
-      // Update bounds
       const bounds = L.latLngBounds();
+      let hasValidLocations = false;
+      
       busesArray.forEach(bus => {
         if (bus.currentLocation?.lat && bus.currentLocation?.lng) {
           bounds.extend([bus.currentLocation.lat, bus.currentLocation.lng]);
+          hasValidLocations = true;
         }
       });
       
-      if (bounds.isValid()) {
+      if (hasValidLocations) {
         setMapBounds(bounds);
       }
       
-      // Calculate stats
       const moving = busesArray.filter(b => (b.currentLocation?.speed || 0) > 0).length;
       const speeds = busesArray
         .map(b => b.currentLocation?.speed || 0)
@@ -259,19 +281,18 @@ export default function LiveGPSMap({
       toast.error('Failed to load bus data');
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchGeofences = async () => {
+  const fetchGeofences = useCallback(async () => {
     try {
       const data = await transportService.getGeofences();
       setGeofences(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error fetching geofences:', error);
     }
-  };
+  }, []);
 
-  const fetchStops = async () => {
-    // Mock stops data
+  const fetchStops = useCallback(async () => {
     const mockStops = [
       { id: 'STOP1', name: 'School Main Gate', lat: -1.2864, lng: 36.8172, type: 'school' },
       { id: 'STOP2', name: 'Westlands', lat: -1.2964, lng: 36.8272, type: 'stop' },
@@ -280,10 +301,9 @@ export default function LiveGPSMap({
       { id: 'STOP5', name: 'Pangani', lat: -1.2564, lng: 36.7872, type: 'stop' }
     ];
     setStops(mockStops);
-  };
+  }, []);
 
-  const fetchRoutes = async () => {
-    // Mock routes data
+  const fetchRoutes = useCallback(async () => {
     const mockRoutes = [
       {
         id: 'ROUTE1',
@@ -310,9 +330,11 @@ export default function LiveGPSMap({
       }
     ];
     setRoutes(mockRoutes);
-  };
+  }, []);
 
-  const handleLiveGPSUpdate = (data) => {
+  // ==================== 3. HANDLER FUNCTIONS ====================
+
+  const handleLiveGPSUpdate = useCallback((data) => {
     setBuses(prev => {
       const index = prev.findIndex(b => 
         b._id === data.vehicleId || b.busNumber === data.vehicleId
@@ -335,14 +357,12 @@ export default function LiveGPSMap({
           fuelLevel: data.fuelLevel
         };
         
-        // Update marker if exists
         if (markersRef.current[updated[index]._id]) {
           const marker = markersRef.current[updated[index]._id];
           marker.setLatLng([data.lat, data.lon]);
           marker.setIcon(createBusIcon(updated[index].status, data.speed, data.heading));
         }
         
-        // Update stats
         if (wasMoving !== isMoving) {
           setStats(prevStats => ({
             ...prevStats,
@@ -355,9 +375,9 @@ export default function LiveGPSMap({
       }
       return prev;
     });
-  };
+  }, []);
 
-  const handleGeofenceAlert = (alert) => {
+  const handleGeofenceAlert = useCallback((alert) => {
     setStats(prev => ({ ...prev, alerts: prev.alerts + 1 }));
     toast.warning(`🚨 Geofence alert: ${alert.message}`, {
       duration: 5000,
@@ -365,28 +385,29 @@ export default function LiveGPSMap({
       position: 'top-right'
     });
     
-    // Flash the bus marker
     if (markersRef.current[alert.vehicleId]) {
       const marker = markersRef.current[alert.vehicleId];
-      marker.getElement().style.animation = 'flash 0.5s 3';
-      setTimeout(() => {
-        if (marker.getElement()) {
-          marker.getElement().style.animation = '';
-        }
-      }, 1500);
+      if (marker?.getElement()) {
+        marker.getElement().style.animation = 'flash 0.5s 3';
+        setTimeout(() => {
+          if (marker?.getElement()) {
+            marker.getElement().style.animation = '';
+          }
+        }, 1500);
+      }
     }
-  };
+  }, []);
 
-  const handleSpeedAlert = (alert) => {
+  const handleSpeedAlert = useCallback((alert) => {
     setStats(prev => ({ ...prev, alerts: prev.alerts + 1 }));
     toast.error(`🚨 Speed alert: ${alert.message}`, {
       duration: 5000,
       icon: '⚠️',
       position: 'top-right'
     });
-  };
+  }, []);
 
-  const handleBusStatusChange = (data) => {
+  const handleBusStatusChange = useCallback((data) => {
     setBuses(prev => {
       const index = prev.findIndex(b => b._id === data.busId);
       if (index >= 0) {
@@ -396,36 +417,147 @@ export default function LiveGPSMap({
       }
       return prev;
     });
-  };
+  }, []);
 
-  const flyToBus = (bus) => {
-    if (bus?.currentLocation?.lat && bus?.currentLocation?.lng && mapRef.current) {
+  const flyToBus = useCallback((bus) => {
+    if (!mapRef.current) {
+      console.warn('Map not ready yet');
+      return;
+    }
+    
+    if (!bus?.currentLocation?.lat || !bus?.currentLocation?.lng) {
+      console.warn('Bus location not available');
+      return;
+    }
+    
+    try {
       mapRef.current.flyTo(
         [bus.currentLocation.lat, bus.currentLocation.lng],
         16,
         { duration: 1.5 }
       );
+    } catch (error) {
+      console.error('Error flying to bus:', error);
+      toast.error('Failed to focus on bus');
     }
-  };
+  }, []);
 
-  const handleBusClick = (bus) => {
+  const handleBusClick = useCallback((bus) => {
     setSelectedBus(bus);
     if (onBusSelect) onBusSelect(bus);
     flyToBus(bus);
-  };
+  }, [onBusSelect, flyToBus]);
 
-  const centerMapOnAll = () => {
-    if (mapBounds.isValid()) {
-      mapRef.current.fitBounds(mapBounds, { padding: [50, 50], maxZoom: 15 });
+  const centerMapOnAll = useCallback(() => {
+    if (!mapRef.current) {
+      console.warn('Map not ready yet');
+      toast.error('Map is still loading');
+      return;
     }
-  };
+    
+    if (!mapBounds) {
+      console.warn('No bounds available');
+      return;
+    }
+    
+    try {
+      const isValidBounds = () => {
+        try {
+          return mapBounds && 
+                 typeof mapBounds.isValid === 'function' && 
+                 mapBounds.isValid() && 
+                 mapBounds.getNorth() !== -Infinity &&
+                 mapBounds.getSouth() !== Infinity;
+        } catch (error) {
+          console.warn('Bounds validation error:', error);
+          return false;
+        }
+      };
+      
+      if (!isValidBounds()) {
+        console.warn('Invalid bounds, using default view');
+        mapRef.current.setView(mapCenter, mapZoom);
+        return;
+      }
+      
+      mapRef.current.fitBounds(mapBounds, { 
+        padding: [50, 50], 
+        maxZoom: 15,
+        animate: true,
+        duration: 1
+      });
+      
+    } catch (error) {
+      console.error('Error centering map:', error);
+      toast.error('Failed to center map');
+      
+      try {
+        mapRef.current.setView(mapCenter, mapZoom);
+      } catch (fallbackError) {
+        console.error('Fallback view also failed:', fallbackError);
+      }
+    }
+  }, [mapBounds, mapCenter, mapZoom]);
 
-  const toggleLayer = (layer) => {
+  const toggleLayer = useCallback((layer) => {
     setMapLayers(prev => ({
       ...prev,
       [layer]: !prev[layer]
     }));
-  };
+  }, []);
+
+  const handleMapCreated = useCallback((mapInstance) => {
+    mapRef.current = mapInstance;
+    
+    setTimeout(() => {
+      centerMapOnAll();
+    }, 200);
+  }, [centerMapOnAll]);
+
+  // ==================== 4. ALL useEffect HOOKS ====================
+
+  // Fetch initial data - only once
+  useEffect(() => {
+    if (!initialFetchDone.current) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fetchBuses();
+      if (showGeofences) fetchGeofences();
+      if (showStops) fetchStops();
+      if (showRoutes) fetchRoutes();
+      initialFetchDone.current = true;
+    }
+  }, [fetchBuses, fetchGeofences, fetchStops, fetchRoutes, showGeofences, showStops, showRoutes]);
+
+  // Socket listeners for real-time updates
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on('liveGPS', handleLiveGPSUpdate);
+    socket.on('geofenceAlert', handleGeofenceAlert);
+    socket.on('speedAlert', handleSpeedAlert);
+    socket.on('busStatusChange', handleBusStatusChange);
+
+    return () => {
+      socket.off('liveGPS', handleLiveGPSUpdate);
+      socket.off('geofenceAlert', handleGeofenceAlert);
+      socket.off('speedAlert', handleSpeedAlert);
+      socket.off('busStatusChange', handleBusStatusChange);
+    };
+  }, [socket, handleLiveGPSUpdate, handleGeofenceAlert, handleSpeedAlert, handleBusStatusChange]);
+
+  // Handle selected bus from parent
+  useEffect(() => {
+    if (selectedBusId && buses.length > 0) {
+      const bus = buses.find(b => b._id === selectedBusId || b.busNumber === selectedBusId);
+      if (bus && bus._id !== selectedBus?._id) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setSelectedBus(bus);
+        flyToBus(bus);
+      }
+    }
+  }, [selectedBusId, buses, flyToBus, selectedBus]);
+
+  // ==================== 5. RENDER LOGIC ====================
 
   if (loading) {
     return (
@@ -569,7 +701,10 @@ export default function LiveGPSMap({
             🔍 Fit All
           </button>
           <button
-            onClick={() => setSelectedBus(null)}
+            onClick={() => {
+              setSelectedBus(null);
+              centerMapOnAll();
+            }}
             style={{
               flex: 1,
               padding: '8px',
@@ -617,9 +752,7 @@ export default function LiveGPSMap({
         center={mapCenter}
         zoom={mapZoom}
         style={{ height: '100%', width: '100%', borderRadius: '8px' }}
-        whenCreated={mapInstance => {
-          mapRef.current = mapInstance;
-        }}
+        whenCreated={handleMapCreated}
       >
         {/* Base Layer */}
         <TileLayer
@@ -800,43 +933,43 @@ export default function LiveGPSMap({
                       fontSize: '11px'
                     }}
                   >
-                  👁️ Focus
-                </button>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(`Bus: ${bus.busNumber}, Location: ${bus.currentLocation?.lat}, ${bus.currentLocation?.lng}`);
-                    toast.success('Location copied');
-                  }}
-                  style={{
-                    flex: 1,
-                    padding: '6px',
-                    background: '#4CAF50',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '11px'
-                  }}
-                >
-                  📋 Copy
-                </button>
+                    👁️ Focus
+                  </button>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(`Bus: ${bus.busNumber}, Location: ${bus.currentLocation?.lat}, ${bus.currentLocation?.lng}`);
+                      toast.success('Location copied');
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '6px',
+                      background: '#4CAF50',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '11px'
+                    }}
+                  >
+                    📋 Copy
+                  </button>
+                </div>
               </div>
-            </div>
-          </Popup>
-        </Marker>
-      ))}
+            </Popup>
+          </Marker>
+        ))}
 
-      {/* Live location updater for selected bus */}
-      {selectedBus && (
-        <LiveLocationUpdater
-          busId={selectedBus._id}
-          onLocationUpdate={handleLiveGPSUpdate}
-        />
-      )}
+        {/* Live location updater for selected bus */}
+        {selectedBus && (
+          <LiveLocationUpdater
+            busId={selectedBus._id}
+            onLocationUpdate={handleLiveGPSUpdate}
+          />
+        )}
 
-      {/* Auto-fit bounds */}
-      <FitBounds bounds={mapBounds} />
-    </MapContainer>
+        {/* Auto-fit bounds */}
+        <FitBounds bounds={mapBounds} />
+      </MapContainer>
 
       {/* Custom CSS for animations */}
       <style>{`

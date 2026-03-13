@@ -4,6 +4,8 @@ const Geofence = require('../models/Geofence');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const roleMiddleware = require('../middleware/roleMiddleware');
 
+// ==================== STANDARD ENDPOINTS (Singular) ====================
+
 // Get all geofences
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -224,6 +226,26 @@ router.post('/check', authMiddleware, async (req, res) => {
     
   } catch (error) {
     console.error('Error checking geofence:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// ==================== ALIAS FOR PLURAL ENDPOINT (FIXES THE 400 ERROR) ====================
+
+// Alias for /geofences (plural) to match frontend expectations
+router.get('/geofences', authMiddleware, async (req, res) => {
+  try {
+    const geofences = await Geofence.find();
+    res.json({
+      success: true,
+      count: geofences.length,
+      data: geofences
+    });
+  } catch (error) {
+    console.error('Error fetching geofences:', error);
     res.status(500).json({ 
       success: false, 
       error: error.message 

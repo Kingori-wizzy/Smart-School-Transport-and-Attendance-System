@@ -78,6 +78,8 @@ app.use('/api/sms', smsRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/transport', transportRoutes);
+app.use('/api/assignments', require('./routes/assignmentRoutes'));
+app.use('/api/routes', require('./routes/routeRoutes'));
 // Health check route
 app.get('/api/health', (req, res) => {
   res.status(200).json({ 

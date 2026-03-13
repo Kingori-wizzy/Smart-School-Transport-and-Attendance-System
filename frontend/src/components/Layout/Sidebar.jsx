@@ -10,6 +10,8 @@ export default function Sidebar() {
     { path: '/', icon: '🏠', label: 'Dashboard' },
     { path: '/attendance', icon: '📝', label: 'Attendance' },
     { path: '/transport', icon: '🚌', label: 'Transport' },
+    // ✅ NEW MENU ITEM - Transport Students
+    { path: '/students/transport', icon: '🎓', label: 'Transport Students' },
     { path: '/analytics', icon: '📊', label: 'Analytics' },
     { path: '/reports', icon: '📑', label: 'Reports' },
     { path: '/settings', icon: '⚙️', label: 'Settings' }

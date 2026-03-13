@@ -1,5 +1,7 @@
-import React, { createContext, useState, useContext } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
 import api from '../services/api';
+import { useOffline } from '../hooks/useOffline';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const TripContext = createContext({});
 
@@ -8,7 +10,34 @@ export const useTrip = () => useContext(TripContext);
 export const TripProvider = ({ children }) => {
   const [activeTrip, setActiveTrip] = useState(null);
   const [tripHistory, setTripHistory] = useState([]);
+  const [todayTrips, setTodayTrips] = useState([]);
+  const [tripStudents, setTripStudents] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [scannedStudents, setScannedStudents] = useState({});
+  
+  const { isOnline, queueOperation } = useOffline();
+
+  // Load cached data on mount
+  useEffect(() => {
+    loadCachedData();
+  }, []);
+
+  const loadCachedData = async () => {
+    try {
+      const cached = await AsyncStorage.getItem('@driver_trips');
+      if (cached) {
+        setTodayTrips(JSON.parse(cached));
+      }
+      
+      const cachedScans = await AsyncStorage.getItem('@driver_scans');
+      if (cachedScans) {
+        setScannedStudents(JSON.parse(cachedScans));
+      }
+    } catch (error) {
+      console.error('Error loading cached data:', error);
+    }
+  };
 
   const loadTripHistory = async () => {
     try {
@@ -22,23 +51,156 @@ export const TripProvider = ({ children }) => {
     }
   };
 
+  const fetchTodayTrips = async () => {
+    try {
+      setLoading(true);
+      
+      if (!isOnline) {
+        // Use cached data if offline
+        const cached = await AsyncStorage.getItem('@driver_trips');
+        if (cached) {
+          setTodayTrips(JSON.parse(cached));
+        }
+        setLoading(false);
+        return;
+      }
+
+      const response = await api.get('/driver/trips/today');
+      
+      if (response.data.success) {
+        const trips = response.data.trips || [];
+        setTodayTrips(trips);
+        
+        // Cache the trips
+        await AsyncStorage.setItem('@driver_trips', JSON.stringify(trips));
+        
+        // If there's an active trip, load its students
+        const active = trips.find(t => t.status === 'ongoing');
+        if (active) {
+          setActiveTrip(active);
+          await fetchTripStudents(active._id);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching today\'s trips:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchTripStudents = async (tripId) => {
+    try {
+      if (!isOnline) {
+        // Try to get cached students
+        const cached = await AsyncStorage.getItem(`@trip_students_${tripId}`);
+        if (cached) {
+          setTripStudents(JSON.parse(cached));
+        }
+        return;
+      }
+
+      const response = await api.get(`/attendance/driver/trip/${tripId}/students`);
+      
+      if (response.data.success) {
+        const students = response.data.data || [];
+        setTripStudents(students);
+        
+        // Cache the students
+        await AsyncStorage.setItem(`@trip_students_${tripId}`, JSON.stringify(students));
+        
+        // Load scanned status from cache
+        const scans = await AsyncStorage.getItem('@driver_scans');
+        if (scans) {
+          const scanMap = JSON.parse(scans);
+          setScannedStudents(scanMap[tripId] || {});
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching trip students:', error);
+    }
+  };
+
   const boardStudent = async (tripId, studentId, method = 'qr') => {
     try {
-      const response = await api.post(`/driver/trip/${tripId}/board/${studentId}`, {
+      const scanData = {
         method,
         timestamp: new Date().toISOString(),
-      });
+        syncedFromOffline: !isOnline,
+        deviceId: await getDeviceId()
+      };
+
+      if (!isOnline) {
+        // Queue for later
+        await queueOperation({
+          type: 'board_student',
+          method: 'POST',
+          url: `/attendance/driver/trip/${tripId}/board/${studentId}`,
+          data: scanData
+        });
+        
+        // Optimistic update
+        const key = `${tripId}_${studentId}`;
+        const updatedScans = {
+          ...scannedStudents,
+          [key]: {
+            scanned: true,
+            type: 'boarding',
+            timestamp: new Date(),
+            offline: true
+          }
+        };
+        
+        setScannedStudents(updatedScans);
+        
+        // Save to storage
+        const scanMap = {};
+        scanMap[tripId] = updatedScans;
+        await AsyncStorage.setItem('@driver_scans', JSON.stringify(scanMap));
+        
+        // Update trip students list
+        setTripStudents(prev => prev.map(s => 
+          s._id === studentId ? { ...s, status: 'boarded' } : s
+        ));
+        
+        return { success: true, offline: true };
+      }
+
+      const response = await api.post(`/driver/trip/${tripId}/board/${studentId}`, scanData);
       
       // Update active trip if needed
-      if (activeTrip && activeTrip.id === tripId) {
+      if (activeTrip && activeTrip._id === tripId) {
         setActiveTrip(prev => ({
           ...prev,
           boardedStudents: [...(prev.boardedStudents || []), studentId]
         }));
       }
       
+      // Update local state
+      const key = `${tripId}_${studentId}`;
+      const updatedScans = {
+        ...scannedStudents,
+        [key]: {
+          scanned: true,
+          type: 'boarding',
+          timestamp: new Date()
+        }
+      };
+      
+      setScannedStudents(updatedScans);
+      
+      // Save to storage
+      const scanMap = {};
+      scanMap[tripId] = updatedScans;
+      await AsyncStorage.setItem('@driver_scans', JSON.stringify(scanMap));
+      
+      // Update trip students list
+      setTripStudents(prev => prev.map(s => 
+        s._id === studentId ? { ...s, status: 'boarded', boardedAt: new Date() } : s
+      ));
+      
       return { success: true, data: response.data };
     } catch (error) {
+      console.error('Error boarding student:', error);
       return {
         success: false,
         message: error.response?.data?.message || 'Failed to board student',
@@ -46,11 +208,169 @@ export const TripProvider = ({ children }) => {
     }
   };
 
+  const alightStudent = async (tripId, studentId, method = 'qr') => {
+    try {
+      const scanData = {
+        method,
+        timestamp: new Date().toISOString(),
+        syncedFromOffline: !isOnline,
+        deviceId: await getDeviceId()
+      };
+
+      if (!isOnline) {
+        // Queue for later
+        await queueOperation({
+          type: 'alight_student',
+          method: 'POST',
+          url: `/attendance/driver/trip/${tripId}/alight/${studentId}`,
+          data: scanData
+        });
+        
+        // Optimistic update
+        const key = `${tripId}_${studentId}`;
+        const updatedScans = {
+          ...scannedStudents,
+          [key]: {
+            scanned: true,
+            type: 'alighting',
+            timestamp: new Date(),
+            offline: true
+          }
+        };
+        
+        setScannedStudents(updatedScans);
+        
+        // Save to storage
+        const scanMap = {};
+        scanMap[tripId] = updatedScans;
+        await AsyncStorage.setItem('@driver_scans', JSON.stringify(scanMap));
+        
+        // Update trip students list
+        setTripStudents(prev => prev.map(s => 
+          s._id === studentId ? { ...s, status: 'alighted' } : s
+        ));
+        
+        return { success: true, offline: true };
+      }
+
+      const response = await api.post(`/driver/trip/${tripId}/alight/${studentId}`, scanData);
+      
+      // Update local state
+      const key = `${tripId}_${studentId}`;
+      const updatedScans = {
+        ...scannedStudents,
+        [key]: {
+          scanned: true,
+          type: 'alighting',
+          timestamp: new Date()
+        }
+      };
+      
+      setScannedStudents(updatedScans);
+      
+      // Save to storage
+      const scanMap = {};
+      scanMap[tripId] = updatedScans;
+      await AsyncStorage.setItem('@driver_scans', JSON.stringify(scanMap));
+      
+      // Update trip students list
+      setTripStudents(prev => prev.map(s => 
+        s._id === studentId ? { ...s, status: 'alighted', alightedAt: new Date() } : s
+      ));
+      
+      return { success: true, data: response.data };
+    } catch (error) {
+      console.error('Error alighting student:', error);
+      return {
+        success: false,
+        message: error.response?.data?.message || 'Failed to alight student',
+      };
+    }
+  };
+
+  const startTrip = async (tripId) => {
+    try {
+      if (!isOnline) {
+        await queueOperation({
+          type: 'start_trip',
+          method: 'POST',
+          url: `/driver/trips/${tripId}/start`,
+          data: { timestamp: new Date().toISOString() }
+        });
+        
+        // Optimistic update
+        const updatedTrips = todayTrips.map(t => 
+          t._id === tripId ? { ...t, status: 'ongoing' } : t
+        );
+        setTodayTrips(updatedTrips);
+        setActiveTrip(updatedTrips.find(t => t._id === tripId));
+        await AsyncStorage.setItem('@driver_trips', JSON.stringify(updatedTrips));
+        
+        return { success: true, offline: true };
+      }
+
+      const response = await api.post(`/driver/trips/${tripId}/start`);
+      
+      if (response.data.success) {
+        await fetchTodayTrips();
+        return { success: true };
+      }
+    } catch (error) {
+      console.error('Error starting trip:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
+  const endTrip = async (tripId) => {
+    try {
+      if (!isOnline) {
+        await queueOperation({
+          type: 'end_trip',
+          method: 'POST',
+          url: `/driver/trips/${tripId}/end`,
+          data: { timestamp: new Date().toISOString() }
+        });
+        
+        // Optimistic update
+        const updatedTrips = todayTrips.map(t => 
+          t._id === tripId ? { ...t, status: 'completed' } : t
+        );
+        setTodayTrips(updatedTrips);
+        setActiveTrip(null);
+        await AsyncStorage.setItem('@driver_trips', JSON.stringify(updatedTrips));
+        
+        return { success: true, offline: true };
+      }
+
+      const response = await api.post(`/driver/trips/${tripId}/end`);
+      
+      if (response.data.success) {
+        await fetchTodayTrips();
+        setActiveTrip(null);
+        return { success: true };
+      }
+    } catch (error) {
+      console.error('Error ending trip:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
   const reportIncident = async (tripId, reportData) => {
     try {
+      if (!isOnline) {
+        await queueOperation({
+          type: 'report_incident',
+          method: 'POST',
+          url: `/driver/trip/${tripId}/incident`,
+          data: reportData
+        });
+        return { success: true, offline: true };
+      }
+
       const response = await api.post(`/driver/trip/${tripId}/incident`, reportData);
       return { success: true, data: response.data };
     } catch (error) {
+      console.error('Error reporting incident:', error);
       return {
         success: false,
         message: error.response?.data?.message || 'Failed to report incident',
@@ -60,6 +380,23 @@ export const TripProvider = ({ children }) => {
 
   const updateLocation = async (tripId, location) => {
     try {
+      if (!isOnline) {
+        await queueOperation({
+          type: 'update_location',
+          method: 'POST',
+          url: '/driver/gps/update',
+          data: {
+            tripId,
+            lat: location.latitude,
+            lon: location.longitude,
+            speed: location.speed || 0,
+            heading: location.heading || 0,
+            timestamp: new Date().toISOString()
+          }
+        });
+        return;
+      }
+
       await api.post('/driver/gps/update', {
         tripId,
         lat: location.latitude,
@@ -73,16 +410,55 @@ export const TripProvider = ({ children }) => {
     }
   };
 
+  const getDeviceId = async () => {
+    let deviceId = await AsyncStorage.getItem('@device_id');
+    if (!deviceId) {
+      deviceId = `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await AsyncStorage.setItem('@device_id', deviceId);
+    }
+    return deviceId;
+  };
+
+  const getStudentScanStatus = (tripId, studentId) => {
+    const key = `${tripId}_${studentId}`;
+    return scannedStudents[key] || null;
+  };
+
+  const refreshTrips = async () => {
+    setRefreshing(true);
+    await fetchTodayTrips();
+    setRefreshing(false);
+  };
+
+  const selectActiveTrip = (trip) => {
+    setActiveTrip(trip);
+    if (trip) {
+      fetchTripStudents(trip._id);
+    }
+  };
+
   return (
     <TripContext.Provider value={{
       activeTrip,
       tripHistory,
+      todayTrips,
+      tripStudents,
       loading,
+      refreshing,
+      scannedStudents,
       setActiveTrip,
       loadTripHistory,
+      fetchTodayTrips,
+      fetchTripStudents,
       boardStudent,
+      alightStudent,
+      startTrip,
+      endTrip,
       reportIncident,
       updateLocation,
+      getStudentScanStatus,
+      refreshTrips,
+      selectActiveTrip
     }}>
       {children}
     </TripContext.Provider>

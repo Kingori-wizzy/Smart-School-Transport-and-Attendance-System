@@ -1,5 +1,9 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
+const { body, validationResult } = require('express-validator');
+const axios = require('axios');
+
 const { authMiddleware } = require('../middleware/authMiddleware');
 const Student = require('../models/Student');
 const Attendance = require('../models/AttendanceRecord');
@@ -7,27 +11,67 @@ const Trip = require('../models/Trip');
 const Notification = require('../models/Notification');
 const Bus = require('../models/Bus');
 const GPSLog = require('../models/GPSLog');
+const paginate = require('../utils/pagination');
 
 // All routes require authentication
 router.use(authMiddleware);
 
-// 👨‍👩‍👧 Get parent's children
+// Validation rules for child creation
+const validateChild = [
+  body('name').notEmpty().withMessage('Name is required'),
+  body('studentId').notEmpty().withMessage('Student ID is required'),
+  body('class').notEmpty().withMessage('Class is required'),
+  body('age').optional().isInt({ min: 3, max: 25 }).withMessage('Age must be between 3 and 25'),
+  body('gender').optional().isIn(['Male', 'Female', 'Other']).withMessage('Invalid gender'),
+  body('emergencyPhone').optional().matches(/^\+?[\d\s-]{10,}$/).withMessage('Valid phone number required')
+];
+
+// 👨‍👩‍👧 Get parent's children (paginated)
 router.get('/children', async (req, res) => {
   try {
-    const children = await Student.find({ parentId: req.user.id })
-      .populate('busId', 'busNumber route driverName')
-      .select('-__v');
+    const { page, limit, skip } = paginate(req);
+    
+    const [children, total] = await Promise.all([
+      Student.find({ parentId: req.user.id })
+        .populate('busId', 'busNumber route driverName')
+        .select('-__v')
+        .skip(skip)
+        .limit(limit)
+        .sort('-createdAt'),
+      Student.countDocuments({ parentId: req.user.id })
+    ]);
 
-    res.json(children);
+    res.json({
+      success: true,
+      data: children,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
   } catch (error) {
     console.error('Error fetching children:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
 // ➕ Add a new child (for parent)
-router.post('/children', async (req, res) => {
+router.post('/children', validateChild, async (req, res) => {
   try {
+    // Check validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ 
+        success: false,
+        errors: errors.array() 
+      });
+    }
+
     const { 
       name,
       studentId,
@@ -44,7 +88,15 @@ router.post('/children', async (req, res) => {
     } = req.body;
 
     console.log('Adding child for parent:', req.user.id);
-    console.log('Child data received:', req.body);
+
+    // Check for duplicate admission number
+    const existing = await Student.findOne({ admissionNumber: studentId });
+    if (existing) {
+      return res.status(409).json({ 
+        success: false,
+        message: 'Student with this admission number already exists' 
+      });
+    }
 
     const nameParts = name.trim().split(' ');
     const firstName = nameParts[0] || '';
@@ -64,6 +116,7 @@ router.post('/children', async (req, res) => {
     const newStudent = new Student({
       firstName,
       lastName,
+      name: `${firstName} ${lastName}`.trim(),
       admissionNumber: studentId,
       classLevel,
       school,
@@ -78,25 +131,42 @@ router.post('/children', async (req, res) => {
       parentId: req.user.id,
       age: parseInt(age) || 0,
       gender: gender,
+      isActive: true,
+      usesTransport: !!busId // Set to true if bus assigned
     });
 
     await newStudent.save();
     
     await newStudent.populate('busId', 'busNumber route driverName');
     
-    console.log('Child added successfully:', newStudent);
+    console.log('✅ Child added successfully:', newStudent._id);
     
-    res.status(201).json(newStudent);
+    res.status(201).json({
+      success: true,
+      data: newStudent,
+      message: 'Child added successfully'
+    });
   } catch (error) {
-    console.error('Error adding child:', error);
-    res.status(500).json({ message: error.message });
+    console.error('❌ Error adding child:', error);
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
-// 📍 Get child's current location (via bus) - ✅ FIXED
+// 📍 Get child's current location (via bus)
 router.get('/children/:childId/location', async (req, res) => {
   try {
     const { childId } = req.params;
+
+    // Validate childId
+    if (!mongoose.Types.ObjectId.isValid(childId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid child ID format' 
+      });
+    }
 
     const student = await Student.findOne({ 
       _id: childId, 
@@ -104,18 +174,24 @@ router.get('/children/:childId/location', async (req, res) => {
     }).populate('busId');
 
     if (!student) {
-      return res.status(403).json({ message: 'Unauthorized' });
+      return res.status(403).json({ 
+        success: false,
+        message: 'Unauthorized' 
+      });
     }
 
     if (!student.busId) {
       return res.json({
-        childId: student._id,
-        childName: `${student.firstName} ${student.lastName}`,
-        busId: null,
-        busNumber: student.busNumber,
-        location: null,
-        route: student.routeName,
-        message: 'No bus assigned'
+        success: true,
+        data: {
+          childId: student._id,
+          childName: student.name || `${student.firstName} ${student.lastName}`.trim(),
+          busId: null,
+          busNumber: student.busNumber,
+          location: null,
+          route: student.routeName,
+          message: 'No bus assigned'
+        }
       });
     }
 
@@ -125,32 +201,41 @@ router.get('/children/:childId/location', async (req, res) => {
 
     if (!latestLocation) {
       return res.json({
-        childId: student._id,
-        childName: `${student.firstName} ${student.lastName}`,
-        busId: student.busId._id,
-        busNumber: student.busId.busNumber,
-        location: null,
-        route: student.busId.route,
-        message: 'No location data available'
+        success: true,
+        data: {
+          childId: student._id,
+          childName: student.name || `${student.firstName} ${student.lastName}`.trim(),
+          busId: student.busId._id,
+          busNumber: student.busId.busNumber,
+          location: null,
+          route: student.busId.route,
+          message: 'No location data available'
+        }
       });
     }
 
     res.json({
-      childId: student._id,
-      childName: `${student.firstName} ${student.lastName}`,
-      busId: student.busId._id,
-      busNumber: student.busId.busNumber,
-      location: {
-        lat: latestLocation.lat,
-        lng: latestLocation.lon,
-        speed: latestLocation.speed,
-        timestamp: latestLocation.createdAt
-      },
-      route: student.busId.route
+      success: true,
+      data: {
+        childId: student._id,
+        childName: student.name || `${student.firstName} ${student.lastName}`.trim(),
+        busId: student.busId._id,
+        busNumber: student.busId.busNumber,
+        location: {
+          lat: latestLocation.lat,
+          lng: latestLocation.lon,
+          speed: latestLocation.speed,
+          timestamp: latestLocation.createdAt
+        },
+        route: student.busId.route
+      }
     });
   } catch (error) {
     console.error('Error fetching location:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
@@ -160,50 +245,81 @@ router.get('/children/:childId/attendance', async (req, res) => {
     const { childId } = req.params;
     const { startDate, endDate, limit = 30 } = req.query;
 
+    // Validate childId
+    if (!mongoose.Types.ObjectId.isValid(childId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid child ID format' 
+      });
+    }
+
     const student = await Student.findOne({ 
       _id: childId, 
       parentId: req.user.id 
     });
     
     if (!student) {
-      return res.status(403).json({ message: 'Unauthorized access to child data' });
+      return res.status(403).json({ 
+        success: false,
+        message: 'Unauthorized access to child data' 
+      });
     }
 
     const query = { studentId: childId };
     if (startDate && endDate) {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return res.status(400).json({ 
+          success: false,
+          message: 'Invalid date format' 
+        });
+      }
+
       query.createdAt = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
+        $gte: start,
+        $lte: end
       };
     }
+
+    const parsedLimit = Math.min(parseInt(limit), 100);
 
     const attendance = await Attendance.find(query)
       .populate('tripId', 'routeName busId')
       .sort({ createdAt: -1 })
-      .limit(parseInt(limit));
+      .limit(parsedLimit);
 
     const stats = {
       total: attendance.length,
       present: attendance.filter(a => a.eventType === 'board').length,
-      absent: 0,
-      late: attendance.filter(a => a.eventType === 'late').length || 0,
-      attendanceRate: 0
+      absent: attendance.filter(a => a.eventType === 'absent').length,
+      late: attendance.filter(a => a.eventType === 'late').length,
+      attendanceRate: attendance.length > 0 
+        ? Math.round((attendance.filter(a => a.eventType === 'board').length / attendance.length) * 100) 
+        : 0
     };
 
     res.json({
-      attendance,
-      stats,
-      student: {
-        id: student._id,
-        name: `${student.firstName} ${student.lastName}`,
-        studentId: student.admissionNumber,
-        class: student.classLevel,
-        busNumber: student.busNumber
+      success: true,
+      data: {
+        attendance,
+        stats,
+        student: {
+          id: student._id,
+          name: student.name || `${student.firstName} ${student.lastName}`.trim(),
+          studentId: student.admissionNumber,
+          class: student.classLevel,
+          busNumber: student.busNumber
+        }
       }
     });
   } catch (error) {
     console.error('Error fetching attendance:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
@@ -212,22 +328,68 @@ router.get('/children/:childId/stats', async (req, res) => {
   try {
     const { childId } = req.params;
     
+    // Validate childId
+    if (!mongoose.Types.ObjectId.isValid(childId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid child ID format' 
+      });
+    }
+
     const student = await Student.findOne({ 
       _id: childId, 
       parentId: req.user.id 
     });
     
     if (!student) {
-      return res.status(403).json({ message: 'Unauthorized' });
+      return res.status(403).json({ 
+        success: false,
+        message: 'Unauthorized' 
+      });
     }
 
-    // You can calculate stats here or redirect to attendance stats
-    const attendanceStats = await fetch(`${req.protocol}://${req.get('host')}/api/attendance/child/${childId}/stats`);
+    // Forward to attendance stats endpoint
+    const protocol = req.protocol;
+    const host = req.get('host');
+    const attendanceStatsUrl = `${protocol}://${host}/api/attendance/child/${childId}/stats`;
     
-    res.json(attendanceStats);
+    try {
+      const response = await axios.get(attendanceStatsUrl, {
+        headers: {
+          'Authorization': req.headers.authorization
+        }
+      });
+      
+      return res.json(response.data);
+    } catch (forwardError) {
+      console.error('Error forwarding to attendance stats:', forwardError.message);
+      
+      // Fallback to basic stats
+      const attendance = await Attendance.find({ studentId: childId });
+      
+      const total = attendance.length;
+      const present = attendance.filter(a => a.eventType === 'board').length;
+      const late = attendance.filter(a => a.eventType === 'late').length;
+      const absent = total - present - late;
+
+      res.json({
+        success: true,
+        data: {
+          attendanceRate: total > 0 ? Math.round((present / total) * 100) : 0,
+          totalTrips: total,
+          lateArrivals: late,
+          present,
+          absent,
+          late
+        }
+      });
+    }
   } catch (error) {
     console.error('Error fetching child stats:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
@@ -235,7 +397,18 @@ router.get('/children/:childId/stats', async (req, res) => {
 router.get('/children/:childId/trips/recent', async (req, res) => {
   try {
     const { childId } = req.params;
-    const { limit = 5 } = req.query;
+    let { limit = 5 } = req.query;
+
+    // Validate childId
+    if (!mongoose.Types.ObjectId.isValid(childId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid child ID format' 
+      });
+    }
+
+    // Validate limit
+    limit = Math.min(parseInt(limit), 20);
 
     const student = await Student.findOne({ 
       _id: childId, 
@@ -243,73 +416,126 @@ router.get('/children/:childId/trips/recent', async (req, res) => {
     });
     
     if (!student) {
-      return res.status(403).json({ message: 'Unauthorized' });
+      return res.status(403).json({ 
+        success: false,
+        message: 'Unauthorized' 
+      });
     }
 
     const trips = await Trip.find({
-      busId: student.busId,
+      $or: [
+        { busId: student.busId },
+        { students: childId }
+      ],
       status: 'completed'
     })
-    .sort({ date: -1 })
-    .limit(parseInt(limit));
+    .sort({ date: -1, endTime: -1 })
+    .limit(limit);
 
-    res.json(trips);
+    res.json({
+      success: true,
+      data: trips
+    });
   } catch (error) {
     console.error('Error fetching trips:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
-// 🔔 Get parent's notifications
+// 🔔 Get parent's notifications (paginated)
 router.get('/notifications', async (req, res) => {
   try {
-    const { page = 1, limit = 20 } = req.query;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = paginate(req);
 
-    const notifications = await Notification.find({ 
-      userId: req.user.id,
-      userType: 'parent'
-    })
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(parseInt(limit));
+    const [notifications, total] = await Promise.all([
+      Notification.find({ 
+        userId: req.user.id,
+        userType: 'parent'
+      })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Notification.countDocuments({ 
+        userId: req.user.id,
+        userType: 'parent'
+      })
+    ]);
 
-    const total = await Notification.countDocuments({ 
+    const unreadCount = await Notification.countDocuments({
       userId: req.user.id,
-      userType: 'parent'
+      userType: 'parent',
+      read: false
     });
 
     res.json({
-      notifications,
+      success: true,
+      data: notifications,
       pagination: {
         total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit)
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+        unread: unreadCount
       }
     });
   } catch (error) {
     console.error('Error fetching notifications:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
 // ✅ Mark notification as read
 router.patch('/notifications/:id/read', async (req, res) => {
   try {
+    const { id } = req.params;
+
+    // Validate id
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid notification ID format' 
+      });
+    }
+
     const notification = await Notification.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user.id },
-      { read: true },
+      { _id: id, userId: req.user.id },
+      { read: true, readAt: new Date() },
       { new: true }
     );
 
     if (!notification) {
-      return res.status(404).json({ message: 'Notification not found' });
+      return res.status(404).json({ 
+        success: false,
+        message: 'Notification not found' 
+      });
     }
 
-    res.json({ success: true, notification });
+    // Get updated unread count
+    const unreadCount = await Notification.countDocuments({
+      userId: req.user.id,
+      userType: 'parent',
+      read: false
+    });
+
+    res.json({ 
+      success: true,
+      data: {
+        notification,
+        unreadCount
+      }
+    });
   } catch (error) {
     console.error('Error updating notification:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
@@ -318,13 +544,24 @@ router.get('/children/:childId/trips/upcoming', async (req, res) => {
   try {
     const { childId } = req.params;
 
+    // Validate childId
+    if (!mongoose.Types.ObjectId.isValid(childId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid child ID format' 
+      });
+    }
+
     const student = await Student.findOne({ 
       _id: childId, 
       parentId: req.user.id 
     });
 
     if (!student) {
-      return res.status(403).json({ message: 'Unauthorized' });
+      return res.status(403).json({ 
+        success: false,
+        message: 'Unauthorized' 
+      });
     }
 
     const now = new Date();
@@ -336,10 +573,188 @@ router.get('/children/:childId/trips/upcoming', async (req, res) => {
     .sort({ date: 1, startTime: 1 })
     .limit(5);
 
-    res.json(trips);
+    res.json({
+      success: true,
+      data: trips
+    });
   } catch (error) {
     console.error('Error fetching trips:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+});
+
+// 👤 Get single child details
+router.get('/children/:childId', async (req, res) => {
+  try {
+    const { childId } = req.params;
+
+    // Validate childId
+    if (!mongoose.Types.ObjectId.isValid(childId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid child ID format' 
+      });
+    }
+
+    const student = await Student.findOne({ 
+      _id: childId, 
+      parentId: req.user.id 
+    }).populate('busId', 'busNumber route driverName');
+
+    if (!student) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Child not found' 
+      });
+    }
+
+    res.json({
+      success: true,
+      data: student
+    });
+  } catch (error) {
+    console.error('Error fetching child:', error);
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+});
+
+// ✏️ Update child details
+router.put('/children/:childId', validateChild, async (req, res) => {
+  try {
+    const { childId } = req.params;
+
+    // Check validation errors
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ 
+        success: false,
+        errors: errors.array() 
+      });
+    }
+
+    // Validate childId
+    if (!mongoose.Types.ObjectId.isValid(childId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid child ID format' 
+      });
+    }
+
+    // Check ownership
+    const existing = await Student.findOne({ 
+      _id: childId, 
+      parentId: req.user.id 
+    });
+
+    if (!existing) {
+      return res.status(403).json({ 
+        success: false,
+        message: 'Unauthorized' 
+      });
+    }
+
+    const { 
+      name,
+      class: classLevel,
+      school,
+      busNumber,
+      pickupPoint,
+      dropoffPoint,
+      emergencyContact,
+      emergencyPhone,
+      medicalNotes
+    } = req.body;
+
+    const nameParts = name.trim().split(' ');
+    const firstName = nameParts[0] || '';
+    const lastName = nameParts.slice(1).join(' ') || firstName;
+
+    let busId = existing.busId;
+    if (busNumber && busNumber !== existing.busNumber) {
+      const bus = await Bus.findOne({ busNumber: busNumber.split(' - ')[0] });
+      busId = bus ? bus._id : null;
+    }
+
+    const updatedStudent = await Student.findByIdAndUpdate(
+      childId,
+      {
+        firstName,
+        lastName,
+        name: `${firstName} ${lastName}`.trim(),
+        classLevel,
+        school,
+        busNumber,
+        busId,
+        pickupPoint,
+        dropoffPoint,
+        guardianName: emergencyContact,
+        guardianContact: emergencyPhone,
+        medicalNotes,
+        usesTransport: !!busId
+      },
+      { new: true, runValidators: true }
+    ).populate('busId', 'busNumber route driverName');
+
+    res.json({
+      success: true,
+      data: updatedStudent,
+      message: 'Child updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating child:', error);
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+});
+
+// 🗑️ Remove child (soft delete)
+router.delete('/children/:childId', async (req, res) => {
+  try {
+    const { childId } = req.params;
+
+    // Validate childId
+    if (!mongoose.Types.ObjectId.isValid(childId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid child ID format' 
+      });
+    }
+
+    const student = await Student.findOne({ 
+      _id: childId, 
+      parentId: req.user.id 
+    });
+
+    if (!student) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Child not found' 
+      });
+    }
+
+    // Soft delete - just remove parent link and deactivate
+    student.parentId = null;
+    student.isActive = false;
+    await student.save();
+
+    res.json({
+      success: true,
+      message: 'Child removed successfully'
+    });
+  } catch (error) {
+    console.error('Error removing child:', error);
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 

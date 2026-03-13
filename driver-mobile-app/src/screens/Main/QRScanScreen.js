@@ -9,26 +9,32 @@ import {
   TouchableOpacity,
   Modal,
   Dimensions,
-  ScrollView
+  ScrollView,
+  FlatList
 } from 'react-native';
-import { BarCodeScanner } from 'expo-barcode-scanner';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { useTrip } from '../../context/TripContext';
+import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import { COLORS } from '../../constants/config';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 
 const { width } = Dimensions.get('window');
 
 const QRScanScreen = ({ navigation, route }) => {
-  const { currentTrip } = useTrip();
-  const [hasPermission, setHasPermission] = useState(null);
+  const { activeTrip, tripStudents, boardStudent, alightStudent, getStudentScanStatus } = useTrip();
+  const { user } = useAuth();
+  
+  const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [scanning, setScanning] = useState(true);
-  const [lastScan, setLastScan] = useState(null);
+  const [scanResult, setScanResult] = useState(null);
+  const [showResult, setShowResult] = useState(false);
   const [offlineQueue, setOfflineQueue] = useState([]);
   const [showMap, setShowMap] = useState(false);
   const [currentLocation, setCurrentLocation] = useState(null);
@@ -36,16 +42,17 @@ const QRScanScreen = ({ navigation, route }) => {
   const [isOnline, setIsOnline] = useState(true);
   const [studentInfo, setStudentInfo] = useState(null);
   const [showStudentModal, setShowStudentModal] = useState(false);
+  const [scanHistory, setScanHistory] = useState([]);
   
   const mapRef = useRef(null);
   const scanTimeout = useRef(null);
   const locationSubscription = useRef(null);
 
-  const tripId = route.params?.tripId || currentTrip?._id;
+  const tripId = route.params?.tripId || activeTrip?._id;
 
   useEffect(() => {
     (async () => {
-      const cameraStatus = await BarCodeScanner.requestPermissionsAsync();
+      const cameraStatus = await CameraView.requestPermissionsAsync();
       const locationStatus = await Location.requestForegroundPermissionsAsync();
       
       setHasPermission(cameraStatus.status === 'granted' && locationStatus.status === 'granted');
@@ -53,6 +60,7 @@ const QRScanScreen = ({ navigation, route }) => {
       startLocationTracking();
       loadOfflineQueue();
       checkNetworkStatus();
+      loadScanHistory();
       
       // Listen for network changes
       const unsubscribe = NetInfo.addEventListener(state => {
@@ -76,6 +84,19 @@ const QRScanScreen = ({ navigation, route }) => {
     setIsOnline(state.isConnected);
   };
 
+  const loadScanHistory = () => {
+    if (activeTrip) {
+      const history = tripStudents
+        .filter(s => getStudentScanStatus(activeTrip._id, s._id))
+        .map(s => ({
+          studentId: s._id,
+          studentName: `${s.firstName} ${s.lastName}`,
+          ...getStudentScanStatus(activeTrip._id, s._id)
+        }));
+      setScanHistory(history);
+    }
+  };
+
   const startLocationTracking = async () => {
     try {
       locationSubscription.current = await Location.watchPositionAsync(
@@ -89,7 +110,8 @@ const QRScanScreen = ({ navigation, route }) => {
             lat: location.coords.latitude,
             lng: location.coords.longitude,
             accuracy: location.coords.accuracy,
-            heading: location.coords.heading
+            heading: location.coords.heading,
+            speed: location.coords.speed
           });
         }
       );
@@ -193,6 +215,21 @@ const QRScanScreen = ({ navigation, route }) => {
         // Not JSON, use raw data
       }
 
+      // Check if student is in this trip
+      const student = tripStudents.find(s => 
+        s._id === studentId || s.qrCode === data || s.admissionNumber === data
+      );
+
+      if (!student) {
+        throw new Error('Student not found in this trip');
+      }
+
+      // Check if already scanned in this mode
+      const existingScan = getStudentScanStatus(tripId, student._id);
+      if (existingScan && existingScan.type === scanMode) {
+        throw new Error(`Already recorded as ${scanMode}`);
+      }
+
       // Get current location
       let location = null;
       if (currentLocation) {
@@ -205,7 +242,7 @@ const QRScanScreen = ({ navigation, route }) => {
 
       const scanData = {
         studentId,
-        tripId: tripId,
+        tripId,
         method: 'qr',
         timestamp: new Date().toISOString(),
         location,
@@ -216,93 +253,61 @@ const QRScanScreen = ({ navigation, route }) => {
         }
       };
 
-      // Try online first
-      if (isOnline) {
-        try {
-          const endpoint = scanMode === 'boarding' 
-            ? `/attendance/driver/trip/${tripId}/board/${studentId}`
-            : `/attendance/driver/trip/${tripId}/alight/${studentId}`;
-          
-          const response = await api.post(endpoint, scanData);
-          
-          setLastScan({
-            studentId,
-            studentName: response.data.data?.studentName || studentId,
-            time: new Date().toLocaleTimeString(),
-            mode: scanMode,
-            success: true,
-            online: true
-          });
-
-          // Fetch student info for display
-          await fetchStudentInfo(studentId);
-
-          Alert.alert(
-            '✅ Scan Successful',
-            `${scanMode === 'boarding' ? 'Boarding' : 'Alighting'} recorded for student`,
-            [{ text: 'OK' }]
-          );
-        } catch (error) {
-          if (error.response?.status === 409) {
-            // Duplicate scan
-            Alert.alert(
-              '⚠️ Duplicate Scan',
-              'This student has already been scanned recently',
-              [{ text: 'OK' }]
-            );
-          } else {
-            // Other error - save offline
-            await saveToOfflineQueue(scanData);
-            
-            setLastScan({
-              studentId,
-              time: new Date().toLocaleTimeString(),
-              mode: scanMode,
-              success: true,
-              offline: true
-            });
-
-            Alert.alert(
-              '📱 Offline Mode',
-              `Scan saved locally. ${offlineQueue.length + 1} scans waiting to sync.`,
-              [{ text: 'OK' }]
-            );
-          }
-        }
+      let result;
+      if (scanMode === 'boarding') {
+        result = await boardStudent(tripId, student._id, 'qr');
       } else {
-        // Offline - save to queue
-        await saveToOfflineQueue(scanData);
-        
-        setLastScan({
-          studentId,
-          time: new Date().toLocaleTimeString(),
-          mode: scanMode,
-          success: true,
-          offline: true
-        });
+        result = await alightStudent(tripId, student._id, 'qr');
+      }
 
-        Alert.alert(
-          '📱 Offline Mode',
-          `Scan saved locally. ${offlineQueue.length + 1} scans waiting to sync.`,
-          [{ text: 'OK' }]
-        );
+      if (result.success) {
+        setScanResult({
+          success: true,
+          student,
+          type: scanMode,
+          offline: result.offline
+        });
+        setShowResult(true);
+
+        // Fetch student info for display
+        await fetchStudentInfo(student._id);
+
+        // Update scan history
+        loadScanHistory();
+
+        // Auto-hide result after 3 seconds
+        scanTimeout.current = setTimeout(() => {
+          setShowResult(false);
+          setScanned(false);
+          setScanning(true);
+          setScanResult(null);
+        }, 3000);
+      } else {
+        throw new Error(result.message || 'Failed to record scan');
       }
       
     } catch (error) {
-      Alert.alert('❌ Scan Failed', error.message);
-    }
+      console.error('Scan error:', error);
+      
+      setScanResult({
+        success: false,
+        message: error.message
+      });
+      setShowResult(true);
 
-    // Allow next scan after 2 seconds
-    scanTimeout.current = setTimeout(() => {
-      setScanned(false);
-      setScanning(true);
-    }, 2000);
+      scanTimeout.current = setTimeout(() => {
+        setShowResult(false);
+        setScanned(false);
+        setScanning(true);
+        setScanResult(null);
+      }, 3000);
+    }
   };
 
   const handleManualEntry = () => {
     Alert.prompt(
       'Manual Entry',
-      'Enter Student ID:',
+      'Enter Student ID or Admission Number:',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -322,7 +327,17 @@ const QRScanScreen = ({ navigation, route }) => {
     );
   };
 
-  if (hasPermission === null) {
+  const resetScanner = () => {
+    setScanned(false);
+    setScanning(true);
+    setShowResult(false);
+    setScanResult(null);
+    if (scanTimeout.current) {
+      clearTimeout(scanTimeout.current);
+    }
+  };
+
+  if (!permission) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={COLORS.primary} />
@@ -331,14 +346,14 @@ const QRScanScreen = ({ navigation, route }) => {
     );
   }
 
-  if (hasPermission === false) {
+  if (!permission.granted) {
     return (
       <View style={styles.centered}>
         <Ionicons name="camera-off" size={50} color="#999" />
         <Text style={styles.errorText}>No access to camera</Text>
         <TouchableOpacity 
           style={styles.button}
-          onPress={() => BarCodeScanner.requestPermissionsAsync()}
+          onPress={requestPermission}
         >
           <Text style={styles.buttonText}>Grant Permission</Text>
         </TouchableOpacity>
@@ -346,51 +361,56 @@ const QRScanScreen = ({ navigation, route }) => {
     );
   }
 
+  if (!tripId) {
+    return (
+      <View style={styles.centered}>
+        <Ionicons name="alert-circle-outline" size={50} color="#f44336" />
+        <Text style={styles.errorText}>No active trip</Text>
+        <Text style={styles.loadingText}>Please start a trip first</Text>
+        <TouchableOpacity 
+          style={[styles.button, { marginTop: 20 }]}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.buttonText}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
+      <LinearGradient colors={['#667eea', '#764ba2']} style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
+        <View style={styles.headerInfo}>
+          <Text style={styles.headerTitle}>Scan QR Code</Text>
+          <Text style={styles.headerSubtitle}>
+            {activeTrip?.routeName || 'Trip'} - {scanMode === 'boarding' ? 'Boarding' : 'Alighting'}
+          </Text>
+        </View>
+        <View style={styles.onlineStatus}>
+          <View style={[styles.statusDot, isOnline ? styles.online : styles.offline]} />
+          <Text style={styles.statusText}>{isOnline ? 'Online' : 'Offline'}</Text>
+        </View>
+      </LinearGradient>
+
       <View style={styles.cameraContainer}>
-        <BarCodeScanner
-          onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
-          style={StyleSheet.absoluteFillObject}
+        <CameraView
+          style={styles.camera}
+          facing="back"
+          onBarcodeScanned={handleBarCodeScanned}
+          barcodeScannerSettings={{
+            barcodeTypes: ['qr'],
+          }}
         />
         
         <View style={styles.overlay}>
-          <View style={styles.scanArea} />
-          <Text style={styles.scanHint}>
-            Position QR code within the square
-          </Text>
-        </View>
-
-        {/* Network Status Indicator */}
-        {!isOnline && (
-          <View style={styles.networkStatus}>
-            <Ionicons name="cloud-offline" size={20} color="#fff" />
-            <Text style={styles.networkStatusText}>Offline Mode</Text>
-          </View>
-        )}
-
-        <View style={styles.headerControls}>
-          <TouchableOpacity 
-            style={styles.closeButton}
-            onPress={() => navigation.goBack()}
-          >
-            <Ionicons name="close" size={24} color="#fff" />
-          </TouchableOpacity>
-          
-          <View style={styles.headerRight}>
-            <TouchableOpacity 
-              style={styles.manualButton}
-              onPress={handleManualEntry}
-            >
-              <Ionicons name="keypad" size={24} color="#fff" />
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.mapToggleButton}
-              onPress={() => setShowMap(true)}
-            >
-              <Ionicons name="map" size={24} color="#fff" />
-            </TouchableOpacity>
+          <View style={styles.scanArea}>
+            <View style={styles.cornerTL} />
+            <View style={styles.cornerTR} />
+            <View style={styles.cornerBL} />
+            <View style={styles.cornerBR} />
           </View>
         </View>
 
@@ -402,7 +422,7 @@ const QRScanScreen = ({ navigation, route }) => {
             ]}
             onPress={() => setScanMode('boarding')}
           >
-            <Ionicons name="bus" size={20} color="#fff" />
+            <Ionicons name="log-in-outline" size={20} color="#fff" />
             <Text style={styles.modeText}>Board</Text>
           </TouchableOpacity>
           <TouchableOpacity 
@@ -412,8 +432,24 @@ const QRScanScreen = ({ navigation, route }) => {
             ]}
             onPress={() => setScanMode('alighting')}
           >
-            <Ionicons name="flag" size={20} color="#fff" />
+            <Ionicons name="log-out-outline" size={20} color="#fff" />
             <Text style={styles.modeText}>Alight</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.headerControls}>
+          <TouchableOpacity 
+            style={styles.manualButton}
+            onPress={handleManualEntry}
+          >
+            <Ionicons name="keypad" size={24} color="#fff" />
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.mapToggleButton}
+            onPress={() => setShowMap(true)}
+          >
+            <Ionicons name="map" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
       </View>
@@ -450,36 +486,47 @@ const QRScanScreen = ({ navigation, route }) => {
         )}
       </View>
 
-      {lastScan && (
-        <TouchableOpacity 
-          style={styles.lastScanCard}
-          onPress={() => lastScan.studentId && fetchStudentInfo(lastScan.studentId)}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.lastScanTitle}>Last Scan:</Text>
-          <View style={styles.lastScanRow}>
-            <Ionicons 
-              name={lastScan.success ? "checkmark-circle" : "close-circle"} 
-              size={24} 
-              color={lastScan.success ? "#4CAF50" : "#f44336"} 
-            />
-            <View style={styles.lastScanDetails}>
-              <Text style={styles.studentName}>
-                {lastScan.studentName || `ID: ${lastScan.studentId.substring(0, 8)}...`}
-              </Text>
-              <Text style={styles.scanTime}>Time: {lastScan.time}</Text>
-              <Text style={styles.scanMode}>Mode: {lastScan.mode}</Text>
-            </View>
+      {/* Scan Result Modal */}
+      <Modal
+        visible={showResult}
+        transparent
+        animationType="fade"
+        onRequestClose={resetScanner}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[
+            styles.modalContent,
+            scanResult?.success ? styles.modalSuccess : styles.modalError
+          ]}>
+            {scanResult?.success ? (
+              <>
+                <Ionicons name="checkmark-circle" size={60} color="#4CAF50" />
+                <Text style={styles.modalTitle}>Success!</Text>
+                <Text style={styles.modalText}>
+                  {scanResult.student?.firstName} {scanResult.student?.lastName}
+                </Text>
+                <Text style={styles.modalSubtext}>
+                  {scanResult.type === 'boarding' ? 'Boarded' : 'Alighted'} successfully
+                </Text>
+                {scanResult.offline && (
+                  <View style={styles.offlineBadge}>
+                    <Ionicons name="cloud-offline-outline" size={16} color="#ff9800" />
+                    <Text style={styles.offlineBadgeText}>Saved offline</Text>
+                  </View>
+                )}
+              </>
+            ) : (
+              <>
+                <Ionicons name="alert-circle" size={60} color="#f44336" />
+                <Text style={styles.modalTitle}>Error</Text>
+                <Text style={styles.modalText}>
+                  {scanResult?.message || 'Failed to scan'}
+                </Text>
+              </>
+            )}
           </View>
-          {lastScan.offline && (
-            <View style={styles.offlineIndicator}>
-              <Ionicons name="cloud-outline" size={16} color="#856404" />
-              <Text style={styles.offlineIndicatorText}>Saved offline</Text>
-            </View>
-          )}
-          <Text style={styles.tapHint}>Tap card for student details</Text>
-        </TouchableOpacity>
-      )}
+        </View>
+      </Modal>
 
       {/* Student Info Modal */}
       <Modal
@@ -507,28 +554,40 @@ const QRScanScreen = ({ navigation, route }) => {
                 </View>
                 
                 <View style={styles.studentInfoRow}>
-                  <Text style={styles.studentInfoLabel}>Grade:</Text>
-                  <Text style={styles.studentInfoValue}>{studentInfo.grade}</Text>
-                </View>
-                
-                <View style={styles.studentInfoRow}>
                   <Text style={styles.studentInfoLabel}>Class:</Text>
                   <Text style={styles.studentInfoValue}>{studentInfo.classLevel}</Text>
                 </View>
                 
-                {studentInfo.parentId && (
+                <View style={styles.studentInfoRow}>
+                  <Text style={styles.studentInfoLabel}>Admission:</Text>
+                  <Text style={styles.studentInfoValue}>{studentInfo.admissionNumber}</Text>
+                </View>
+                
+                {studentInfo.transportDetails?.pickupPoint && (
+                  <View style={styles.studentInfoRow}>
+                    <Text style={styles.studentInfoLabel}>Pickup:</Text>
+                    <Text style={styles.studentInfoValue}>
+                      {studentInfo.transportDetails.pickupPoint.name}
+                    </Text>
+                  </View>
+                )}
+                
+                {studentInfo.transportDetails?.dropoffPoint && (
+                  <View style={styles.studentInfoRow}>
+                    <Text style={styles.studentInfoLabel}>Dropoff:</Text>
+                    <Text style={styles.studentInfoValue}>
+                      {studentInfo.transportDetails.dropoffPoint.name}
+                    </Text>
+                  </View>
+                )}
+                
+                {studentInfo.medicalInfo?.allergies?.length > 0 && (
                   <>
-                    <Text style={styles.studentInfoSection}>Parent/Guardian</Text>
+                    <Text style={styles.studentInfoSection}>Medical Info</Text>
                     <View style={styles.studentInfoRow}>
-                      <Text style={styles.studentInfoLabel}>Name:</Text>
+                      <Text style={styles.studentInfoLabel}>Allergies:</Text>
                       <Text style={styles.studentInfoValue}>
-                        {studentInfo.parentId.name}
-                      </Text>
-                    </View>
-                    <View style={styles.studentInfoRow}>
-                      <Text style={styles.studentInfoLabel}>Phone:</Text>
-                      <Text style={styles.studentInfoValue}>
-                        {studentInfo.parentId.phone}
+                        {studentInfo.medicalInfo.allergies.map(a => a.allergen).join(', ')}
                       </Text>
                     </View>
                   </>
@@ -593,6 +652,47 @@ const QRScanScreen = ({ navigation, route }) => {
           </View>
         </View>
       </Modal>
+
+      {/* Scan History */}
+      {scanHistory.length > 0 && (
+        <View style={styles.historyContainer}>
+          <Text style={styles.historyTitle}>Recent Scans</Text>
+          <FlatList
+            data={scanHistory.slice(-5).reverse()}
+            keyExtractor={(item, index) => index.toString()}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.historyItem}
+                onPress={() => fetchStudentInfo(item.studentId)}
+              >
+                <Ionicons
+                  name={item.type === 'boarding' ? 'log-in' : 'log-out'}
+                  size={16}
+                  color={item.type === 'boarding' ? '#4CAF50' : '#f44336'}
+                />
+                <Text style={styles.historyName}>{item.studentName}</Text>
+                <Text style={styles.historyTime}>
+                  {new Date(item.timestamp).toLocaleTimeString()}
+                </Text>
+                {item.offline && (
+                  <View style={styles.offlineIndicator}>
+                    <Ionicons name="cloud-offline" size={12} color="#999" />
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+          />
+        </View>
+      )}
+
+      {/* Reset Button */}
+      {scanned && !showResult && (
+        <TouchableOpacity style={styles.resetButton} onPress={resetScanner}>
+          <Text style={styles.resetButtonText}>Scan Again</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 };
@@ -617,10 +717,59 @@ const styles = StyleSheet.create({
     color: '#f44336',
     fontSize: 16
   },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 15,
+    paddingTop: 40,
+  },
+  backButton: {
+    padding: 5,
+  },
+  headerInfo: {
+    flex: 1,
+    marginLeft: 10,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  headerSubtitle: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.8)',
+  },
+  onlineStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 15,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 5,
+  },
+  online: {
+    backgroundColor: '#4CAF50',
+  },
+  offline: {
+    backgroundColor: '#f44336',
+  },
+  statusText: {
+    color: '#fff',
+    fontSize: 12,
+  },
   cameraContainer: {
-    height: '60%',
+    height: '50%',
     overflow: 'hidden',
     position: 'relative'
+  },
+  camera: {
+    flex: 1,
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
@@ -630,73 +779,47 @@ const styles = StyleSheet.create({
   scanArea: {
     width: 250,
     height: 250,
-    borderWidth: 2,
+    position: 'relative',
+  },
+  cornerTL: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 40,
+    height: 40,
+    borderTopWidth: 3,
+    borderLeftWidth: 3,
     borderColor: '#fff',
-    backgroundColor: 'transparent',
-    borderRadius: 20
   },
-  scanHint: {
-    color: '#fff',
-    fontSize: 14,
-    marginTop: 20,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20
-  },
-  networkStatus: {
+  cornerTR: {
     position: 'absolute',
-    top: 100,
-    left: 20,
-    right: 20,
-    backgroundColor: '#f44336',
-    padding: 10,
-    borderRadius: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    zIndex: 10
+    top: 0,
+    right: 0,
+    width: 40,
+    height: 40,
+    borderTopWidth: 3,
+    borderRightWidth: 3,
+    borderColor: '#fff',
   },
-  networkStatusText: {
-    color: '#fff',
-    fontWeight: 'bold'
-  },
-  headerControls: {
+  cornerBL: {
     position: 'absolute',
-    top: 40,
-    left: 20,
-    right: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between'
-  },
-  closeButton: {
+    bottom: 0,
+    left: 0,
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center'
+    borderBottomWidth: 3,
+    borderLeftWidth: 3,
+    borderColor: '#fff',
   },
-  headerRight: {
-    flexDirection: 'row',
-    gap: 10
-  },
-  manualButton: {
+  cornerBR: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center'
-  },
-  mapToggleButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center'
+    borderBottomWidth: 3,
+    borderRightWidth: 3,
+    borderColor: '#fff',
   },
   modeToggle: {
     position: 'absolute',
@@ -725,6 +848,29 @@ const styles = StyleSheet.create({
   modeText: {
     color: '#fff',
     fontWeight: 'bold'
+  },
+  headerControls: {
+    position: 'absolute',
+    top: 10,
+    right: 20,
+    flexDirection: 'row',
+    gap: 10
+  },
+  manualButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  mapToggleButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center'
   },
   infoBar: {
     flexDirection: 'row',
@@ -755,54 +901,67 @@ const styles = StyleSheet.create({
     color: '#856404',
     fontWeight: 'bold'
   },
-  lastScanCard: {
-    margin: 15,
-    padding: 15,
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
     backgroundColor: '#fff',
-    borderRadius: 10,
-    elevation: 2
+    padding: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    minWidth: 250,
   },
-  lastScanTitle: {
-    fontSize: 16,
+  modalSuccess: {
+    borderTopWidth: 5,
+    borderTopColor: '#4CAF50',
+  },
+  modalError: {
+    borderTopWidth: 5,
+    borderTopColor: '#f44336',
+  },
+  modalTitle: {
+    fontSize: 20,
     fontWeight: 'bold',
-    marginBottom: 10
+    marginTop: 10,
+    marginBottom: 5,
   },
-  lastScanRow: {
-    flexDirection: 'row',
-    gap: 15
-  },
-  lastScanDetails: {
-    flex: 1
-  },
-  studentName: {
+  modalText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#333',
-    marginBottom: 4
+    textAlign: 'center',
+    marginBottom: 5,
   },
-  scanTime: {
+  modalSubtext: {
     fontSize: 14,
-    color: '#666'
+    color: '#666',
   },
-  scanMode: {
-    fontSize: 14,
-    color: '#666'
-  },
-  tapHint: {
-    fontSize: 12,
-    color: COLORS.primary,
-    marginTop: 8,
-    textAlign: 'center'
-  },
-  offlineIndicator: {
+  offlineBadge: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#fff3e0',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
     marginTop: 10,
-    gap: 5
   },
-  offlineIndicatorText: {
-    color: '#856404',
-    fontSize: 12
+  offlineBadgeText: {
+    color: '#ff9800',
+    fontSize: 12,
+    marginLeft: 5,
+  },
+  resetButton: {
+    backgroundColor: '#667eea',
+    padding: 15,
+    margin: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  resetButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
   button: {
     backgroundColor: COLORS.primary,
@@ -833,10 +992,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 15
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold'
   },
   studentInfoContent: {
     flex: 1,
@@ -881,7 +1036,41 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold'
-  }
+  },
+  historyContainer: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  historyTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 10,
+    color: '#666',
+  },
+  historyItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginRight: 10,
+  },
+  historyName: {
+    marginLeft: 5,
+    marginRight: 8,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  historyTime: {
+    fontSize: 11,
+    color: '#999',
+  },
+  offlineIndicator: {
+    marginLeft: 5,
+  },
 });
 
 export default QRScanScreen;
