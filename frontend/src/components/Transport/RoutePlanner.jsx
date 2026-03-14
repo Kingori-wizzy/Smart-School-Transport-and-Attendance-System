@@ -1,9 +1,13 @@
+/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable no-unused-vars */
+ 
 import { useState, useEffect } from 'react';
 import { transportService } from '../../services/transport';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import toast from 'react-hot-toast';
+import { routeService } from '../../services/route'; // We'll create this
 
 // Fix for default markers in Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
@@ -13,15 +17,28 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-function RouteMap({ waypoints, center }) {
+function RouteMap({ waypoints }) {
   const map = useMap();
   
   useEffect(() => {
-    if (waypoints.length > 0) {
-      const bounds = L.latLngBounds(waypoints.map(w => [w.lat, w.lng]));
-      map.fitBounds(bounds, { padding: [50, 50] });
+    if (waypoints && waypoints.length > 0) {
+      try {
+        const bounds = L.latLngBounds(waypoints.map(w => [w.lat, w.lng]));
+        map.fitBounds(bounds, { padding: [50, 50] });
+      } catch (error) {
+        console.error('Error fitting bounds:', error);
+      }
     }
   }, [waypoints, map]);
+
+  if (!waypoints || waypoints.length === 0) {
+    return (
+      <TileLayer
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      />
+    );
+  }
 
   return (
     <>
@@ -34,7 +51,7 @@ function RouteMap({ waypoints, center }) {
           <Popup>
             <b>{point.name || `Stop ${index + 1}`}</b>
             <br />
-            {point.address}
+            {point.address || 'N/A'}
             <br />
             <small>ETA: {point.eta || 'N/A'}</small>
           </Popup>
@@ -54,10 +71,12 @@ function RouteMap({ waypoints, center }) {
 
 export default function RoutePlanner() {
   const [routes, setRoutes] = useState([]);
+  const [buses, setBuses] = useState([]);
   const [selectedRoute, setSelectedRoute] = useState(null);
   const [waypoints, setWaypoints] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editingRoute, setEditingRoute] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -65,66 +84,85 @@ export default function RoutePlanner() {
     endPoint: '',
     distance: 0,
     duration: 0,
-    stops: [],
+    stops: 0,
     status: 'active',
     assignedBuses: []
   });
 
-  // Mock waypoints for demo
-  const mockWaypoints = [
-    { lat: -1.2864, lng: 36.8172, name: 'School Main Gate', address: 'KCA University', eta: '07:00' },
-    { lat: -1.2964, lng: 36.8272, name: 'Stop 1 - Westlands', address: 'Westlands Shopping Center', eta: '07:15' },
-    { lat: -1.2764, lng: 36.8072, name: 'Stop 2 - Parklands', address: 'Parklands Baptist Church', eta: '07:30' },
-    { lat: -1.2664, lng: 36.7972, name: 'Stop 3 - Ngara', address: 'Ngara Roundabout', eta: '07:45' },
-    { lat: -1.2564, lng: 36.7872, name: 'Stop 4 - Pangani', address: 'Pangani Shopping Center', eta: '08:00' }
-  ];
+  // Nairobi coordinates as default center
+  const defaultCenter = [-1.2864, 36.8172];
 
   useEffect(() => {
     fetchRoutes();
-    setWaypoints(mockWaypoints);
+    fetchBuses();
   }, []);
 
   const fetchRoutes = async () => {
-    // Mock routes data
-    const mockRoutes = [
-      {
-        id: 'R001',
-        name: 'Route A - North',
-        description: 'Serving Westlands, Parklands, Ngara areas',
-        startPoint: 'School',
-        endPoint: 'Pangani',
-        distance: 12.5,
-        duration: 45,
-        stops: 4,
-        status: 'active',
-        assignedBuses: ['BUS001', 'BUS002']
-      },
-      {
-        id: 'R002',
-        name: 'Route B - East',
-        description: 'Serving Buruburu, Donholm, Fedha estates',
-        startPoint: 'School',
-        endPoint: 'Fedha',
-        distance: 15.2,
-        duration: 50,
-        stops: 5,
-        status: 'active',
-        assignedBuses: ['BUS003']
-      },
-      {
-        id: 'R003',
-        name: 'Route C - South',
-        description: 'Serving Langata, South B, South C',
-        startPoint: 'School',
-        endPoint: 'Langata',
-        distance: 18.0,
-        duration: 60,
-        stops: 6,
-        status: 'maintenance',
-        assignedBuses: []
+    try {
+      setLoading(true);
+      // Try to fetch real routes from API
+      const response = await fetch('http://localhost:5000/api/routes', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      
+      if (data.success && data.data) {
+        // Transform API data to match component format
+        const formattedRoutes = data.data.map(route => ({
+          id: route._id,
+          _id: route._id,
+          name: route.name || 'Unnamed Route',
+          description: route.description || '',
+          startPoint: route.startPoint || route.stops?.[0]?.name || 'School',
+          endPoint: route.endPoint || route.stops?.[route.stops.length - 1]?.name || 'Destination',
+          distance: route.distance || 0,
+          duration: route.duration || 0,
+          stops: route.stops?.length || 0,
+          status: route.status || 'active',
+          assignedBuses: route.assignedBuses || [],
+          waypoints: route.stops?.map(stop => ({
+            lat: stop.coordinates?.lat || stop.lat || defaultCenter[0],
+            lng: stop.coordinates?.lng || stop.lng || defaultCenter[1],
+            name: stop.name,
+            address: stop.address || '',
+            eta: stop.eta || ''
+          })) || []
+        }));
+        setRoutes(formattedRoutes);
+      } else {
+        // Fallback to empty array if no data
+        setRoutes([]);
       }
-    ];
-    setRoutes(mockRoutes);
+    } catch (error) {
+      console.error('Error fetching routes:', error);
+      toast.error('Failed to fetch routes');
+      setRoutes([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchBuses = async () => {
+    try {
+      const data = await transportService.getBuses();
+      setBuses(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Error fetching buses:', error);
+    }
+  };
+
+  const handleViewOnMap = (route) => {
+    setSelectedRoute(route);
+    if (route.waypoints && route.waypoints.length > 0) {
+      setWaypoints(route.waypoints);
+    } else {
+      // If no waypoints, show default
+      setWaypoints([
+        { lat: defaultCenter[0], lng: defaultCenter[1], name: route.startPoint || 'Start Point' },
+        { lat: defaultCenter[0] + 0.01, lng: defaultCenter[1] + 0.01, name: route.endPoint || 'End Point' }
+      ]);
+    }
+    toast.success(`Viewing ${route.name} on map`);
   };
 
   const handleInputChange = (e) => {
@@ -132,40 +170,105 @@ export default function RoutePlanner() {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    toast.success(editingRoute ? 'Route updated successfully' : 'Route created successfully');
-    setShowForm(false);
-    setEditingRoute(null);
-    fetchRoutes();
+    try {
+      const routeData = {
+        name: formData.name,
+        description: formData.description,
+        startPoint: formData.startPoint,
+        endPoint: formData.endPoint,
+        distance: parseFloat(formData.distance) || 0,
+        duration: parseInt(formData.duration) || 0,
+        stops: formData.stops ? parseInt(formData.stops) : 0,
+        status: formData.status,
+        assignedBuses: formData.assignedBuses
+      };
+
+      if (editingRoute) {
+        // Update existing route
+        await routeService.updateRoute(editingRoute._id, routeData);
+        toast.success('Route updated successfully');
+      } else {
+        // Create new route
+        await routeService.createRoute(routeData);
+        toast.success('Route created successfully');
+      }
+      
+      setShowForm(false);
+      setEditingRoute(null);
+      resetForm();
+      fetchRoutes();
+    } catch (error) {
+      console.error('Error saving route:', error);
+      toast.error('Failed to save route');
+    }
+  };
+
+  const resetForm = () => {
+    setFormData({
+      name: '',
+      description: '',
+      startPoint: '',
+      endPoint: '',
+      distance: 0,
+      duration: 0,
+      stops: 0,
+      status: 'active',
+      assignedBuses: []
+    });
   };
 
   const handleEdit = (route) => {
     setEditingRoute(route);
     setFormData({
-      name: route.name,
-      description: route.description,
-      startPoint: route.startPoint,
-      endPoint: route.endPoint,
-      distance: route.distance,
-      duration: route.duration,
-      stops: route.stops,
-      status: route.status,
-      assignedBuses: route.assignedBuses
+      name: route.name || '',
+      description: route.description || '',
+      startPoint: route.startPoint || '',
+      endPoint: route.endPoint || '',
+      distance: route.distance || 0,
+      duration: route.duration || 0,
+      stops: route.stops || 0,
+      status: route.status || 'active',
+      assignedBuses: route.assignedBuses || []
     });
     setShowForm(true);
   };
 
-  const handleDelete = (id) => {
-    if (window.confirm('Are you sure you want to delete this route?')) {
+  const handleDelete = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this route?')) return;
+    try {
+      await routeService.deleteRoute(id);
       toast.success('Route deleted successfully');
       fetchRoutes();
+      
+      // Clear map if deleted route was selected
+      if (selectedRoute?._id === id) {
+        setSelectedRoute(null);
+        setWaypoints([]);
+      }
+    } catch (error) {
+      console.error('Error deleting route:', error);
+      toast.error('Failed to delete route');
     }
   };
 
-  const handleViewOnMap = (route) => {
-    setSelectedRoute(route);
+  const getStatusColor = (status) => {
+    switch(status) {
+      case 'active': return '#4CAF50';
+      case 'maintenance': return '#FF9800';
+      case 'inactive': return '#f44336';
+      default: return '#999';
+    }
   };
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '40px' }}>
+        <div className="loading-spinner" style={{ margin: '0 auto' }} />
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '20px' }}>
@@ -180,17 +283,7 @@ export default function RoutePlanner() {
         <button
           onClick={() => {
             setEditingRoute(null);
-            setFormData({
-              name: '',
-              description: '',
-              startPoint: '',
-              endPoint: '',
-              distance: 0,
-              duration: 0,
-              stops: [],
-              status: 'active',
-              assignedBuses: []
-            });
+            resetForm();
             setShowForm(true);
           }}
           style={{
@@ -199,7 +292,10 @@ export default function RoutePlanner() {
             color: 'white',
             border: 'none',
             borderRadius: '4px',
-            cursor: 'pointer'
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px'
           }}
         >
           ➕ Create New Route
@@ -215,7 +311,7 @@ export default function RoutePlanner() {
         boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
       }}>
         <MapContainer
-          center={[-1.2864, 36.8172]}
+          center={defaultCenter}
           zoom={12}
           style={{ height: '100%', width: '100%' }}
         >
@@ -284,7 +380,7 @@ export default function RoutePlanner() {
         gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))',
         gap: '20px'
       }}>
-        {routes.map(route => (
+        {routes.length > 0 ? routes.map(route => (
           <div
             key={route.id}
             style={{
@@ -292,8 +388,15 @@ export default function RoutePlanner() {
               padding: '20px',
               borderRadius: '8px',
               boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-              borderLeft: `4px solid ${route.status === 'active' ? '#4CAF50' : '#FF9800'}`
+              borderLeft: `4px solid ${getStatusColor(route.status)}`,
+              cursor: 'pointer',
+              transition: 'transform 0.2s',
+              ...(selectedRoute?._id === route._id ? {
+                boxShadow: '0 4px 8px rgba(33, 150, 243, 0.3)',
+                transform: 'scale(1.02)'
+              } : {})
             }}
+            onClick={() => handleViewOnMap(route)}
           >
             <div style={{
               display: 'flex',
@@ -303,7 +406,7 @@ export default function RoutePlanner() {
             }}>
               <h4 style={{ margin: 0, color: '#2196F3' }}>{route.name}</h4>
               <span style={{
-                background: route.status === 'active' ? '#4CAF50' : '#FF9800',
+                background: getStatusColor(route.status),
                 color: 'white',
                 padding: '4px 8px',
                 borderRadius: '12px',
@@ -314,7 +417,7 @@ export default function RoutePlanner() {
             </div>
 
             <p style={{ color: '#666', fontSize: '14px', marginBottom: '15px' }}>
-              {route.description}
+              {route.description || 'No description'}
             </p>
 
             <div style={{
@@ -340,11 +443,11 @@ export default function RoutePlanner() {
                 <span style={{ color: '#666' }}>🛑 Stops:</span> {route.stops}
               </div>
               <div>
-                <span style={{ color: '#666' }}>🚌 Buses:</span> {route.assignedBuses.length}
+                <span style={{ color: '#666' }}>🚌 Buses:</span> {route.assignedBuses?.length || 0}
               </div>
             </div>
 
-            {route.assignedBuses.length > 0 && (
+            {route.assignedBuses && route.assignedBuses.length > 0 && (
               <div style={{
                 marginBottom: '15px',
                 padding: '8px',
@@ -363,21 +466,10 @@ export default function RoutePlanner() {
               paddingTop: '15px'
             }}>
               <button
-                onClick={() => handleViewOnMap(route)}
-                style={{
-                  flex: 1,
-                  padding: '8px',
-                  background: '#4CAF50',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer'
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEdit(route);
                 }}
-              >
-                🗺️ View Map
-              </button>
-              <button
-                onClick={() => handleEdit(route)}
                 style={{
                   flex: 1,
                   padding: '8px',
@@ -391,7 +483,10 @@ export default function RoutePlanner() {
                 ✏️ Edit
               </button>
               <button
-                onClick={() => handleDelete(route.id)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDelete(route.id);
+                }}
                 style={{
                   flex: 0.5,
                   padding: '8px',
@@ -406,7 +501,17 @@ export default function RoutePlanner() {
               </button>
             </div>
           </div>
-        ))}
+        )) : (
+          <div style={{
+            gridColumn: '1 / -1',
+            textAlign: 'center',
+            padding: '40px',
+            background: 'white',
+            borderRadius: '8px'
+          }}>
+            <p style={{ color: '#666' }}>No routes found. Click "Create New Route" to get started.</p>
+          </div>
+        )}
       </div>
 
       {/* Route Form Modal */}
@@ -421,14 +526,17 @@ export default function RoutePlanner() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
+          zIndex: 1000,
+          overflowY: 'auto'
         }}>
           <div style={{
             background: 'white',
             padding: '30px',
             borderRadius: '8px',
             width: '500px',
-            maxWidth: '90%'
+            maxWidth: '90%',
+            maxHeight: '90vh',
+            overflowY: 'auto'
           }}>
             <h3 style={{ margin: '0 0 20px 0' }}>
               {editingRoute ? 'Edit Route' : 'Create New Route'}
@@ -518,6 +626,7 @@ export default function RoutePlanner() {
                     value={formData.distance}
                     onChange={handleInputChange}
                     step="0.1"
+                    min="0"
                     style={{
                       width: '100%',
                       padding: '8px',
@@ -536,6 +645,7 @@ export default function RoutePlanner() {
                     name="duration"
                     value={formData.duration}
                     onChange={handleInputChange}
+                    min="0"
                     style={{
                       width: '100%',
                       padding: '8px',
@@ -555,6 +665,7 @@ export default function RoutePlanner() {
                   name="stops"
                   value={formData.stops}
                   onChange={handleInputChange}
+                  min="0"
                   style={{
                     width: '100%',
                     padding: '8px',
@@ -605,6 +716,7 @@ export default function RoutePlanner() {
                   onClick={() => {
                     setShowForm(false);
                     setEditingRoute(null);
+                    resetForm();
                   }}
                   style={{
                     flex: 1,

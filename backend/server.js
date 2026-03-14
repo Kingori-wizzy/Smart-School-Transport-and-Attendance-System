@@ -24,6 +24,8 @@ const driverRoutes = require('./routes/driverRoutes');
 const smsRoutes = require('./routes/smsRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const transportRoutes = require('./routes/transportRoutes');
+const reportRoutes = require('./routes/reportRoutes');
+const settingsRoutes = require('./routes/settingsRoutes');
 
 // Import AI services (optional - for initialization)
 const analyticsService = require('./ai/services/analyticsService');
@@ -80,6 +82,8 @@ app.use('/api/user', userRoutes);
 app.use('/api/transport', transportRoutes);
 app.use('/api/assignments', require('./routes/assignmentRoutes'));
 app.use('/api/routes', require('./routes/routeRoutes'));
+app.use('/api/reports', reportRoutes);
+app.use('/api/settings', settingsRoutes);
 // Health check route
 app.get('/api/health', (req, res) => {
   res.status(200).json({ 

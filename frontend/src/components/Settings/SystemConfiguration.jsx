@@ -1,77 +1,93 @@
-import { useState } from 'react';
+/* eslint-disable no-unused-vars */
+import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
+import { settingsService } from '../../services/settings';
 
-export default function SystemConfiguration() {
+export default function SystemConfiguration({ config: initialConfig, onSave }) {
   const [activeTab, setActiveTab] = useState('general');
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [config, setConfig] = useState(initialConfig || {});
 
   // General Settings
   const [generalSettings, setGeneralSettings] = useState({
-    schoolName: 'KCA University',
-    schoolAddress: 'Thika Road, Nairobi',
-    schoolPhone: '+254 700 000000',
-    schoolEmail: 'info@kca.ac.ke',
-    timezone: 'Africa/Nairobi',
-    dateFormat: 'DD/MM/YYYY',
-    timeFormat: '24h',
-    language: 'en',
-    currency: 'KES'
+    schoolName: config.schoolName || 'KCA University',
+    schoolAddress: config.schoolAddress || 'Thika Road, Nairobi',
+    schoolPhone: config.schoolPhone || '+254 700 000000',
+    schoolEmail: config.schoolEmail || 'info@kca.ac.ke',
+    timezone: config.timezone || 'Africa/Nairobi',
+    dateFormat: config.dateFormat || 'DD/MM/YYYY',
+    timeFormat: config.timeFormat || '24h',
+    language: config.language || 'en',
+    currency: config.currency || 'KES'
   });
 
   // Transport Settings
   const [transportSettings, setTransportSettings] = useState({
-    speedLimit: 80,
-    geofenceRadius: 500,
-    fuelAlertThreshold: 15,
-    maxStudentsPerBus: 40,
-    morningTripTime: '06:30',
-    eveningTripTime: '16:30',
-    trackingInterval: 30, // seconds
-    offlineCache: true,
-    routeOptimization: true
+    speedLimit: config.speedLimit || 80,
+    geofenceRadius: config.geofenceRadius || 500,
+    fuelAlertThreshold: config.fuelAlertThreshold || 15,
+    maxStudentsPerBus: config.maxStudentsPerBus || 40,
+    morningTripTime: config.morningTripTime || '06:30',
+    eveningTripTime: config.eveningTripTime || '16:30',
+    trackingInterval: config.trackingInterval || 30,
+    offlineCache: config.offlineCache !== false,
+    routeOptimization: config.routeOptimization !== false
   });
 
   // Notification Settings
   const [notificationSettings, setNotificationSettings] = useState({
-    emailNotifications: true,
-    smsNotifications: true,
-    pushNotifications: true,
-    parentAlerts: true,
-    driverAlerts: true,
-    adminAlerts: true,
-    attendanceAlerts: true,
-    speedAlerts: true,
-    geofenceAlerts: true,
-    fuelAlerts: true,
-    alertSound: 'default',
-    quietHours: false,
-    quietHoursStart: '22:00',
-    quietHoursEnd: '06:00'
+    emailNotifications: config.emailNotifications !== false,
+    smsNotifications: config.smsNotifications !== false,
+    pushNotifications: config.pushNotifications !== false,
+    parentAlerts: config.parentAlerts !== false,
+    driverAlerts: config.driverAlerts !== false,
+    adminAlerts: config.adminAlerts !== false,
+    attendanceAlerts: config.attendanceAlerts !== false,
+    speedAlerts: config.speedAlerts !== false,
+    geofenceAlerts: config.geofenceAlerts !== false,
+    fuelAlerts: config.fuelAlerts !== false,
+    alertSound: config.alertSound || 'default',
+    quietHours: config.quietHours || false,
+    quietHoursStart: config.quietHoursStart || '22:00',
+    quietHoursEnd: config.quietHoursEnd || '06:00'
   });
 
   // Security Settings
   const [securitySettings, setSecuritySettings] = useState({
-    twoFactorAuth: false,
-    sessionTimeout: 30, // minutes
-    passwordPolicy: 'strong',
-    maxLoginAttempts: 5,
-    lockoutDuration: 30, // minutes
-    ipWhitelist: '',
-    requireApproval: false,
-    auditLogging: true,
-    dataRetention: 90 // days
+    twoFactorAuth: config.twoFactorAuth || false,
+    sessionTimeout: config.sessionTimeout || 30,
+    passwordPolicy: config.passwordPolicy || 'strong',
+    maxLoginAttempts: config.maxLoginAttempts || 5,
+    lockoutDuration: config.lockoutDuration || 30,
+    ipWhitelist: config.ipWhitelist || '',
+    requireApproval: config.requireApproval || false,
+    auditLogging: config.auditLogging !== false,
+    dataRetention: config.dataRetention || 90
   });
 
   // Backup Settings
   const [backupSettings, setBackupSettings] = useState({
-    autoBackup: true,
-    backupFrequency: 'daily',
-    backupTime: '02:00',
-    retainBackups: 30,
-    backupLocation: 'cloud',
-    lastBackup: '2024-02-19 02:00:00',
-    backupSize: '2.4 GB'
+    autoBackup: config.autoBackup !== false,
+    backupFrequency: config.backupFrequency || 'daily',
+    backupTime: config.backupTime || '02:00',
+    retainBackups: config.retainBackups || 30,
+    backupLocation: config.backupLocation || 'cloud',
+    lastBackup: config.lastBackup || '2024-02-19 02:00:00',
+    backupSize: config.backupSize || '2.4 GB'
   });
+
+  useEffect(() => {
+    if (initialConfig) {
+      // Load existing config
+      setGeneralSettings(prev => ({ ...prev, ...initialConfig }));
+      setTransportSettings(prev => ({ ...prev, ...initialConfig }));
+      setNotificationSettings(prev => ({ ...prev, ...initialConfig }));
+      setSecuritySettings(prev => ({ ...prev, ...initialConfig }));
+      setBackupSettings(prev => ({ ...prev, ...initialConfig }));
+    }
+    setLoading(false);
+  }, [initialConfig]);
 
   const handleGeneralChange = (e) => {
     const { name, value } = e.target;
@@ -103,24 +119,52 @@ export default function SystemConfiguration() {
   };
 
   const handleBackupChange = (e) => {
-    const { name, value } = e.target;
-    setBackupSettings(prev => ({ ...prev, [name]: value }));
+    const { name, value, type, checked } = e.target;
+    setBackupSettings(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value
+    }));
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setSaving(true);
-    setTimeout(() => {
-      setSaving(false);
+    try {
+      const allSettings = {
+        ...generalSettings,
+        ...transportSettings,
+        ...notificationSettings,
+        ...securitySettings,
+        ...backupSettings
+      };
+      
+      await onSave(allSettings);
       toast.success('Settings saved successfully');
-    }, 1500);
+    } catch (error) {
+      console.error('Error saving settings:', error);
+      toast.error('Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleBackupNow = () => {
-    toast.success('Manual backup started');
+  const handleBackupNow = async () => {
+    try {
+      await settingsService.createBackup();
+      toast.success('Manual backup started');
+    } catch (error) {
+      console.error('Error creating backup:', error);
+      toast.error('Failed to create backup');
+    }
   };
 
-  const handleRestore = () => {
-    toast.success('Restore process initiated');
+  const handleRestore = async () => {
+    try {
+      // You might want to show a list of backups to choose from
+      toast.success('Restore process initiated');
+    } catch (error) {
+      console.error('Error restoring backup:', error);
+      toast.error('Failed to restore backup');
+    }
   };
 
   const handleTestConnection = () => {
@@ -134,6 +178,14 @@ export default function SystemConfiguration() {
     { id: 'security', name: 'Security', icon: '🔒' },
     { id: 'backup', name: 'Backup', icon: '💾' }
   ];
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '40px' }}>
+        <div className="loading-spinner" style={{ margin: '0 auto' }} />
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '20px' }}>

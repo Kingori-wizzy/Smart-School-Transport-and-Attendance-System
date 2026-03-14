@@ -1,4 +1,6 @@
-import { useState } from 'react';
+/* eslint-disable no-unused-vars */
+/* eslint-disable no-case-declarations */
+import { useState, useEffect } from 'react';
 import { format, subDays, startOfMonth, endOfMonth } from 'date-fns';
 import toast from 'react-hot-toast';
 import {
@@ -6,6 +8,8 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer
 } from 'recharts';
+import { reportService } from '../../services/report';
+import exportService from '../../services/exportService';
 
 const COLORS = ['#4CAF50', '#2196F3', '#FF9800', '#f44336', '#9C27B0', '#673AB7'];
 
@@ -18,14 +22,16 @@ export default function ReportGenerator() {
   const [generating, setGenerating] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [savedReports, setSavedReports] = useState([]);
+  const [reportData, setReportData] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   const reportTypes = [
-    { id: 'attendance', name: 'Attendance Report', icon: '📊', description: 'Daily attendance trends, class distribution, and student statistics' },
-    { id: 'transport', name: 'Transport Report', icon: '🚌', description: 'Bus utilization, trip logs, and fuel consumption' },
-    { id: 'drivers', name: 'Driver Performance', icon: '👤', description: 'Driver ratings, safety scores, and trip history' },
-    { id: 'routes', name: 'Route Efficiency', icon: '🗺️', description: 'Route optimization, on-time performance, and stop analysis' },
-    { id: 'alerts', name: 'Alerts & Incidents', icon: '⚠️', description: 'Speed violations, geofence breaches, and system alerts' },
-    { id: 'combined', name: 'Combined Summary', icon: '📑', description: 'Executive summary of all key metrics' }
+    { id: 'attendance', name: 'Attendance Report', icon: '📊', description: 'Daily attendance trends, class distribution, and student statistics', endpoint: '/api/reports/attendance' },
+    { id: 'transport', name: 'Transport Report', icon: '🚌', description: 'Bus utilization, trip logs, and fuel consumption', endpoint: '/api/reports/transport' },
+    { id: 'drivers', name: 'Driver Performance', icon: '👤', description: 'Driver ratings, safety scores, and trip history', endpoint: '/api/reports/drivers' },
+    { id: 'routes', name: 'Route Efficiency', icon: '🗺️', description: 'Route optimization, on-time performance, and stop analysis', endpoint: '/api/reports/routes' },
+    { id: 'alerts', name: 'Alerts & Incidents', icon: '⚠️', description: 'Speed violations, geofence breaches, and system alerts', endpoint: '/api/reports/alerts' },
+    { id: 'combined', name: 'Combined Summary', icon: '📑', description: 'Executive summary of all key metrics', endpoint: '/api/reports/combined' }
   ];
 
   const dateRanges = [
@@ -37,6 +43,19 @@ export default function ReportGenerator() {
     { id: 'lastmonth', name: 'Last Month' },
     { id: 'custom', name: 'Custom Range' }
   ];
+
+  useEffect(() => {
+    fetchSavedReports();
+  }, []);
+
+  const fetchSavedReports = async () => {
+    try {
+      const response = await reportService.getSavedReports();
+      setSavedReports(response.data || []);
+    } catch (error) {
+      console.error('Error fetching saved reports:', error);
+    }
+  };
 
   const handleDateRangeChange = (range) => {
     setDateRange(range);
@@ -53,179 +72,129 @@ export default function ReportGenerator() {
         setEndDate(format(yesterday, 'yyyy-MM-dd'));
         break;
       case 'week':
-        setStartDate(format(startOfMonth(today), 'yyyy-MM-dd'));
+        setStartDate(format(subDays(today, 7), 'yyyy-MM-dd'));
         setEndDate(format(today, 'yyyy-MM-dd'));
         break;
       case 'lastweek':
-        const lastWeekStart = subDays(today, 7);
-        const lastWeekEnd = subDays(today, 1);
+        const lastWeekStart = subDays(today, 14);
+        const lastWeekEnd = subDays(today, 8);
         setStartDate(format(lastWeekStart, 'yyyy-MM-dd'));
         setEndDate(format(lastWeekEnd, 'yyyy-MM-dd'));
         break;
       case 'month':
-        setStartDate(format(startOfMonth(today), 'yyyy-MM-dd'));
+        setStartDate(format(subDays(today, 30), 'yyyy-MM-dd'));
         setEndDate(format(today, 'yyyy-MM-dd'));
         break;
       case 'lastmonth':
-        const lastMonth = subDays(startOfMonth(today), 1);
-        const lastMonthStart = format(startOfMonth(lastMonth), 'yyyy-MM-dd');
-        const lastMonthEnd = format(endOfMonth(lastMonth), 'yyyy-MM-dd');
-        setStartDate(lastMonthStart);
-        setEndDate(lastMonthEnd);
+        const lastMonthStart = subDays(today, 60);
+        const lastMonthEnd = subDays(today, 31);
+        setStartDate(format(lastMonthStart, 'yyyy-MM-dd'));
+        setEndDate(format(lastMonthEnd, 'yyyy-MM-dd'));
         break;
       default:
         break;
     }
   };
 
-  const generatePreview = () => {
+  const generatePreview = async () => {
     setGenerating(true);
     
-    // Simulate API call delay
-    setTimeout(() => {
-      // Mock data based on report type
-      let data = {};
+    try {
+      let data;
       
       switch(reportType) {
         case 'attendance':
-          data = {
-            title: 'Attendance Report',
-            period: `${startDate} to ${endDate}`,
-            summary: {
-              totalStudents: 245,
-              presentToday: 218,
-              attendanceRate: 89,
-              averageDaily: 225,
-              peakDay: 'Monday',
-              peakAttendance: 238
-            },
-            dailyTrend: [
-              { date: 'Mon', present: 235, absent: 10, late: 5 },
-              { date: 'Tue', present: 238, absent: 7, late: 3 },
-              { date: 'Wed', present: 230, absent: 15, late: 8 },
-              { date: 'Thu', present: 225, absent: 20, late: 6 },
-              { date: 'Fri', present: 218, absent: 27, late: 9 }
-            ],
-            byClass: [
-              { name: 'Grade 5', value: 45 },
-              { name: 'Grade 6', value: 52 },
-              { name: 'Grade 7', value: 38 },
-              { name: 'Grade 8', value: 41 },
-              { name: 'Grade 9', value: 35 }
-            ]
-          };
+          data = await reportService.generateAttendanceReport({ startDate, endDate });
           break;
-          
         case 'transport':
-          data = {
-            title: 'Transport Report',
-            period: `${startDate} to ${endDate}`,
-            summary: {
-              totalBuses: 8,
-              activeBuses: 6,
-              totalTrips: 124,
-              onTimeRate: 94,
-              totalDistance: 1850,
-              fuelUsed: 425
-            },
-            busPerformance: [
-              { name: 'BUS001', trips: 45, onTime: 43, distance: 650 },
-              { name: 'BUS002', trips: 42, onTime: 40, distance: 580 },
-              { name: 'BUS003', trips: 38, onTime: 35, distance: 520 }
-            ]
-          };
+          data = await reportService.generateTransportReport({ startDate, endDate });
           break;
-          
         case 'drivers':
-          data = {
-            title: 'Driver Performance Report',
-            period: `${startDate} to ${endDate}`,
-            summary: {
-              totalDrivers: 12,
-              activeDrivers: 10,
-              avgRating: 4.7,
-              totalTrips: 1240,
-              safetyScore: 98
-            },
-            topDrivers: [
-              { name: 'John Driver', trips: 245, rating: 4.9, safety: 100 },
-              { name: 'Peter Driver', trips: 232, rating: 4.8, safety: 99 },
-              { name: 'James Driver', trips: 218, rating: 4.9, safety: 100 }
-            ]
-          };
+          data = await reportService.generateDriverReport({ startDate, endDate });
           break;
-          
         case 'routes':
-          data = {
-            title: 'Route Efficiency Report',
-            period: `${startDate} to ${endDate}`,
-            summary: {
-              totalRoutes: 6,
-              activeRoutes: 5,
-              avgDuration: 45,
-              avgDistance: 12.5,
-              mostEfficient: 'Route A'
-            },
-            routeEfficiency: [
-              { name: 'Route A', onTime: 98, fuelEff: 8.7, load: 85 },
-              { name: 'Route B', onTime: 95, fuelEff: 8.2, load: 92 },
-              { name: 'Route C', onTime: 92, fuelEff: 7.9, load: 78 }
-            ]
-          };
+          data = await reportService.generateRouteReport({ startDate, endDate });
           break;
-          
         case 'alerts':
-          data = {
-            title: 'Alerts & Incidents Report',
-            period: `${startDate} to ${endDate}`,
-            summary: {
-              totalAlerts: 15,
-              criticalAlerts: 3,
-              resolvedAlerts: 12,
-              avgResponseTime: 12
-            },
-            alertsByType: [
-              { name: 'Speeding', value: 8 },
-              { name: 'Geofence', value: 4 },
-              { name: 'Fuel', value: 2 },
-              { name: 'Maintenance', value: 1 }
-            ]
-          };
+          data = await reportService.generateIncidentReport({ startDate, endDate });
           break;
-          
         case 'combined':
-          data = {
-            title: 'Combined Executive Summary',
-            period: `${startDate} to ${endDate}`,
-            attendance: { rate: 92, total: 245 },
-            transport: { trips: 124, onTime: 94 },
-            drivers: { active: 10, rating: 4.7 },
-            alerts: { total: 15, critical: 3 }
-          };
+          data = await reportService.generateCombinedReport({ startDate, endDate });
           break;
+        default:
+          data = await reportService.generateAttendanceReport({ startDate, endDate });
       }
       
       setPreviewData(data);
-      setGenerating(false);
+      setReportData(data);
       toast.success('Report preview generated');
-    }, 1500);
+    } catch (error) {
+      console.error('Error generating report:', error);
+      toast.error('Failed to generate report');
+    } finally {
+      setGenerating(false);
+    }
   };
 
-  const generateReport = () => {
-    toast.success(`Report generated in ${exportFormat.toUpperCase()} format`);
-    // In production, this would trigger actual report generation/download
+  const generateReport = async () => {
+    if (!reportData) {
+      toast.error('Please generate preview first');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      let filename = `${reportType}_report_${startDate}_to_${endDate}`;
+      
+      switch(exportFormat) {
+        case 'csv':
+          await exportService.exportToCSV(reportData.rawData || reportData, filename);
+          break;
+        case 'excel':
+          await exportService.exportToExcel(reportData.rawData || reportData, filename, reportType);
+          break;
+        case 'pdf':
+          await exportService.exportToPDF(reportData.rawData || reportData, filename, {
+            title: reportTypes.find(r => r.id === reportType)?.name || 'Report',
+            headers: reportData.headers,
+            columns: reportData.columns
+          });
+          break;
+        default:
+          toast.error('Unsupported format');
+      }
+      
+      toast.success(`Report exported as ${exportFormat.toUpperCase()}`);
+    } catch (error) {
+      console.error('Error exporting report:', error);
+      toast.error('Failed to export report');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const saveReport = () => {
-    const report = {
-      id: Date.now(),
-      type: reportType,
-      name: `${reportTypes.find(r => r.id === reportType)?.name} - ${startDate} to ${endDate}`,
-      date: new Date().toISOString(),
-      format: exportFormat
-    };
-    setSavedReports(prev => [report, ...prev].slice(0, 10));
-    toast.success('Report saved successfully');
+  const saveReport = async () => {
+    if (!reportData) {
+      toast.error('Please generate preview first');
+      return;
+    }
+
+    try {
+      const report = {
+        name: `${reportTypes.find(r => r.id === reportType)?.name} - ${startDate} to ${endDate}`,
+        type: reportType,
+        dateRange: { start: startDate, end: endDate },
+        format: exportFormat,
+        data: reportData
+      };
+      
+      await reportService.saveReport(report);
+      await fetchSavedReports();
+      toast.success('Report saved successfully');
+    } catch (error) {
+      console.error('Error saving report:', error);
+      toast.error('Failed to save report');
+    }
   };
 
   const CustomTooltip = ({ active, payload, label }) => {
@@ -379,7 +348,7 @@ export default function ReportGenerator() {
         </div>
 
         {/* Action Buttons */}
-        <div style={{ display: 'flex', gap: '15px' }}>
+        <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
           <button
             onClick={generatePreview}
             disabled={generating}
@@ -403,22 +372,23 @@ export default function ReportGenerator() {
           
           <button
             onClick={generateReport}
-            disabled={!previewData}
+            disabled={!previewData || loading}
             style={{
               padding: '12px 24px',
               background: !previewData ? '#ccc' : '#4CAF50',
               color: 'white',
               border: 'none',
               borderRadius: '6px',
-              cursor: !previewData ? 'not-allowed' : 'pointer',
+              cursor: !previewData || loading ? 'not-allowed' : 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
               fontSize: '14px',
-              fontWeight: '500'
+              fontWeight: '500',
+              opacity: !previewData || loading ? 0.7 : 1
             }}
           >
-            📥 Generate {exportFormat.toUpperCase()}
+            {loading ? '⏳ Exporting...' : `📥 Generate ${exportFormat.toUpperCase()}`}
           </button>
           
           <button
@@ -435,7 +405,8 @@ export default function ReportGenerator() {
               alignItems: 'center',
               gap: '8px',
               fontSize: '14px',
-              fontWeight: '500'
+              fontWeight: '500',
+              opacity: !previewData ? 0.7 : 1
             }}
           >
             💾 Save Report
@@ -623,7 +594,7 @@ export default function ReportGenerator() {
         }}>
           <h3 style={{ margin: '0 0 20px 0', color: '#333' }}>Recently Saved Reports</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {savedReports.map(report => (
+            {savedReports.slice(0, 5).map(report => (
               <div key={report.id} style={{
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -636,12 +607,15 @@ export default function ReportGenerator() {
                 <div>
                   <div style={{ fontWeight: '600', marginBottom: '5px' }}>{report.name}</div>
                   <div style={{ fontSize: '12px', color: '#666' }}>
-                    {format(new Date(report.date), 'MMM dd, yyyy HH:mm')} • {report.format.toUpperCase()}
+                    {format(new Date(report.createdAt), 'MMM dd, yyyy HH:mm')} • {report.format?.toUpperCase()}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button
-                    onClick={() => toast.success(`Viewing ${report.name}`)}
+                    onClick={() => {
+                      setPreviewData(report.data);
+                      toast.success('Loading report...');
+                    }}
                     style={{
                       padding: '6px 12px',
                       background: '#2196F3',
@@ -655,7 +629,7 @@ export default function ReportGenerator() {
                     View
                   </button>
                   <button
-                    onClick={() => toast.success(`Downloading ${report.name}`)}
+                    onClick={() => exportService.exportToPDF(report.data, report.name)}
                     style={{
                       padding: '6px 12px',
                       background: '#4CAF50',

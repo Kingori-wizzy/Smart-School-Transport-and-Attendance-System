@@ -51,7 +51,7 @@ async function createDemoData() {
     await mongoose.connect(MONGODB_URI);
     console.log('✅ Connected to MongoDB\n');
 
-    // Clear existing data (optional - comment out if you want to keep existing data)
+    // Clear existing data
     console.log('🗑️  Clearing existing data...');
     await Promise.all([
       User.deleteMany({}),
@@ -69,8 +69,10 @@ async function createDemoData() {
     // Hash password once
     const hashedPassword = await bcrypt.hash(PASSWORD, 12);
 
-    // Create Admin
+    // ===== CREATE ADMIN =====
     const admin = await User.create({
+      firstName: 'Admin',
+      lastName: 'User',
       name: 'Admin User',
       email: 'admin@demo.com',
       password: hashedPassword,
@@ -80,7 +82,7 @@ async function createDemoData() {
     });
     console.log(`  ✅ Admin: admin@demo.com / ${PASSWORD}`);
 
-    // Create Drivers
+    // ===== CREATE DRIVERS =====
     const drivers = [];
     const driverNames = [
       'John Kamau', 'Peter Omondi', 'Mary Wanjiku', 'David Mwangi', 
@@ -88,7 +90,13 @@ async function createDemoData() {
     ];
 
     for (let i = 0; i < driverNames.length; i++) {
+      const nameParts = driverNames[i].split(' ');
+      const firstName = nameParts[0];
+      const lastName = nameParts.slice(1).join(' ') || '';
+      
       const driver = await User.create({
+        firstName,
+        lastName,
         name: driverNames[i],
         email: `driver${i + 1}@demo.com`,
         password: hashedPassword,
@@ -105,7 +113,7 @@ async function createDemoData() {
       console.log(`  ✅ Driver ${i + 1}: driver${i + 1}@demo.com / ${PASSWORD}`);
     }
 
-    // Create Parents
+    // ===== CREATE PARENTS =====
     const parents = [];
     const parentFirstNames = [
       'John', 'Mary', 'Peter', 'Jane', 'David', 'Sarah', 'Michael', 'Esther',
@@ -120,6 +128,8 @@ async function createDemoData() {
       const firstName = parentFirstNames[i];
       const lastName = parentLastNames[i];
       const parent = await User.create({
+        firstName,
+        lastName,
         name: `${firstName} ${lastName}`,
         email: `parent${i + 1}@demo.com`,
         password: hashedPassword,
@@ -151,14 +161,15 @@ async function createDemoData() {
     const busCapacities = [54, 48, 62, 54, 48, 62, 54, 48, 62, 54];
 
     const buses = [];
-    for (let i = 0; i < 8; i++) { // Create 8 active buses
+    for (let i = 0; i < 8; i++) {
       const bus = await Bus.create({
+        busNumber: busNumbers[i],
         registrationNumber: busNumbers[i],
         capacity: busCapacities[i],
         status: busStatuses[i],
         features: ['gps', 'ac', 'cctv', 'seatbelts'],
         campus: i < 4 ? 'Main' : 'East',
-        driver: i < drivers.length ? drivers[i]._id : null,
+        driverName: i < drivers.length ? drivers[i].name : null,
         currentLocation: {
           lat: -1.2864 + (Math.random() - 0.5) * 0.1,
           lng: 36.8172 + (Math.random() - 0.5) * 0.1,
@@ -168,13 +179,6 @@ async function createDemoData() {
         }
       });
       buses.push(bus);
-      
-      // Assign bus to driver
-      if (i < drivers.length) {
-        drivers[i].driverDetails.assignedBus = bus._id;
-        await drivers[i].save();
-      }
-      
       console.log(`  ✅ Bus ${i + 1}: ${busNumbers[i]} (Capacity: ${busCapacities[i]})`);
     }
 
@@ -210,12 +214,6 @@ async function createDemoData() {
       });
       routes.push(route);
       
-      // Assign route to bus
-      if (i < buses.length) {
-        buses[i].currentRoute = route._id;
-        await buses[i].save();
-      }
-      
       console.log(`  ✅ Route ${i + 1}: ${routeNames[i]} (${stops.length} stops)`);
     }
 
@@ -248,12 +246,9 @@ async function createDemoData() {
       const firstName = firstNames[i % firstNames.length];
       const lastName = lastNames[i % lastNames.length];
       const classLevel = classLevels[Math.floor(Math.random() * classLevels.length)];
-      const usesTransport = Math.random() > 0.3; // 70% use transport
+      const usesTransport = Math.random() > 0.3;
       
-      // Assign to a parent (round-robin)
       const parent = parents[i % parents.length];
-      
-      // Assign to a bus if uses transport
       const busIndex = i % buses.length;
       const routeIndex = i % routes.length;
       
@@ -271,12 +266,9 @@ async function createDemoData() {
         guardianContact: randomPhone(),
         usesTransport,
         isActive: true,
-        
-        // Only set parent for some students (others will be linked later)
         ...(i < 40 ? { parentId: parent._id } : {})
       };
 
-      // Add transport details if student uses transport
       if (usesTransport) {
         studentData.transportDetails = {
           pickupPoint: {
@@ -299,14 +291,12 @@ async function createDemoData() {
           specialNotes: Math.random() > 0.8 ? 'Allergic to peanuts' : ''
         };
 
-        // Generate QR code for transport students
         studentData.qrCode = `STU-${studentData.admissionNumber}-${Date.now() + i}`;
       }
 
       const student = await Student.create(studentData);
       students.push(student);
       
-      // Add student to parent's children list if parent exists
       if (student.parentId) {
         await User.findByIdAndUpdate(student.parentId, {
           $push: { 'parentDetails.children': student._id }
@@ -328,6 +318,9 @@ async function createDemoData() {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
+    // Store trips for later use in attendance
+    const createdTrips = [];
+
     for (let i = 0; i < buses.length; i++) {
       const bus = buses[i];
       const driver = drivers[i % drivers.length];
@@ -341,108 +334,124 @@ async function createDemoData() {
 
       if (busStudents.length === 0) continue;
 
+      // Get route name
+      const routeName = route?.name || 'Unknown Route';
+      
+      // Get vehicle ID (bus number)
+      const vehicleId = bus.busNumber || bus.registrationNumber || `BUS-${i + 1}`;
+
       // Morning trip
       const morningTrip = await Trip.create({
-        bus: bus._id,
-        driver: driver._id,
-        route: route._id,
-        type: 'morning_pickup',
-        date: today,
-        scheduledStartTime: new Date(today.setHours(6, 30, 0)),
-        scheduledEndTime: new Date(today.setHours(8, 0, 0)),
-        students: busStudents.map(s => ({
-          student: s._id,
-          status: Math.random() > 0.2 ? 'boarded' : 'pending',
-          boardingTime: Math.random() > 0.2 ? new Date(today.setHours(6, 30 + Math.floor(Math.random() * 30), 0)) : null,
-          pickupPoint: s.transportDetails?.pickupPoint || { name: s.pickupPoint },
-          dropoffPoint: s.transportDetails?.dropoffPoint || { name: s.dropOffPoint }
-        })),
-        status: Math.random() > 0.3 ? 'completed' : 'scheduled'
+        routeName: routeName,
+        vehicleId: vehicleId,
+        driverId: driver._id,
+        tripType: 'morning',
+        scheduledStartTime: new Date(new Date().setHours(6, 30, 0, 0)),
+        scheduledEndTime: new Date(new Date().setHours(8, 0, 0, 0)),
+        status: 'scheduled',
+        lateStart: false
       });
+      
+      createdTrips.push(morningTrip);
 
       // Afternoon trip
       const afternoonTrip = await Trip.create({
-        bus: bus._id,
-        driver: driver._id,
-        route: route._id,
-        type: 'evening_dropoff',
-        date: today,
-        scheduledStartTime: new Date(today.setHours(15, 30, 0)),
-        scheduledEndTime: new Date(today.setHours(17, 0, 0)),
-        students: busStudents.map(s => ({
-          student: s._id,
-          status: 'pending',
-          pickupPoint: s.transportDetails?.dropoffPoint || { name: s.dropOffPoint },
-          dropoffPoint: s.transportDetails?.pickupPoint || { name: s.pickupPoint }
-        })),
-        status: 'scheduled'
+        routeName: routeName,
+        vehicleId: vehicleId,
+        driverId: driver._id,
+        tripType: 'afternoon',
+        scheduledStartTime: new Date(new Date().setHours(15, 30, 0, 0)),
+        scheduledEndTime: new Date(new Date().setHours(17, 0, 0, 0)),
+        status: 'scheduled',
+        lateStart: false
       });
+      
+      createdTrips.push(afternoonTrip);
 
-      console.log(`  ✅ Trips for Bus ${bus.registrationNumber}: Morning (${morningTrip.students.length} students), Afternoon (${afternoonTrip.students.length} students)`);
+      console.log(`  ✅ Trips for Bus ${bus.busNumber}: Morning (${busStudents.length} students), Afternoon (${busStudents.length} students)`);
     }
 
     // ==================== CREATE ATTENDANCE RECORDS ====================
     console.log('\n📊 Creating attendance records...');
 
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    
-    const twoDaysAgo = new Date(today);
-    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-
     const transportStudents = students.filter(s => s.usesTransport);
+    let boardCount = 0;
+    let alightCount = 0;
 
+    // Create BOARD records for today
     for (const student of transportStudents.slice(0, 30)) {
-      // Record for today (if student is in a trip)
-      const todayTrip = await Trip.findOne({
-        'students.student': student._id,
-        type: 'morning_pickup'
-      });
-
-      if (todayTrip) {
-        const isPresent = Math.random() > 0.1; // 90% attendance
-        const isLate = !isPresent ? false : Math.random() > 0.7; // 30% of present are late
-        
-        await Attendance.create({
-          studentId: student._id,
-          tripId: todayTrip._id,
-          busId: student.transportDetails?.busId,
-          busNumber: buses.find(b => b._id.toString() === student.transportDetails?.busId?.toString())?.registrationNumber,
-          driverName: drivers[Math.floor(Math.random() * drivers.length)].name,
-          createdAt: isPresent ? new Date(today.setHours(6, 30 + (isLate ? 15 : 0), 0)) : new Date(),
-          eventType: isPresent ? (isLate ? 'late' : 'board') : 'absent',
-          method: 'qr',
-          metadata: {
-            syncedFromOffline: false
-          }
-        });
+      // Find the bus for this student
+      const bus = buses.find(b => b._id.toString() === student.transportDetails?.busId?.toString());
+      
+      if (!bus) {
+        console.log(`  ⚠️ No bus found for student ${student.firstName} ${student.lastName}, skipping`);
+        continue;
       }
 
-      // Record for yesterday
-      const yesterdayTrip = await Trip.findOne({
-        'students.student': student._id,
-        type: 'morning_pickup',
-        date: yesterday
+      // Find a morning trip for this bus
+      const vehicleId = bus.busNumber || bus.registrationNumber;
+      const trip = await Trip.findOne({ 
+        vehicleId: vehicleId,
+        tripType: 'morning'
       });
 
-      if (yesterdayTrip) {
+      if (!trip) {
+        console.log(`  ⚠️ No trip found for bus ${bus.busNumber}, skipping attendance`);
+        continue;
+      }
+
+      // 90% of students board
+      const willBoard = Math.random() > 0.1;
+      
+      if (willBoard) {
         await Attendance.create({
           studentId: student._id,
-          tripId: yesterdayTrip._id,
-          busId: student.transportDetails?.busId,
-          busNumber: buses.find(b => b._id.toString() === student.transportDetails?.busId?.toString())?.registrationNumber,
-          driverName: drivers[Math.floor(Math.random() * drivers.length)].name,
-          createdAt: new Date(yesterday.setHours(6, 45, 0)),
+          tripId: trip._id,
           eventType: 'board',
-          method: 'qr',
-          metadata: {
-            syncedFromOffline: false
-          }
+          scannerId: `scanner_${Math.floor(Math.random() * 5)}`,
+          gpsSnapshot: {
+            lat: -1.2864 + (Math.random() - 0.5) * 0.01,
+            lon: 36.8172 + (Math.random() - 0.5) * 0.01
+          },
+          createdAt: new Date(new Date().setHours(6, 30 + Math.floor(Math.random() * 30), 0, 0))
         });
+        boardCount++;
       }
     }
 
-    console.log(`  ✅ Created attendance records for ${transportStudents.slice(0, 30).length} students`);
+    // Create ALIGHT records for yesterday (students who boarded yesterday)
+    console.log('\n  Creating alight records for previous day...');
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(16, 0, 0, 0);
+
+    for (const student of transportStudents.slice(0, 25)) {
+      const bus = buses.find(b => b._id.toString() === student.transportDetails?.busId?.toString());
+      if (!bus) continue;
+      
+      const vehicleId = bus.busNumber || bus.registrationNumber;
+      const trip = await Trip.findOne({ 
+        vehicleId: vehicleId,
+        tripType: 'afternoon' 
+      });
+
+      if (trip) {
+        await Attendance.create({
+          studentId: student._id,
+          tripId: trip._id,
+          eventType: 'alight',
+          scannerId: `scanner_${Math.floor(Math.random() * 5)}`,
+          gpsSnapshot: {
+            lat: -1.2864 + (Math.random() - 0.5) * 0.01,
+            lon: 36.8172 + (Math.random() - 0.5) * 0.01
+          },
+          createdAt: yesterday
+        });
+        alightCount++;
+      }
+    }
+
+    console.log(`  ✅ Created ${boardCount} BOARD records and ${alightCount} ALIGHT records`);
 
     // ==================== SUMMARY ====================
     console.log('\n' + '='.repeat(50));
@@ -457,7 +466,7 @@ async function createDemoData() {
     console.log(`🧑‍🎓 Students: ${students.length} (${students.filter(s => s.usesTransport).length} use transport)`);
     console.log(`  - Linked to parents: ${students.filter(s => s.parentId).length}`);
     console.log(`  - Unlinked: ${students.filter(s => !s.parentId).length}`);
-    console.log(`\n🚌 Today's Trips: ${await Trip.countDocuments({ date: today })}`);
+    console.log(`\n🚌 Today's Trips: ${createdTrips.length}`);
     console.log(`📊 Attendance Records: ${await Attendance.countDocuments()}`);
     console.log('\n✅ All passwords: password123');
     console.log('='.repeat(50));

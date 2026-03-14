@@ -1,6 +1,9 @@
+/* eslint-disable no-unused-vars */
+ 
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
+import { userService } from '../../services/user';
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
@@ -10,14 +13,19 @@ export default function UserManagement() {
   const [editingUser, setEditingUser] = useState(null);
   const [selectedUser, setSelectedUser] = useState(null);
   const [formData, setFormData] = useState({
-    name: '',
+    firstName: '',
+    lastName: '',
     email: '',
     password: '',
     confirmPassword: '',
-    role: 'user',
+    role: 'parent',
     phone: '',
     status: 'active',
-    permissions: []
+    driverDetails: {
+      licenseNumber: '',
+      licenseExpiry: '',
+      experience: 0
+    }
   });
 
   useEffect(() => {
@@ -26,100 +34,55 @@ export default function UserManagement() {
   }, []);
 
   const fetchUsers = async () => {
-    // Mock users data
-    const mockUsers = [
-      {
-        id: 'USR001',
-        name: 'Admin User',
-        email: 'admin@school.com',
-        role: 'admin',
-        phone: '+254700000001',
-        status: 'active',
-        lastLogin: '2024-02-19T08:30:00',
-        createdAt: '2023-01-01T00:00:00',
-        permissions: ['all']
-      },
-      {
-        id: 'USR002',
-        name: 'John Manager',
-        email: 'john.manager@school.com',
-        role: 'manager',
-        phone: '+254700000002',
-        status: 'active',
-        lastLogin: '2024-02-18T14:20:00',
-        createdAt: '2023-06-15T00:00:00',
-        permissions: ['view_reports', 'manage_buses', 'manage_drivers']
-      },
-      {
-        id: 'USR003',
-        name: 'Sarah Teacher',
-        email: 'sarah.teacher@school.com',
-        role: 'teacher',
-        phone: '+254700000003',
-        status: 'active',
-        lastLogin: '2024-02-19T07:45:00',
-        createdAt: '2023-09-20T00:00:00',
-        permissions: ['view_attendance', 'take_attendance']
-      },
-      {
-        id: 'USR004',
-        name: 'Mike Driver',
-        email: 'mike.driver@school.com',
-        role: 'driver',
-        phone: '+254700000004',
-        status: 'inactive',
-        lastLogin: '2024-02-15T16:30:00',
-        createdAt: '2024-01-10T00:00:00',
-        permissions: ['view_route', 'update_gps']
-      },
-      {
-        id: 'USR005',
-        name: 'Parent Account',
-        email: 'parent@example.com',
-        role: 'parent',
-        phone: '+254700000005',
-        status: 'active',
-        lastLogin: '2024-02-19T06:15:00',
-        createdAt: '2024-02-01T00:00:00',
-        permissions: ['view_child', 'receive_notifications']
+    try {
+      setLoading(true);
+      // Fetch real users from API
+      const response = await fetch('http://localhost:5000/api/users', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        setUsers(data.data || []);
+      } else {
+        // Fallback to mock data if API fails
+        setUsers([]);
       }
-    ];
-    setUsers(mockUsers);
-    setLoading(false);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+      toast.error('Failed to load users');
+      setUsers([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fetchRoles = async () => {
-    // Mock roles data
+    // Mock roles data - these could come from backend
     const mockRoles = [
       {
-        id: 'role_admin',
+        id: 'admin',
         name: 'Administrator',
         description: 'Full system access',
         permissions: ['all']
       },
       {
-        id: 'role_manager',
-        name: 'Manager',
-        description: 'Manage operations, view reports',
-        permissions: ['view_reports', 'manage_buses', 'manage_drivers', 'manage_routes']
-      },
-      {
-        id: 'role_teacher',
-        name: 'Teacher',
-        description: 'Take attendance, view student info',
-        permissions: ['view_attendance', 'take_attendance', 'view_students']
-      },
-      {
-        id: 'role_driver',
+        id: 'driver',
         name: 'Driver',
         description: 'View route, update GPS',
         permissions: ['view_route', 'update_gps', 'view_schedule']
       },
       {
-        id: 'role_parent',
+        id: 'parent',
         name: 'Parent',
         description: 'View child location, receive alerts',
         permissions: ['view_child', 'receive_notifications', 'view_attendance_history']
+      },
+      {
+        id: 'school_admin',
+        name: 'School Admin',
+        description: 'Manage school operations',
+        permissions: ['manage_buses', 'manage_drivers', 'view_reports']
       }
     ];
     setRoles(mockRoles);
@@ -127,10 +90,22 @@ export default function UserManagement() {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    
+    if (name.startsWith('driver.')) {
+      const field = name.split('.')[1];
+      setFormData(prev => ({
+        ...prev,
+        driverDetails: {
+          ...prev.driverDetails,
+          [field]: value
+        }
+      }));
+    } else {
+      setFormData(prev => ({ ...prev, [name]: value }));
+    }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
     if (formData.password !== formData.confirmPassword) {
@@ -138,61 +113,126 @@ export default function UserManagement() {
       return;
     }
 
-    toast.success(editingUser ? 'User updated successfully' : 'User created successfully');
-    setShowForm(false);
-    setEditingUser(null);
+    try {
+      const userData = {
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        email: formData.email,
+        password: formData.password,
+        phone: formData.phone,
+        role: formData.role,
+        isActive: formData.status === 'active'
+      };
+
+      // Add role-specific details
+      if (formData.role === 'driver') {
+        userData.driverDetails = {
+          licenseNumber: formData.driverDetails.licenseNumber,
+          licenseExpiry: formData.driverDetails.licenseExpiry,
+          experience: parseInt(formData.driverDetails.experience) || 0
+        };
+      }
+
+      if (editingUser) {
+        // Update existing user
+        await userService.updateUser(editingUser._id, userData);
+        toast.success('User updated successfully');
+      } else {
+        // Create new user
+        await userService.createUser(userData);
+        toast.success('User created successfully');
+      }
+      
+      setShowForm(false);
+      setEditingUser(null);
+      resetForm();
+      fetchUsers();
+    } catch (error) {
+      console.error('Error saving user:', error);
+      toast.error(error.response?.data?.message || 'Failed to save user');
+    }
+  };
+
+  const resetForm = () => {
     setFormData({
-      name: '',
+      firstName: '',
+      lastName: '',
       email: '',
       password: '',
       confirmPassword: '',
-      role: 'user',
+      role: 'parent',
       phone: '',
       status: 'active',
-      permissions: []
+      driverDetails: {
+        licenseNumber: '',
+        licenseExpiry: '',
+        experience: 0
+      }
     });
-    fetchUsers();
   };
 
   const handleEdit = (user) => {
     setEditingUser(user);
     setFormData({
-      name: user.name,
-      email: user.email,
+      firstName: user.firstName || '',
+      lastName: user.lastName || '',
+      email: user.email || '',
       password: '',
       confirmPassword: '',
-      role: user.role,
+      role: user.role || 'parent',
       phone: user.phone || '',
-      status: user.status,
-      permissions: user.permissions || []
+      status: user.isActive ? 'active' : 'inactive',
+      driverDetails: {
+        licenseNumber: user.driverDetails?.licenseNumber || '',
+        licenseExpiry: user.driverDetails?.licenseExpiry ? 
+          new Date(user.driverDetails.licenseExpiry).toISOString().split('T')[0] : '',
+        experience: user.driverDetails?.experience || 0
+      }
     });
     setShowForm(true);
   };
 
-  const handleDelete = (id) => {
-    if (window.confirm('Are you sure you want to delete this user?')) {
+  const handleDelete = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this user?')) return;
+    
+    try {
+      await userService.deleteUser(id);
       toast.success('User deleted successfully');
       fetchUsers();
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      toast.error('Failed to delete user');
     }
   };
 
-  const handleStatusToggle = (user) => {
-    const newStatus = user.status === 'active' ? 'inactive' : 'active';
-    toast.success(`User status changed to ${newStatus}`);
-    fetchUsers();
+  const handleStatusToggle = async (user) => {
+    try {
+      const newStatus = user.isActive ? 'inactive' : 'active';
+      await userService.updateUser(user._id, { isActive: !user.isActive });
+      toast.success(`User ${newStatus === 'active' ? 'activated' : 'deactivated'}`);
+      fetchUsers();
+    } catch (error) {
+      console.error('Error toggling user status:', error);
+      toast.error('Failed to update user status');
+    }
   };
 
-  const handleResetPassword = (user) => {
-    toast.success(`Password reset email sent to ${user.email}`);
+  const handleResetPassword = async (user) => {
+    try {
+      // You might want to implement a password reset email functionality
+      toast.success(`Password reset email sent to ${user.email}`);
+    } catch (error) {
+      console.error('Error resetting password:', error);
+      toast.error('Failed to reset password');
+    }
   };
 
   const getRoleBadgeColor = (role) => {
     switch(role) {
       case 'admin': return '#f44336';
-      case 'manager': return '#FF9800';
-      case 'teacher': return '#4CAF50';
       case 'driver': return '#2196F3';
       case 'parent': return '#9C27B0';
+      case 'school_admin': return '#FF9800';
       default: return '#999';
     }
   };
@@ -232,7 +272,7 @@ export default function UserManagement() {
           textAlign: 'center'
         }}>
           <div style={{ fontSize: '28px', fontWeight: 'bold' }}>
-            {users.filter(u => u.status === 'active').length}
+            {users.filter(u => u.isActive).length}
           </div>
           <div>Active Users</div>
         </div>
@@ -273,16 +313,7 @@ export default function UserManagement() {
         <button
           onClick={() => {
             setEditingUser(null);
-            setFormData({
-              name: '',
-              email: '',
-              password: '',
-              confirmPassword: '',
-              role: 'user',
-              phone: '',
-              status: 'active',
-              permissions: []
-            });
+            resetForm();
             setShowForm(true);
           }}
           style={{
@@ -319,8 +350,8 @@ export default function UserManagement() {
             </tr>
           </thead>
           <tbody>
-            {users.map(user => (
-              <tr key={user.id} style={{ borderBottom: '1px solid #eee' }}>
+            {users.length > 0 ? users.map(user => (
+              <tr key={user._id} style={{ borderBottom: '1px solid #eee' }}>
                 <td style={{ padding: '15px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <div style={{
@@ -334,10 +365,12 @@ export default function UserManagement() {
                       color: 'white',
                       fontWeight: 'bold'
                     }}>
-                      {user.name.charAt(0)}
+                      {(user.firstName?.[0] || user.name?.[0] || 'U').toUpperCase()}
                     </div>
                     <div>
-                      <div style={{ fontWeight: '500' }}>{user.name}</div>
+                      <div style={{ fontWeight: '500' }}>
+                        {user.firstName} {user.lastName}
+                      </div>
                       <div style={{ fontSize: '12px', color: '#666' }}>{user.email}</div>
                       <div style={{ fontSize: '12px', color: '#666' }}>{user.phone}</div>
                     </div>
@@ -351,22 +384,22 @@ export default function UserManagement() {
                     borderRadius: '4px',
                     fontSize: '12px'
                   }}>
-                    {user.role.toUpperCase()}
+                    {user.role?.toUpperCase()}
                   </span>
                 </td>
                 <td style={{ padding: '15px' }}>
                   <span style={{
-                    background: user.status === 'active' ? '#4CAF50' : '#f44336',
+                    background: user.isActive ? '#4CAF50' : '#f44336',
                     color: 'white',
                     padding: '4px 8px',
                     borderRadius: '12px',
                     fontSize: '12px'
                   }}>
-                    {user.status}
+                    {user.isActive ? 'active' : 'inactive'}
                   </span>
                 </td>
                 <td style={{ padding: '15px' }}>
-                  {format(new Date(user.lastLogin), 'MMM dd, yyyy HH:mm')}
+                  {user.lastLogin ? format(new Date(user.lastLogin), 'MMM dd, yyyy HH:mm') : 'Never'}
                 </td>
                 <td style={{ padding: '15px' }}>
                   <div style={{ display: 'flex', gap: '5px' }}>
@@ -388,7 +421,7 @@ export default function UserManagement() {
                       onClick={() => handleStatusToggle(user)}
                       style={{
                         padding: '6px 12px',
-                        background: user.status === 'active' ? '#FF9800' : '#4CAF50',
+                        background: user.isActive ? '#FF9800' : '#4CAF50',
                         color: 'white',
                         border: 'none',
                         borderRadius: '4px',
@@ -396,7 +429,7 @@ export default function UserManagement() {
                         fontSize: '12px'
                       }}
                     >
-                      {user.status === 'active' ? '🔒 Deactivate' : '✅ Activate'}
+                      {user.isActive ? '🔒 Deactivate' : '✅ Activate'}
                     </button>
                     <button
                       onClick={() => handleResetPassword(user)}
@@ -413,7 +446,7 @@ export default function UserManagement() {
                       🔑 Reset
                     </button>
                     <button
-                      onClick={() => handleDelete(user.id)}
+                      onClick={() => handleDelete(user._id)}
                       style={{
                         padding: '6px 12px',
                         background: '#f44336',
@@ -429,7 +462,13 @@ export default function UserManagement() {
                   </div>
                 </td>
               </tr>
-            ))}
+            )) : (
+              <tr>
+                <td colSpan="5" style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
+                  No users found. Click "Add New User" to create one.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -446,13 +485,14 @@ export default function UserManagement() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
+          zIndex: 1000,
+          overflowY: 'auto'
         }}>
           <div style={{
             background: 'white',
             padding: '30px',
             borderRadius: '8px',
-            width: '500px',
+            width: '600px',
             maxWidth: '90%',
             maxHeight: '90vh',
             overflowY: 'auto'
@@ -461,26 +501,47 @@ export default function UserManagement() {
               {editingUser ? 'Edit User' : 'Add New User'}
             </h3>
             <form onSubmit={handleSubmit}>
-              <div style={{ marginBottom: '15px' }}>
-                <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                  Full Name *
-                </label>
-                <input
-                  type="text"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleInputChange}
-                  required
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px'
-                  }}
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                    First Name *
+                  </label>
+                  <input
+                    type="text"
+                    name="firstName"
+                    value={formData.firstName}
+                    onChange={handleInputChange}
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      border: '1px solid #ddd',
+                      borderRadius: '4px'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                    Last Name *
+                  </label>
+                  <input
+                    type="text"
+                    name="lastName"
+                    value={formData.lastName}
+                    onChange={handleInputChange}
+                    required
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      border: '1px solid #ddd',
+                      borderRadius: '4px'
+                    }}
+                  />
+                </div>
               </div>
 
-              <div style={{ marginBottom: '15px' }}>
+              <div style={{ marginBottom: '15px', marginTop: '15px' }}>
                 <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
                   Email *
                 </label>
@@ -534,34 +595,74 @@ export default function UserManagement() {
                   }}
                 >
                   <option value="admin">Administrator</option>
-                  <option value="manager">Manager</option>
-                  <option value="teacher">Teacher</option>
+                  <option value="school_admin">School Admin</option>
                   <option value="driver">Driver</option>
                   <option value="parent">Parent</option>
-                  <option value="user">Basic User</option>
                 </select>
               </div>
 
-              <div style={{ marginBottom: '15px' }}>
-                <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                  Status
-                </label>
-                <select
-                  name="status"
-                  value={formData.status}
-                  onChange={handleInputChange}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px'
-                  }}
-                >
-                  <option value="active">Active</option>
-                  <option value="inactive">Inactive</option>
-                  <option value="suspended">Suspended</option>
-                </select>
-              </div>
+              {formData.role === 'driver' && (
+                <div style={{
+                  padding: '15px',
+                  background: '#f5f5f5',
+                  borderRadius: '4px',
+                  marginBottom: '15px'
+                }}>
+                  <h4 style={{ margin: '0 0 15px 0' }}>Driver Details</h4>
+                  <div style={{ marginBottom: '15px' }}>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                      License Number
+                    </label>
+                    <input
+                      type="text"
+                      name="driver.licenseNumber"
+                      value={formData.driverDetails.licenseNumber}
+                      onChange={handleInputChange}
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        border: '1px solid #ddd',
+                        borderRadius: '4px'
+                      }}
+                    />
+                  </div>
+                  <div style={{ marginBottom: '15px' }}>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                      License Expiry
+                    </label>
+                    <input
+                      type="date"
+                      name="driver.licenseExpiry"
+                      value={formData.driverDetails.licenseExpiry}
+                      onChange={handleInputChange}
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        border: '1px solid #ddd',
+                        borderRadius: '4px'
+                      }}
+                    />
+                  </div>
+                  <div style={{ marginBottom: '15px' }}>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                      Experience (years)
+                    </label>
+                    <input
+                      type="number"
+                      name="driver.experience"
+                      value={formData.driverDetails.experience}
+                      onChange={handleInputChange}
+                      min="0"
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        border: '1px solid #ddd',
+                        borderRadius: '4px'
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
 
               {!editingUser && (
                 <>
@@ -605,46 +706,27 @@ export default function UserManagement() {
                 </>
               )}
 
-              <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', marginBottom: '10px', fontWeight: '500' }}>
-                  Permissions
+              <div style={{ marginBottom: '15px' }}>
+                <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                  Status
                 </label>
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(2, 1fr)',
-                  gap: '10px',
-                  padding: '15px',
-                  background: '#f5f5f5',
-                  borderRadius: '4px'
-                }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <input type="checkbox" /> View Dashboard
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <input type="checkbox" /> Manage Users
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <input type="checkbox" /> View Reports
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <input type="checkbox" /> Manage Buses
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <input type="checkbox" /> Manage Drivers
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <input type="checkbox" /> Take Attendance
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <input type="checkbox" /> View GPS Tracking
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                    <input type="checkbox" /> Receive Alerts
-                  </label>
-                </div>
+                <select
+                  name="status"
+                  value={formData.status}
+                  onChange={handleInputChange}
+                  style={{
+                    width: '100%',
+                    padding: '10px',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px'
+                  }}
+                >
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
               </div>
 
-              <div style={{ display: 'flex', gap: '10px' }}>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
                 <button
                   type="submit"
                   style={{

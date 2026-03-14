@@ -1,6 +1,12 @@
+/* eslint-disable no-dupe-keys */
+/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable no-unused-vars */
 import { useState, useEffect } from 'react';
 import { transportService } from '../../services/transport';
 import { studentService } from '../../services/student';
+import { userService } from '../../services/user';
+import { routeService } from '../../services/route';
+import { tripService } from '../../services/trip';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 
@@ -11,6 +17,7 @@ export default function EnhancedTransportManagement() {
   const [routes, setRoutes] = useState([]);
   const [trips, setTrips] = useState([]);
   const [students, setStudents] = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedItem, setSelectedItem] = useState(null);
   const [showForm, setShowForm] = useState(false);
@@ -33,7 +40,8 @@ export default function EnhancedTransportManagement() {
     insuranceExpiry: '',
     
     // Driver fields
-    name: '',
+    firstName: '',
+    lastName: '',
     email: '',
     phone: '',
     licenseNumber: '',
@@ -50,8 +58,21 @@ export default function EnhancedTransportManagement() {
     endPoint: '',
     distance: 0,
     duration: 0,
-    stops: [],
-    waypoints: []
+    stops: 0,
+    waypoints: [],
+    
+    // Trip fields
+    tripName: '',
+    routeId: '',
+    busId: '',
+    driverId: '',
+    startTime: '',
+    endTime: '',
+    tripDate: '',
+    
+    // Assignment fields
+    studentId: '',
+    busId: ''
   });
 
   useEffect(() => {
@@ -61,126 +82,173 @@ export default function EnhancedTransportManagement() {
   const fetchAllData = async () => {
     try {
       setLoading(true);
-      const [busesData, studentsData] = await Promise.all([
+      
+      // Fetch all data in parallel
+      const [busesData, studentsData, driversData, routesData, tripsData] = await Promise.allSettled([
         transportService.getBuses(),
-        studentService.getStudents()
+        studentService.getStudents(),
+        fetchDriversFromAPI(),
+        fetchRoutesFromAPI(),
+        fetchTripsFromAPI()
       ]);
       
-      setBuses(Array.isArray(busesData) ? busesData : []);
-      setStudents(Array.isArray(studentsData) ? studentsData : []);
-      
-      // Mock drivers data (replace with actual API call)
-      const mockDrivers = [
-        {
-          id: 'DRV001',
-          name: 'John Driver',
-          email: 'john.driver@school.com',
-          phone: '+254700000001',
-          licenseNumber: 'L123456',
-          licenseExpiry: '2025-12-31',
-          experience: 8,
-          assignedBus: 'BUS001',
-          status: 'active',
-          emergencyContact: '+254711111111',
-          address: 'Nairobi',
-          rating: 4.8,
-          totalTrips: 1250
-        },
-        {
-          id: 'DRV002',
-          name: 'Peter Driver',
-          email: 'peter.driver@school.com',
-          phone: '+254700000002',
-          licenseNumber: 'L789012',
-          licenseExpiry: '2024-06-30',
-          experience: 5,
-          assignedBus: 'BUS002',
-          status: 'active',
-          emergencyContact: '+254722222222',
-          address: 'Kiambu',
-          rating: 4.5,
-          totalTrips: 850
-        },
-        {
-          id: 'DRV003',
-          name: 'James Driver',
-          email: 'james.driver@school.com',
-          phone: '+254700000003',
-          licenseNumber: 'L345678',
-          licenseExpiry: '2024-03-15',
-          experience: 12,
-          assignedBus: 'BUS003',
-          status: 'on-leave',
-          emergencyContact: '+254733333333',
-          address: 'Machakos',
-          rating: 4.9,
-          totalTrips: 2100
-        }
-      ];
-      setDrivers(mockDrivers);
+      // Process buses
+      if (busesData.status === 'fulfilled') {
+        setBuses(Array.isArray(busesData.value) ? busesData.value : []);
+      } else {
+        console.error('Error fetching buses:', busesData.reason);
+        setBuses([]);
+      }
 
-      // Mock routes data
-      const mockRoutes = [
-        {
-          id: 'R001',
-          routeName: 'Route A - North',
-          description: 'Serving Westlands, Parklands, Ngara areas',
-          startPoint: 'School Main Gate',
-          endPoint: 'Pangani',
-          distance: 12.5,
-          duration: 45,
-          stops: 4,
-          status: 'active',
-          assignedBuses: ['BUS001', 'BUS002']
-        },
-        {
-          id: 'R002',
-          routeName: 'Route B - East',
-          description: 'Serving Buruburu, Donholm, Fedha estates',
-          startPoint: 'School Main Gate',
-          endPoint: 'Fedha',
-          distance: 15.2,
-          duration: 50,
-          stops: 5,
-          status: 'active',
-          assignedBuses: ['BUS003']
-        }
-      ];
-      setRoutes(mockRoutes);
+      // Process students
+      if (studentsData.status === 'fulfilled') {
+        const studentsArray = studentsData.value?.data || [];
+        setStudents(Array.isArray(studentsArray) ? studentsArray : []);
+      } else {
+        console.error('Error fetching students:', studentsData.reason);
+        setStudents([]);
+      }
 
-      // Mock trips data
-      const mockTrips = [
-        {
-          id: 'T001',
-          tripName: 'Morning Trip - Route A',
-          route: 'Route A - North',
-          bus: 'BUS001',
-          driver: 'John Driver',
-          startTime: '06:30',
-          endTime: '07:45',
-          status: 'in-progress',
-          students: 28,
-          completed: false
-        },
-        {
-          id: 'T002',
-          tripName: 'Morning Trip - Route B',
-          route: 'Route B - East',
-          bus: 'BUS003',
-          driver: 'James Driver',
-          startTime: '06:45',
-          endTime: '08:00',
-          status: 'scheduled',
-          students: 32,
-          completed: false
-        }
-      ];
-      setTrips(mockTrips);
+      // Process drivers
+      if (driversData.status === 'fulfilled') {
+        setDrivers(driversData.value);
+      } else {
+        console.error('Error fetching drivers:', driversData.reason);
+        setDrivers([]);
+      }
+
+      // Process routes
+      if (routesData.status === 'fulfilled') {
+        setRoutes(routesData.value);
+      } else {
+        console.error('Error fetching routes:', routesData.reason);
+        setRoutes([]);
+      }
+
+      // Process trips
+      if (tripsData.status === 'fulfilled') {
+        setTrips(tripsData.value);
+      } else {
+        console.error('Error fetching trips:', tripsData.reason);
+        setTrips([]);
+      }
+
+      // Calculate assignments (students with buses)
+      const studentsWithBuses = studentsData.status === 'fulfilled' 
+        ? (studentsData.value?.data || []).filter(s => s.busId)
+        : [];
+      setAssignments(studentsWithBuses);
 
     } catch (error) {
+      console.error('Error fetching all data:', error);
       toast.error('Failed to fetch transport data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchDriversFromAPI = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/users?role=driver', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      
+      if (!data.success) {
+        console.error('API returned error:', data.message);
+        return [];
+      }
+      
+      return data.data.map(d => ({
+        id: d._id,
+        _id: d._id,
+        firstName: d.firstName || '',
+        lastName: d.lastName || '',
+        name: `${d.firstName || ''} ${d.lastName || ''}`.trim(),
+        email: d.email || '',
+        phone: d.phone || '',
+        licenseNumber: d.driverDetails?.licenseNumber || '',
+        licenseExpiry: d.driverDetails?.licenseExpiry || new Date().toISOString().split('T')[0],
+        experience: d.driverDetails?.experience || 0,
+        assignedBus: d.driverDetails?.assignedBus || '',
+        status: d.isActive ? 'active' : 'inactive',
+        rating: 4.5,
+        totalTrips: 0
+      }));
+    } catch (error) {
+      console.error('Error fetching drivers:', error);
+      return [];
+    }
+  };
+
+  const fetchRoutesFromAPI = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/routes', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      
+      if (!data.success) {
+        console.error('API returned error:', data.message);
+        return [];
+      }
+      
+      return (data.data || []).map(route => {
+        // Extract start and end points from stops if available
+        let startPoint = '';
+        let endPoint = '';
+        if (route.stops && route.stops.length > 0) {
+          startPoint = route.stops[0].name || '';
+          endPoint = route.stops[route.stops.length - 1].name || '';
+        }
+        
+        return {
+          id: route._id,
+          _id: route._id,
+          routeName: route.name || 'Unnamed Route',
+          description: route.description || '',
+          startPoint: startPoint,
+          endPoint: endPoint,
+          distance: route.distance || 0,
+          duration: route.estimatedDuration || 0,
+          stops: route.stops?.length || 0,
+          status: route.active ? 'active' : 'inactive',
+          assignedBuses: route.busId ? [route.busId] : []
+        };
+      });
+    } catch (error) {
+      console.error('Error fetching routes:', error);
+      return [];
+    }
+  };
+
+  const fetchTripsFromAPI = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/trips', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      
+      if (!data.success) {
+        console.error('API returned error:', data.message);
+        return [];
+      }
+      
+      return (data.data || []).map(trip => ({
+        id: trip._id,
+        _id: trip._id,
+        tripName: `${trip.routeName || 'Trip'} - ${trip.tripType || ''}`,
+        route: trip.routeName || 'Unknown Route',
+        bus: trip.vehicleId || 'Unknown Bus',
+        driver: typeof trip.driverId === 'object' ? trip.driverId?.name || 'Unknown Driver' : 'Unknown Driver',
+        startTime: trip.scheduledStartTime ? format(new Date(trip.scheduledStartTime), 'HH:mm') : '--:--',
+        endTime: trip.scheduledEndTime ? format(new Date(trip.scheduledEndTime), 'HH:mm') : '--:--',
+        status: trip.status || 'scheduled',
+        students: trip.students?.length || 0
+      }));
+    } catch (error) {
+      console.error('Error fetching trips:', error);
+      return [];
     }
   };
 
@@ -201,14 +269,85 @@ export default function EnhancedTransportManagement() {
           toast.success('Bus added successfully');
         }
       } else if (activeTab === 'drivers') {
-        // Handle driver submission
-        toast.success(editingItem ? 'Driver updated' : 'Driver added');
+        const driverData = {
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          email: formData.email,
+          phone: formData.phone,
+          role: 'driver',
+          isActive: formData.status === 'active',
+          driverDetails: {
+            licenseNumber: formData.licenseNumber,
+            licenseExpiry: formData.licenseExpiry,
+            experience: parseInt(formData.experience) || 0,
+            assignedBus: formData.assignedBus || null
+          }
+        };
+
+        if (editingItem) {
+          await userService.updateUser(editingItem._id, driverData);
+          toast.success('Driver updated successfully');
+        } else {
+          driverData.password = 'password123';
+          await userService.createUser(driverData);
+          toast.success('Driver added successfully');
+        }
       } else if (activeTab === 'routes') {
-        // Handle route submission
-        toast.success(editingItem ? 'Route updated' : 'Route created');
+        // Format route data to match backend model
+        const routeData = {
+          name: formData.routeName,
+          description: formData.description,
+          distance: parseFloat(formData.distance) || 0,
+          estimatedDuration: parseInt(formData.duration) || 0,
+          active: formData.status === 'active',
+          stops: []
+        };
+        
+        // Add start point as first stop if provided
+        if (formData.startPoint) {
+          routeData.stops.push({
+            name: formData.startPoint,
+            order: 0
+          });
+        }
+        
+        // Add end point as last stop if provided and different from start
+        if (formData.endPoint && formData.endPoint !== formData.startPoint) {
+          routeData.stops.push({
+            name: formData.endPoint,
+            order: 1
+          });
+        }
+
+        if (editingItem) {
+          await routeService.updateRoute(editingItem._id, routeData);
+          toast.success('Route updated successfully');
+        } else {
+          await routeService.createRoute(routeData);
+          toast.success('Route created successfully');
+        }
       } else if (activeTab === 'trips') {
-        // Handle trip submission
-        toast.success(editingItem ? 'Trip updated' : 'Trip created');
+        const tripData = {
+          routeName: formData.routeName,
+          vehicleId: formData.busId,
+          driverId: formData.driverId,
+          tripType: 'morning',
+          scheduledStartTime: formData.tripDate && formData.startTime 
+            ? new Date(`${formData.tripDate}T${formData.startTime}:00`).toISOString()
+            : new Date().toISOString(),
+          scheduledEndTime: formData.tripDate && formData.endTime
+            ? new Date(`${formData.tripDate}T${formData.endTime}:00`).toISOString()
+            : new Date().toISOString(),
+          status: 'scheduled'
+        };
+
+        if (editingItem) {
+          await tripService.updateTrip(editingItem._id, tripData);
+          toast.success('Trip updated successfully');
+        } else {
+          await tripService.createTrip(tripData);
+          toast.success('Trip created successfully');
+        }
       }
       
       setShowForm(false);
@@ -216,6 +355,7 @@ export default function EnhancedTransportManagement() {
       resetForm();
       fetchAllData();
     } catch (error) {
+      console.error('Error saving:', error);
       toast.error('Failed to save');
     }
   };
@@ -224,10 +364,12 @@ export default function EnhancedTransportManagement() {
     setFormData({
       busNumber: '', busId: '', driverName: '', driverPhone: '', capacity: 40,
       route: '', status: 'active', fuelLevel: 100, lastMaintenance: '',
-      nextMaintenance: '', insuranceExpiry: '', name: '', email: '', phone: '',
-      licenseNumber: '', licenseExpiry: '', experience: 0, assignedBus: '',
-      emergencyContact: '', address: '', routeName: '', description: '',
-      startPoint: '', endPoint: '', distance: 0, duration: 0, stops: [], waypoints: []
+      nextMaintenance: '', insuranceExpiry: '', firstName: '', lastName: '',
+      email: '', phone: '', licenseNumber: '', licenseExpiry: '', experience: 0,
+      assignedBus: '', emergencyContact: '', address: '', routeName: '',
+      description: '', startPoint: '', endPoint: '', distance: 0, duration: 0,
+      stops: 0, waypoints: [], tripName: '', routeId: '', busId: '', driverId: '',
+      startTime: '', endTime: '', tripDate: '', studentId: ''
     });
   };
 
@@ -235,7 +377,8 @@ export default function EnhancedTransportManagement() {
     setEditingItem(item);
     if (activeTab === 'buses') {
       setFormData({
-        busNumber: item.busNumber,
+        ...formData,
+        busNumber: item.busNumber || '',
         busId: item.busId || '',
         driverName: item.driverName || '',
         driverPhone: item.driverPhone || '',
@@ -245,28 +388,34 @@ export default function EnhancedTransportManagement() {
         fuelLevel: item.fuelLevel || 100,
         lastMaintenance: item.lastMaintenance || '',
         nextMaintenance: item.nextMaintenance || '',
-        insuranceExpiry: item.insuranceExpiry || '',
-        name: '', email: '', phone: '', licenseNumber: '', licenseExpiry: '',
-        experience: 0, assignedBus: '', emergencyContact: '', address: '',
-        routeName: '', description: '', startPoint: '', endPoint: '',
-        distance: 0, duration: 0, stops: [], waypoints: []
+        insuranceExpiry: item.insuranceExpiry || ''
       });
     } else if (activeTab === 'drivers') {
       setFormData({
-        name: item.name,
-        email: item.email,
-        phone: item.phone,
-        licenseNumber: item.licenseNumber,
-        licenseExpiry: item.licenseExpiry,
-        experience: item.experience,
+        ...formData,
+        firstName: item.firstName || '',
+        lastName: item.lastName || '',
+        email: item.email || '',
+        phone: item.phone || '',
+        licenseNumber: item.licenseNumber || '',
+        licenseExpiry: item.licenseExpiry ? item.licenseExpiry.split('T')[0] : '',
+        experience: item.experience || 0,
         assignedBus: item.assignedBus || '',
         status: item.status || 'active',
         emergencyContact: item.emergencyContact || '',
-        address: item.address || '',
-        busNumber: '', busId: '', driverName: '', driverPhone: '', capacity: 40,
-        route: '', fuelLevel: 100, lastMaintenance: '', nextMaintenance: '',
-        insuranceExpiry: '', routeName: '', description: '', startPoint: '',
-        endPoint: '', distance: 0, duration: 0, stops: [], waypoints: []
+        address: item.address || ''
+      });
+    } else if (activeTab === 'routes') {
+      setFormData({
+        ...formData,
+        routeName: item.routeName || '',
+        description: item.description || '',
+        startPoint: item.startPoint || '',
+        endPoint: item.endPoint || '',
+        distance: item.distance || 0,
+        duration: item.duration || 0,
+        stops: item.stops || 0,
+        status: item.status || 'active'
       });
     }
     setShowForm(true);
@@ -278,11 +427,19 @@ export default function EnhancedTransportManagement() {
       if (activeTab === 'buses') {
         await transportService.deleteBus(id);
         toast.success('Bus deleted successfully');
-      } else {
-        toast.success('Item deleted successfully');
+      } else if (activeTab === 'drivers') {
+        await userService.deleteUser(id);
+        toast.success('Driver deleted successfully');
+      } else if (activeTab === 'routes') {
+        await routeService.deleteRoute(id);
+        toast.success('Route deleted successfully');
+      } else if (activeTab === 'trips') {
+        await tripService.deleteTrip(id);
+        toast.success('Trip deleted successfully');
       }
       fetchAllData();
     } catch (error) {
+      console.error('Error deleting:', error);
       toast.error('Failed to delete');
     }
   };
@@ -293,21 +450,37 @@ export default function EnhancedTransportManagement() {
       if (activeTab === 'buses') {
         await transportService.updateBusStatus(item._id, newStatus);
         toast.success(`Bus status updated to ${newStatus}`);
-      } else {
-        toast.success(`Status updated to ${newStatus}`);
+      } else if (activeTab === 'drivers') {
+        await userService.updateUser(item._id, { isActive: newStatus === 'active' });
+        toast.success(`Driver ${newStatus === 'active' ? 'activated' : 'deactivated'}`);
       }
       fetchAllData();
     } catch (error) {
+      console.error('Error updating status:', error);
       toast.error('Failed to update status');
     }
   };
 
-  const handleStartTrip = (trip) => {
-    toast.success(`Trip ${trip.tripName} started`);
+  const handleStartTrip = async (trip) => {
+    try {
+      await tripService.startTrip(trip._id);
+      toast.success(`Trip started successfully`);
+      fetchAllData();
+    } catch (error) {
+      console.error('Error starting trip:', error);
+      toast.error('Failed to start trip');
+    }
   };
 
-  const handleEndTrip = (trip) => {
-    toast.success(`Trip ${trip.tripName} completed`);
+  const handleEndTrip = async (trip) => {
+    try {
+      await tripService.endTrip(trip._id);
+      toast.success(`Trip ended successfully`);
+      fetchAllData();
+    } catch (error) {
+      console.error('Error ending trip:', error);
+      toast.error('Failed to end trip');
+    }
   };
 
   const handleViewOnMap = (route) => {
@@ -319,7 +492,7 @@ export default function EnhancedTransportManagement() {
   };
 
   const getStatusColor = (status) => {
-    switch(status) {
+    switch(status?.toLowerCase()) {
       case 'active': return '#4CAF50';
       case 'inactive': return '#f44336';
       case 'on-leave': return '#FF9800';
@@ -336,7 +509,7 @@ export default function EnhancedTransportManagement() {
     { id: 'drivers', name: 'Drivers', icon: '👤', count: drivers.length },
     { id: 'routes', name: 'Routes', icon: '🗺️', count: routes.length },
     { id: 'trips', name: 'Trips', icon: '📅', count: trips.length },
-    { id: 'assignments', name: 'Assignments', icon: '📋', count: students.filter(s => s.busId).length }
+    { id: 'assignments', name: 'Assignments', icon: '📋', count: assignments.length }
   ];
 
   if (loading) {
@@ -440,7 +613,7 @@ export default function EnhancedTransportManagement() {
           borderRadius: '10px'
         }}>
           <div style={{ fontSize: '28px', fontWeight: 'bold' }}>
-            {students.filter(s => s.busId).length}
+            {assignments.length}
           </div>
           <div>Students Assigned</div>
         </div>
@@ -678,7 +851,7 @@ export default function EnhancedTransportManagement() {
                         borderRadius: '4px',
                         fontSize: '12px'
                       }}>
-                        {driver.assignedBus}
+                        {buses.find(b => b._id === driver.assignedBus)?.busNumber || 'Unknown'}
                       </span>
                     ) : 'Not assigned'}
                   </td>
@@ -693,7 +866,7 @@ export default function EnhancedTransportManagement() {
                       {driver.status}
                     </span>
                   </td>
-                    <td style={{ padding: '15px' }}>
+                  <td style={{ padding: '15px' }}>
                     <span style={{ color: '#FFC107' }}>
                       {'⭐'.repeat(Math.floor(driver.rating))}
                     </span>
@@ -808,6 +981,20 @@ export default function EnhancedTransportManagement() {
                       >
                         ✏️ Edit
                       </button>
+                      <button
+                        onClick={() => handleDelete(route.id)}
+                        style={{
+                          padding: '6px 10px',
+                          background: '#f44336',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '12px'
+                        }}
+                      >
+                        🗑️
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -914,6 +1101,20 @@ export default function EnhancedTransportManagement() {
                       >
                         ✏️ Edit
                       </button>
+                      <button
+                        onClick={() => handleDelete(trip.id)}
+                        style={{
+                          padding: '6px 10px',
+                          background: '#f44336',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '12px'
+                        }}
+                      >
+                        🗑️
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -937,15 +1138,15 @@ export default function EnhancedTransportManagement() {
               </tr>
             </thead>
             <tbody>
-              {students.filter(s => s.busId).map(student => {
+              {assignments.map(student => {
                 const bus = buses.find(b => b._id === student.busId);
                 return (
                   <tr key={student._id} style={{ borderBottom: '1px solid #eee' }}>
                     <td style={{ padding: '15px' }}>
                       <div style={{ fontWeight: 'bold' }}>{student.name}</div>
-                      <div style={{ fontSize: '12px', color: '#666' }}>{student.studentId}</div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>{student.admissionNumber}</div>
                     </td>
-                    <td style={{ padding: '15px' }}>{student.className}</td>
+                    <td style={{ padding: '15px' }}>{student.classLevel}</td>
                     <td style={{ padding: '15px' }}>
                       <div>{student.parentName}</div>
                       <div style={{ fontSize: '12px', color: '#666' }}>{student.parentPhone}</div>
@@ -999,7 +1200,8 @@ export default function EnhancedTransportManagement() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
+          zIndex: 1000,
+          overflowY: 'auto'
         }}>
           <div style={{
             background: 'white',
@@ -1126,12 +1328,25 @@ export default function EnhancedTransportManagement() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                   <div style={{ gridColumn: 'span 2' }}>
                     <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Full Name *
+                      First Name *
                     </label>
                     <input
                       type="text"
-                      name="name"
-                      value={formData.name}
+                      name="firstName"
+                      value={formData.firstName}
+                      onChange={handleInputChange}
+                      required
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                      Last Name *
+                    </label>
+                    <input
+                      type="text"
+                      name="lastName"
+                      value={formData.lastName}
                       onChange={handleInputChange}
                       required
                       style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
@@ -1212,7 +1427,7 @@ export default function EnhancedTransportManagement() {
                     >
                       <option value="">None</option>
                       {buses.map(bus => (
-                        <option key={bus._id} value={bus.busNumber}>
+                        <option key={bus._id} value={bus._id}>
                           {bus.busNumber}
                         </option>
                       ))}
@@ -1230,32 +1445,115 @@ export default function EnhancedTransportManagement() {
                     >
                       <option value="active">Active</option>
                       <option value="inactive">Inactive</option>
-                      <option value="on-leave">On Leave</option>
                     </select>
                   </div>
+                </div>
+              )}
+
+              {activeTab === 'routes' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                   <div style={{ gridColumn: 'span 2' }}>
                     <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Emergency Contact
+                      Route Name *
                     </label>
                     <input
-                      type="tel"
-                      name="emergencyContact"
-                      value={formData.emergencyContact}
+                      type="text"
+                      name="routeName"
+                      value={formData.routeName}
                       onChange={handleInputChange}
+                      required
                       style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
                     />
                   </div>
                   <div style={{ gridColumn: 'span 2' }}>
                     <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Address
+                      Description
                     </label>
                     <textarea
-                      name="address"
-                      value={formData.address}
+                      name="description"
+                      value={formData.description}
                       onChange={handleInputChange}
                       rows="3"
                       style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
                     />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                      Start Point
+                    </label>
+                    <input
+                      type="text"
+                      name="startPoint"
+                      value={formData.startPoint}
+                      onChange={handleInputChange}
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                      End Point
+                    </label>
+                    <input
+                      type="text"
+                      name="endPoint"
+                      value={formData.endPoint}
+                      onChange={handleInputChange}
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                      Distance (km)
+                    </label>
+                    <input
+                      type="number"
+                      name="distance"
+                      value={formData.distance}
+                      onChange={handleInputChange}
+                      step="0.1"
+                      min="0"
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                      Duration (min)
+                    </label>
+                    <input
+                      type="number"
+                      name="duration"
+                      value={formData.duration}
+                      onChange={handleInputChange}
+                      min="0"
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                      Number of Stops
+                    </label>
+                    <input
+                      type="number"
+                      name="stops"
+                      value={formData.stops}
+                      onChange={handleInputChange}
+                      min="0"
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
+                      Status
+                    </label>
+                    <select
+                      name="status"
+                      value={formData.status}
+                      onChange={handleInputChange}
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+                    >
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
                   </div>
                 </div>
               )}

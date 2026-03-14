@@ -10,7 +10,7 @@ import TransportStatsWidget from '../../components/Dashboard/TransportStatsWidge
 import { transportService } from '../../services/transport';
 import { attendanceService } from '../../services/attendance';
 import { studentService } from '../../services/student';
-import { formatTime, getRelativeTime } from '../../utils/formatters';
+import { formatTime, getRelativeTime, formatNumber } from '../../utils/formatters';
 import toast from 'react-hot-toast';
 
 const Dashboard = () => {
@@ -60,7 +60,7 @@ const Dashboard = () => {
     // Refresh data every 30 seconds if auto-refresh is enabled
     const interval = setInterval(() => {
       if (autoRefresh) {
-        fetchDashboardData(true); // silent refresh
+        fetchDashboardData(true);
       }
     }, 30000);
 
@@ -101,7 +101,6 @@ const Dashboard = () => {
           fuelLevel: data.fuelLevel !== undefined ? data.fuelLevel : updated[index].fuelLevel
         };
         
-        // Update stats if movement status changed
         if (wasMoving !== isMoving) {
           setStats(prevStats => ({
             ...prevStats,
@@ -115,7 +114,6 @@ const Dashboard = () => {
       return prev;
     });
 
-    // Update average speed stat
     setStats(prev => {
       const currentBuses = buses.length > 0 ? buses : [];
       const speeds = currentBuses
@@ -139,7 +137,6 @@ const Dashboard = () => {
       return prev;
     });
     
-    // Update active buses count
     setStats(prev => {
       const activeCount = buses.filter(b => b.status === 'active' || b.status === 'online').length;
       return { ...prev, activeBuses: activeCount };
@@ -230,49 +227,55 @@ const Dashboard = () => {
       if (!silent) setLoading(true);
       setError(null);
       
-      console.log('Fetching dashboard data...');
-      
-      // Fetch buses
-      const busesData = await transportService.getBuses();
-      const busesArray = Array.isArray(busesData) ? busesData : [];
+      // Fetch all data in parallel with better error handling
+      const [busesRes, studentsRes, attendanceRes, gpsRes, studentStatsRes, tripsRes] = await Promise.allSettled([
+        transportService.getBuses(),
+        studentService.getStudents({ limit: 1000 }),
+        attendanceService.getAttendanceStats(),
+        transportService.getGPSStats(),
+        studentService.getStats(),
+        transportService.getActiveTrips()
+      ]);
+
+      // Process buses
+      let busesArray = [];
+      if (busesRes.status === 'fulfilled') {
+        busesArray = Array.isArray(busesRes.value) ? busesRes.value : 
+                    busesRes.value?.data ? busesRes.value.data : [];
+      }
       setBuses(busesArray);
-      
-      // Fetch students
-      const studentsData = await studentService.getStudents({ limit: 1000 });
-      const studentsArray = Array.isArray(studentsData?.data) ? studentsData.data : 
-                           Array.isArray(studentsData) ? studentsData : [];
+
+      // Process students
+      let studentsArray = [];
+      if (studentsRes.status === 'fulfilled') {
+        studentsArray = studentsRes.value?.data || [];
+      }
       setStudents(studentsArray);
-      
-      // Fetch attendance stats
-      const attendanceStats = await attendanceService.getAttendanceStats();
-      
-      // Fetch GPS stats
-      const gpsStats = await transportService.getGPSStats();
-      
-      // Fetch student stats for transport info
-      let transportStats = { transportStudents: 0, linkedStudents: 0, unlinkedStudents: 0 };
-      try {
-        const studentStatsRes = await studentService.getStats();
-        if (studentStatsRes?.data) {
-          transportStats = {
-            transportStudents: studentStatsRes.data.transportStudents || 0,
-            linkedStudents: studentStatsRes.data.linked || 0,
-            unlinkedStudents: studentStatsRes.data.unlinkedTransportStudents || 0
-          };
-        }
-      } catch (error) {
-        console.error('Error fetching student stats:', error);
+
+      // Process attendance stats
+      let attendanceData = { today: 0, presentToday: 0 };
+      if (attendanceRes.status === 'fulfilled') {
+        attendanceData = attendanceRes.value?.data || attendanceRes.value || {};
       }
-      
-      // Fetch active trips
+
+      // Process GPS stats
+      let gpsData = {};
+      if (gpsRes.status === 'fulfilled') {
+        gpsData = gpsRes.value?.data || gpsRes.value || {};
+      }
+
+      // Process student stats
+      let transportStats = { transportStudents: 0, linked: 0, unlinkedTransportStudents: 0 };
+      if (studentStatsRes.status === 'fulfilled' && studentStatsRes.value?.success) {
+        transportStats = studentStatsRes.value.data || transportStats;
+      }
+
+      // Process active trips
       let activeTrips = 0;
-      try {
-        const tripsRes = await transportService.getActiveTrips();
-        activeTrips = Array.isArray(tripsRes) ? tripsRes.length : 0;
-      } catch (error) {
-        console.error('Error fetching active trips:', error);
+      if (tripsRes.status === 'fulfilled') {
+        activeTrips = tripsRes.value?.data?.length || 0;
       }
-      
+
       // Calculate moving/stopped stats
       const movingCount = busesArray.filter(b => (b.currentLocation?.speed || 0) > 5).length;
       const stoppedCount = busesArray.filter(b => (b.currentLocation?.speed || 0) <= 5).length;
@@ -291,16 +294,16 @@ const Dashboard = () => {
         movingBuses: movingCount,
         stoppedBuses: stoppedCount,
         totalStudents: studentsArray.length,
-        presentToday: attendanceStats?.data?.today || attendanceStats?.presentToday || 0,
+        presentToday: attendanceData.today || attendanceData.presentToday || 0,
         attendanceRate: studentsArray.length > 0 
-          ? Math.round(((attendanceStats?.data?.today || attendanceStats?.presentToday || 0) / studentsArray.length) * 100) 
+          ? Math.round(((attendanceData.today || attendanceData.presentToday || 0) / studentsArray.length) * 100) 
           : 0,
-        alerts: gpsStats?.recentSpeedViolations || 0,
+        alerts: gpsData.recentSpeedViolations || 0,
         avgSpeed: avgSpeed,
         onTimeRate: 98,
-        transportStudents: transportStats.transportStudents,
-        linkedStudents: transportStats.linkedStudents,
-        unlinkedStudents: transportStats.unlinkedStudents,
+        transportStudents: transportStats.transportStudents || transportStats.total || 0,
+        linkedStudents: transportStats.linked || 0,
+        unlinkedStudents: transportStats.unlinkedTransportStudents || 0,
         activeTrips: activeTrips
       });
       
@@ -467,36 +470,36 @@ const Dashboard = () => {
           <div className="stats-grid">
             <div className="stat-card" style={{ borderLeft: '4px solid #2196F3' }}>
               <h3>Active Buses</h3>
-              <div className="value">{stats.activeBuses}</div>
-              <small>{buses.length} total buses</small>
+              <div className="value">{formatNumber(stats.activeBuses)}</div>
+              <small>{formatNumber(buses.length)} total buses</small>
               <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
-                <span style={{ color: '#4CAF50' }}>🚗 {stats.movingBuses} moving</span> • 
-                <span style={{ color: '#FF9800' }}> ⏱️ {stats.stoppedBuses} stopped</span>
+                <span style={{ color: '#4CAF50' }}>🚗 {formatNumber(stats.movingBuses)} moving</span> • 
+                <span style={{ color: '#FF9800' }}> ⏱️ {formatNumber(stats.stoppedBuses)} stopped</span>
               </div>
             </div>
             
             <div className="stat-card" style={{ borderLeft: '4px solid #4CAF50' }}>
               <h3>Total Students</h3>
-              <div className="value">{stats.totalStudents}</div>
-              <small>{stats.transportStudents} use transport</small>
+              <div className="value">{formatNumber(stats.totalStudents)}</div>
+              <small>{formatNumber(stats.transportStudents)} use transport</small>
               <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
-                👪 {stats.linkedStudents} linked • 👤 {stats.unlinkedStudents} unlinked
+                👪 {formatNumber(stats.linkedStudents)} linked • 👤 {formatNumber(stats.unlinkedStudents)} unlinked
               </div>
             </div>
             
             <div className="stat-card" style={{ borderLeft: '4px solid #FF9800' }}>
               <h3>Present Today</h3>
-              <div className="value">{stats.presentToday}</div>
+              <div className="value">{formatNumber(stats.presentToday)}</div>
               <small>{stats.attendanceRate}% attendance</small>
               <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
-                📊 Avg speed: {stats.avgSpeed} km/h
+                📊 Avg speed: {formatNumber(stats.avgSpeed)} km/h
               </div>
             </div>
             
             <div className="stat-card" style={{ borderLeft: '4px solid #f44336' }}>
               <h3>Active Alerts</h3>
-              <div className="value">{stats.alerts}</div>
-              <small>{stats.activeTrips} active trips</small>
+              <div className="value">{formatNumber(stats.alerts)}</div>
+              <small>{formatNumber(stats.activeTrips)} active trips</small>
               <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
                 ⏱️ On-time rate: {stats.onTimeRate}%
               </div>
@@ -869,7 +872,8 @@ const Dashboard = () => {
             marginTop: '20px',
             display: 'flex',
             gap: '10px',
-            justifyContent: 'flex-end'
+            justifyContent: 'flex-end',
+            flexWrap: 'wrap'
           }}>
             <button
               onClick={() => navigate('/transport')}

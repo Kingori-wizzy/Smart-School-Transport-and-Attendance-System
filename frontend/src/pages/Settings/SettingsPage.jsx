@@ -1,18 +1,78 @@
-import { useState } from 'react';
+/* eslint-disable no-unused-vars */
+import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import UserManagement from '../../components/Settings/UserManagement';
-import SystemConfiguration from '../../components/Settings/Systemconfiguration';
+import SystemConfiguration from '../../components/Settings/SystemConfiguration';
 import Preferences from '../../components/Settings/Preferences';
+import { settingsService } from '../../services/settings';
+import toast from 'react-hot-toast';
 
 export default function SettingsPage() {
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState('users');
+  const [systemConfig, setSystemConfig] = useState(null);
+  const [userPreferences, setUserPreferences] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   const tabs = [
     { id: 'users', name: 'User Management', icon: '👥' },
     { id: 'system', name: 'System Configuration', icon: '⚙️' },
     { id: 'preferences', name: 'My Preferences', icon: '🎨' }
   ];
+
+  useEffect(() => {
+    if (activeTab === 'system') {
+      fetchSystemConfig();
+    } else if (activeTab === 'preferences') {
+      fetchUserPreferences();
+    }
+  }, [activeTab]);
+
+  const fetchSystemConfig = async () => {
+    try {
+      setLoading(true);
+      const config = await settingsService.getSystemConfig();
+      setSystemConfig(config.data);
+    } catch (error) {
+      console.error('Error fetching system config:', error);
+      toast.error('Failed to load system configuration');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchUserPreferences = async () => {
+    try {
+      setLoading(true);
+      const prefs = await settingsService.getUserPreferences();
+      setUserPreferences(prefs.data);
+    } catch (error) {
+      console.error('Error fetching preferences:', error);
+      toast.error('Failed to load preferences');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveSystemConfig = async (config) => {
+    try {
+      await settingsService.updateSystemConfig(config);
+      toast.success('System configuration saved');
+      fetchSystemConfig();
+    } catch (error) {
+      toast.error('Failed to save configuration');
+    }
+  };
+
+  const handleSavePreferences = async (prefs) => {
+    try {
+      await settingsService.updateUserPreferences(prefs);
+      toast.success('Preferences saved');
+      fetchUserPreferences();
+    } catch (error) {
+      toast.error('Failed to save preferences');
+    }
+  };
 
   return (
     <div className="dashboard">
@@ -83,11 +143,30 @@ export default function SettingsPage() {
             background: 'white',
             borderRadius: '8px',
             boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-            minHeight: '500px'
+            minHeight: '500px',
+            padding: '20px'
           }}>
-            {activeTab === 'users' && <UserManagement />}
-            {activeTab === 'system' && <SystemConfiguration />}
-            {activeTab === 'preferences' && <Preferences />}
+            {loading ? (
+              <div style={{ textAlign: 'center', padding: '50px' }}>
+                <div className="loading-spinner" />
+              </div>
+            ) : (
+              <>
+                {activeTab === 'users' && <UserManagement />}
+                {activeTab === 'system' && (
+                  <SystemConfiguration 
+                    config={systemConfig} 
+                    onSave={handleSaveSystemConfig} 
+                  />
+                )}
+                {activeTab === 'preferences' && (
+                  <Preferences 
+                    preferences={userPreferences} 
+                    onSave={handleSavePreferences} 
+                  />
+                )}
+              </>
+            )}
           </div>
         </div>
       </div>

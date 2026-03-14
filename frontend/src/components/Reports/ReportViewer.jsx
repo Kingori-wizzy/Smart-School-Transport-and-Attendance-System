@@ -1,76 +1,33 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import { reportService } from '../../services/report';
+import exportService from '../../services/exportService';
 
 export default function ReportViewer() {
   const [selectedReport, setSelectedReport] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [sortBy, setSortBy] = useState('date');
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  // Mock saved reports
-  const [reports, setReports] = useState([
-    {
-      id: 1,
-      name: 'Attendance Report - Weekly Summary',
-      type: 'attendance',
-      date: '2024-02-19T10:30:00',
-      format: 'pdf',
-      size: '2.4 MB',
-      createdBy: 'Admin',
-      description: 'Weekly attendance summary for all grades',
-      pages: 12,
-      downloads: 45
-    },
-    {
-      id: 2,
-      name: 'Transport Report - February 2024',
-      type: 'transport',
-      date: '2024-02-18T14:20:00',
-      format: 'excel',
-      size: '1.8 MB',
-      createdBy: 'Admin',
-      description: 'Monthly transport operations report including bus utilization and trip logs',
-      pages: 8,
-      downloads: 32
-    },
-    {
-      id: 3,
-      name: 'Driver Performance - Q1 2024',
-      type: 'drivers',
-      date: '2024-02-17T09:15:00',
-      format: 'pdf',
-      size: '3.1 MB',
-      createdBy: 'Admin',
-      description: 'Quarterly driver performance evaluation with safety scores',
-      pages: 15,
-      downloads: 28
-    },
-    {
-      id: 4,
-      name: 'Route Efficiency Analysis',
-      type: 'routes',
-      date: '2024-02-16T11:45:00',
-      format: 'csv',
-      size: '956 KB',
-      createdBy: 'Admin',
-      description: 'Route efficiency and optimization analysis with recommendations',
-      pages: 6,
-      downloads: 19
-    },
-    {
-      id: 5,
-      name: 'Alerts & Incidents - February',
-      type: 'alerts',
-      date: '2024-02-15T16:30:00',
-      format: 'pdf',
-      size: '1.2 MB',
-      createdBy: 'Admin',
-      description: 'Monthly incident and alert summary with resolution times',
-      pages: 10,
-      downloads: 23
+  useEffect(() => {
+    fetchReports();
+  }, []);
+
+  const fetchReports = async () => {
+    try {
+      setLoading(true);
+      const response = await reportService.getSavedReports();
+      setReports(response.data || []);
+    } catch (error) {
+      console.error('Error fetching reports:', error);
+      toast.error('Failed to load reports');
+    } finally {
+      setLoading(false);
     }
-  ]);
+  };
 
   const getTypeIcon = (type) => {
     switch(type) {
@@ -107,14 +64,30 @@ export default function ReportViewer() {
     setSelectedReport(report);
   };
 
-  const handleDownload = (report) => {
-    toast.success(`Downloading ${report.name} (${report.size})`);
+  const handleDownload = async (report) => {
+    try {
+      await exportService.exportToPDF(report.data || report, report.name, {
+        title: report.name,
+        headers: report.headers,
+        columns: report.columns
+      });
+      toast.success(`Downloading ${report.name}`);
+    } catch (error) {
+      console.error('Error downloading report:', error);
+      toast.error('Failed to download report');
+    }
   };
 
-  const handleDelete = (id) => {
-    if (window.confirm('Are you sure you want to delete this report?')) {
+  const handleDelete = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this report?')) return;
+    
+    try {
+      await reportService.deleteReport(id);
       setReports(reports.filter(r => r.id !== id));
       toast.success('Report deleted successfully');
+    } catch (error) {
+      console.error('Error deleting report:', error);
+      toast.error('Failed to delete report');
     }
   };
 
@@ -124,27 +97,61 @@ export default function ReportViewer() {
   };
 
   const handlePrint = (report) => {
-    window.print();
-    toast.success(`Printing ${report.name}`);
+    const printContent = document.getElementById(`report-${report.id}`);
+    if (printContent) {
+      const printWindow = window.open('', '_blank');
+      printWindow.document.write(`
+        <html>
+          <head>
+            <title>${report.name}</title>
+            <style>
+              body { font-family: Arial, sans-serif; padding: 20px; }
+              table { border-collapse: collapse; width: 100%; }
+              th { background: #2196F3; color: white; padding: 10px; text-align: left; }
+              td { padding: 8px; border-bottom: 1px solid #ddd; }
+              .header { text-align: center; margin-bottom: 20px; }
+              .date { color: #666; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="header">
+              <h1>${report.name}</h1>
+              <p class="date">Generated: ${format(new Date(report.createdAt), 'MMMM dd, yyyy HH:mm:ss')}</p>
+            </div>
+            ${printContent.innerHTML}
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+      printWindow.focus();
+      printWindow.print();
+      toast.success(`Printing ${report.name}`);
+    }
   };
 
   const filteredReports = reports
     .filter(report => {
-      const matchesSearch = report.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                           report.description.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearch = report.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                           report.description?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesType = filterType === 'all' || report.type === filterType;
       return matchesSearch && matchesType;
     })
     .sort((a, b) => {
       if (sortBy === 'date') {
-        return new Date(b.date) - new Date(a.date);
+        return new Date(b.createdAt) - new Date(a.createdAt);
       } else if (sortBy === 'name') {
-        return a.name.localeCompare(b.name);
-      } else if (sortBy === 'size') {
-        return b.size.localeCompare(a.size);
+        return (a.name || '').localeCompare(b.name || '');
       }
       return 0;
     });
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: '40px' }}>
+        <div className="loading-spinner" style={{ margin: '0 auto' }} />
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '20px' }}>
@@ -208,7 +215,6 @@ export default function ReportViewer() {
           >
             <option value="date">Sort by Date</option>
             <option value="name">Sort by Name</option>
-            <option value="size">Sort by Size</option>
           </select>
         </div>
 
@@ -226,6 +232,7 @@ export default function ReportViewer() {
         {filteredReports.map(report => (
           <div
             key={report.id}
+            id={`report-${report.id}`}
             style={{
               background: 'white',
               borderRadius: '12px',
@@ -280,7 +287,7 @@ export default function ReportViewer() {
                   gap: '4px'
                 }}>
                   <span>{getFormatIcon(report.format)}</span>
-                  <span>{report.format.toUpperCase()}</span>
+                  <span>{(report.format || 'pdf').toUpperCase()}</span>
                 </div>
               </div>
 
@@ -294,7 +301,7 @@ export default function ReportViewer() {
                 color: '#666',
                 lineHeight: '1.5'
               }}>
-                {report.description}
+                {report.description || 'No description'}
               </p>
 
               <div style={{
@@ -306,10 +313,9 @@ export default function ReportViewer() {
                 paddingBottom: '15px',
                 borderBottom: '1px solid #eee'
               }}>
-                <span>📅 {format(new Date(report.date), 'MMM dd, yyyy')}</span>
-                <span>⏱️ {format(new Date(report.date), 'HH:mm')}</span>
-                <span>📦 {report.size}</span>
-                <span>📄 {report.pages} pages</span>
+                <span>📅 {format(new Date(report.createdAt), 'MMM dd, yyyy')}</span>
+                <span>⏱️ {format(new Date(report.createdAt), 'HH:mm')}</span>
+                <span>📄 {report.pages || 1} pages</span>
               </div>
 
               <div style={{
@@ -395,17 +401,6 @@ export default function ReportViewer() {
                   🗑️
                 </button>
               </div>
-
-              <div style={{
-                marginTop: '10px',
-                fontSize: '11px',
-                color: '#999',
-                display: 'flex',
-                justifyContent: 'space-between'
-              }}>
-                <span>Created by: {report.createdBy}</span>
-                <span>📥 {report.downloads} downloads</span>
-              </div>
             </div>
           </div>
         ))}
@@ -448,7 +443,7 @@ export default function ReportViewer() {
               <div>
                 <h2 style={{ margin: '0 0 5px 0', color: '#333' }}>{selectedReport.name}</h2>
                 <p style={{ margin: 0, color: '#666', fontSize: '14px' }}>
-                  {selectedReport.description}
+                  {selectedReport.description || 'No description'}
                 </p>
               </div>
               <button
@@ -485,7 +480,7 @@ export default function ReportViewer() {
                 <h3 style={{ margin: '0 0 10px 0', color: '#555' }}>Report Preview</h3>
                 <p style={{ color: '#888', marginBottom: '20px' }}>
                   This is a preview of the {selectedReport.name}.<br />
-                  The actual report would be displayed here in {selectedReport.format.toUpperCase()} format.
+                  The actual report contains detailed data from the system.
                 </p>
                 
                 {/* Mock Report Content */}
@@ -500,14 +495,11 @@ export default function ReportViewer() {
                     <strong>Report Details:</strong>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                    <div>📅 Date: {format(new Date(selectedReport.date), 'MMMM dd, yyyy')}</div>
-                    <div>⏱️ Time: {format(new Date(selectedReport.date), 'HH:mm:ss')}</div>
+                    <div>📅 Date: {format(new Date(selectedReport.createdAt), 'MMMM dd, yyyy')}</div>
+                    <div>⏱️ Time: {format(new Date(selectedReport.createdAt), 'HH:mm:ss')}</div>
                     <div>📊 Type: {selectedReport.type}</div>
-                    <div>📁 Format: {selectedReport.format.toUpperCase()}</div>
-                    <div>📦 Size: {selectedReport.size}</div>
-                    <div>📄 Pages: {selectedReport.pages}</div>
-                    <div>👤 Created By: {selectedReport.createdBy}</div>
-                    <div>📥 Downloads: {selectedReport.downloads}</div>
+                    <div>📁 Format: {(selectedReport.format || 'pdf').toUpperCase()}</div>
+                    <div>📄 Pages: {selectedReport.pages || 1}</div>
                   </div>
                 </div>
               </div>
@@ -547,7 +539,7 @@ export default function ReportViewer() {
                   gap: '8px'
                 }}
               >
-                📥 Download {selectedReport.format.toUpperCase()}
+                📥 Download PDF
               </button>
               <button
                 onClick={() => handleShare(selectedReport)}

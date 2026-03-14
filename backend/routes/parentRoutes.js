@@ -11,7 +11,8 @@ const Trip = require('../models/Trip');
 const Notification = require('../models/Notification');
 const Bus = require('../models/Bus');
 const GPSLog = require('../models/GPSLog');
-const paginate = require('../utils/pagination');
+// FIXED: Import the pagination object correctly
+const { paginate, getPaginationMeta } = require('../utils/pagination');
 
 // All routes require authentication
 router.use(authMiddleware);
@@ -29,6 +30,7 @@ const validateChild = [
 // 👨‍👩‍👧 Get parent's children (paginated)
 router.get('/children', async (req, res) => {
   try {
+    // FIXED: Use paginate function correctly
     const { page, limit, skip } = paginate(req);
     
     const [children, total] = await Promise.all([
@@ -37,22 +39,21 @@ router.get('/children', async (req, res) => {
         .select('-__v')
         .skip(skip)
         .limit(limit)
-        .sort('-createdAt'),
+        .sort('-createdAt')
+        .lean(), // Added lean() for better performance
       Student.countDocuments({ parentId: req.user.id })
     ]);
+
+    // FIXED: Use getPaginationMeta for consistent pagination response
+    const pagination = getPaginationMeta(page, limit, total);
 
     res.json({
       success: true,
       data: children,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
-      }
+      pagination
     });
   } catch (error) {
-    console.error('Error fetching children:', error);
+    console.error('❌ Error fetching children:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 
@@ -87,7 +88,7 @@ router.post('/children', validateChild, async (req, res) => {
       gender
     } = req.body;
 
-    console.log('Adding child for parent:', req.user.id);
+    console.log('📝 Adding child for parent:', req.user.id);
 
     // Check for duplicate admission number
     const existing = await Student.findOne({ admissionNumber: studentId });
@@ -231,7 +232,7 @@ router.get('/children/:childId/location', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching location:', error);
+    console.error('❌ Error fetching location:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 
@@ -288,7 +289,8 @@ router.get('/children/:childId/attendance', async (req, res) => {
     const attendance = await Attendance.find(query)
       .populate('tripId', 'routeName busId')
       .sort({ createdAt: -1 })
-      .limit(parsedLimit);
+      .limit(parsedLimit)
+      .lean();
 
     const stats = {
       total: attendance.length,
@@ -315,7 +317,7 @@ router.get('/children/:childId/attendance', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching attendance:', error);
+    console.error('❌ Error fetching attendance:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 
@@ -362,7 +364,7 @@ router.get('/children/:childId/stats', async (req, res) => {
       
       return res.json(response.data);
     } catch (forwardError) {
-      console.error('Error forwarding to attendance stats:', forwardError.message);
+      console.error('⚠️ Error forwarding to attendance stats:', forwardError.message);
       
       // Fallback to basic stats
       const attendance = await Attendance.find({ studentId: childId });
@@ -385,7 +387,7 @@ router.get('/children/:childId/stats', async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Error fetching child stats:', error);
+    console.error('❌ Error fetching child stats:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 
@@ -430,14 +432,15 @@ router.get('/children/:childId/trips/recent', async (req, res) => {
       status: 'completed'
     })
     .sort({ date: -1, endTime: -1 })
-    .limit(limit);
+    .limit(limit)
+    .lean();
 
     res.json({
       success: true,
       data: trips
     });
   } catch (error) {
-    console.error('Error fetching trips:', error);
+    console.error('❌ Error fetching trips:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 
@@ -448,6 +451,7 @@ router.get('/children/:childId/trips/recent', async (req, res) => {
 // 🔔 Get parent's notifications (paginated)
 router.get('/notifications', async (req, res) => {
   try {
+    // FIXED: Use paginate function correctly
     const { page, limit, skip } = paginate(req);
 
     const [notifications, total] = await Promise.all([
@@ -457,7 +461,8 @@ router.get('/notifications', async (req, res) => {
       })
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(limit),
+        .limit(limit)
+        .lean(),
       Notification.countDocuments({ 
         userId: req.user.id,
         userType: 'parent'
@@ -470,19 +475,17 @@ router.get('/notifications', async (req, res) => {
       read: false
     });
 
+    // FIXED: Use getPaginationMeta
+    const pagination = getPaginationMeta(page, limit, total);
+    pagination.unread = unreadCount;
+
     res.json({
       success: true,
       data: notifications,
-      pagination: {
-        total,
-        page,
-        limit,
-        pages: Math.ceil(total / limit),
-        unread: unreadCount
-      }
+      pagination
     });
   } catch (error) {
-    console.error('Error fetching notifications:', error);
+    console.error('❌ Error fetching notifications:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 
@@ -531,7 +534,7 @@ router.patch('/notifications/:id/read', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error updating notification:', error);
+    console.error('❌ Error updating notification:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 
@@ -571,14 +574,15 @@ router.get('/children/:childId/trips/upcoming', async (req, res) => {
       date: { $gte: now }
     })
     .sort({ date: 1, startTime: 1 })
-    .limit(5);
+    .limit(5)
+    .lean();
 
     res.json({
       success: true,
       data: trips
     });
   } catch (error) {
-    console.error('Error fetching trips:', error);
+    console.error('❌ Error fetching trips:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 
@@ -616,7 +620,7 @@ router.get('/children/:childId', async (req, res) => {
       data: student
     });
   } catch (error) {
-    console.error('Error fetching child:', error);
+    console.error('❌ Error fetching child:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 
@@ -707,7 +711,7 @@ router.put('/children/:childId', validateChild, async (req, res) => {
       message: 'Child updated successfully'
     });
   } catch (error) {
-    console.error('Error updating child:', error);
+    console.error('❌ Error updating child:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 
@@ -750,7 +754,7 @@ router.delete('/children/:childId', async (req, res) => {
       message: 'Child removed successfully'
     });
   } catch (error) {
-    console.error('Error removing child:', error);
+    console.error('❌ Error removing child:', error);
     res.status(500).json({ 
       success: false,
       message: error.message 

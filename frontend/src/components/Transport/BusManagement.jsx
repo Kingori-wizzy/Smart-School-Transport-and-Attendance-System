@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import { useState, useEffect } from 'react';
 import { transportService } from '../../services/transport';
 import toast from 'react-hot-toast';

@@ -43,13 +43,12 @@ import {
   Refresh as RefreshIcon,
   FileDownload as FileDownloadIcon
 } from '@mui/icons-material';
-// ✅ FIXED: Import DirectionsBus instead of Bus
 import DirectionsBus from '@mui/icons-material/DirectionsBus';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import StudentForm from '../../components/Students/StudentForm';
 import QRCodeModal from '../../components/Students/QRCodeModal';
-import { formatDate } from '../../utils/formatters';
+import { formatDate, formatNumber } from '../../utils/formatters';
 import toast from 'react-hot-toast';
 
 const TransportStudents = () => {
@@ -118,7 +117,6 @@ const TransportStudents = () => {
   };
 
   const fetchClasses = async () => {
-    // This could come from a separate endpoint or be extracted from students
     const mockClasses = [
       'PP1', 'PP2', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4',
       'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9',
@@ -180,7 +178,7 @@ const TransportStudents = () => {
           qrCode: response.data.qrCode
         });
         setOpenQRModal(true);
-        fetchStudents(); // Refresh to show QR code
+        fetchStudents();
       }
     } catch (error) {
       console.error('Error generating QR:', error);
@@ -199,29 +197,40 @@ const TransportStudents = () => {
   };
 
   const handleExport = () => {
-    // Create CSV export
-    const csvData = students.map(s => ({
-      'Admission No': s.admissionNumber,
-      'Name': `${s.firstName} ${s.lastName}`,
-      'Class': s.classLevel,
-      'Parent Linked': s.parentId ? 'Yes' : 'No',
-      'Bus': s.transportDetails?.busId?.busNumber || s.busNumber || 'Not Assigned',
-      'Status': s.transportDetails?.status || s.transportStatus,
-      'Pickup': s.transportDetails?.pickupPoint?.name || s.pickupPoint,
-      'Dropoff': s.transportDetails?.dropoffPoint?.name || s.dropOffPoint
-    }));
+    if (!students || students.length === 0) {
+      toast.error('No data to export');
+      return;
+    }
 
-    const csvString = [
-      Object.keys(csvData[0]).join(','),
-      ...csvData.map(row => Object.values(row).join(','))
-    ].join('\n');
+    try {
+      const csvData = students.map(s => ({
+        'Admission No': s.admissionNumber || '',
+        'Name': `${s.firstName || ''} ${s.lastName || ''}`.trim(),
+        'Class': s.classLevel || '',
+        'Parent Linked': s.parentId ? 'Yes' : 'No',
+        'Bus': s.transportDetails?.busId?.busNumber || s.busNumber || 'Not Assigned',
+        'Status': s.transportDetails?.status || s.transportStatus || '',
+        'Pickup': s.transportDetails?.pickupPoint?.name || s.pickupPoint || '',
+        'Dropoff': s.transportDetails?.dropoffPoint?.name || s.dropOffPoint || ''
+      }));
 
-    const blob = new Blob([csvString], { type: 'text/csv' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `transport-students-${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
+      const csvString = [
+        Object.keys(csvData[0]).join(','),
+        ...csvData.map(row => Object.values(row).join(','))
+      ].join('\n');
+
+      const blob = new Blob([csvString], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `transport-students-${new Date().toISOString().split('T')[0]}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      toast.success('Export completed');
+    } catch (error) {
+      console.error('Export error:', error);
+      toast.error('Failed to export data');
+    }
   };
 
   const getStatusChip = (status) => {
@@ -245,7 +254,7 @@ const TransportStudents = () => {
               {title}
             </Typography>
             <Typography variant="h4" component="div">
-              {value}
+              {formatNumber(value)}
             </Typography>
             {subtitle && (
               <Typography variant="caption" color="textSecondary">
@@ -289,15 +298,15 @@ const TransportStudents = () => {
 
       {/* Stats Cards */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Total Transport"
             value={stats.totalTransport}
-            icon={<DirectionsBus sx={{ color: '#1976d2' }} />} // ✅ FIXED: Using DirectionsBus
+            icon={<DirectionsBus sx={{ color: '#1976d2' }} />}
             color="primary"
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Linked to Parent"
             value={stats.linked}
@@ -306,7 +315,7 @@ const TransportStudents = () => {
             subtitle={`${stats.unlinked} unlinked`}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Active"
             value={stats.active}
@@ -314,7 +323,7 @@ const TransportStudents = () => {
             color="warning"
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={3}>
+        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
             title="Unlinked"
             value={stats.unlinked}
@@ -327,7 +336,7 @@ const TransportStudents = () => {
       {/* Filters */}
       <Paper sx={{ p: 2, mb: 3 }}>
         <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} md={4}>
+          <Grid size={{ xs: 12, md: 4 }}>
             <TextField
               fullWidth
               size="small"
@@ -343,7 +352,7 @@ const TransportStudents = () => {
               }}
             />
           </Grid>
-          <Grid item xs={12} md={2}>
+          <Grid size={{ xs: 12, md: 2 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Class</InputLabel>
               <Select
@@ -358,7 +367,7 @@ const TransportStudents = () => {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} md={2}>
+          <Grid size={{ xs: 12, md: 2 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Bus</InputLabel>
               <Select
@@ -375,7 +384,7 @@ const TransportStudents = () => {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} md={2}>
+          <Grid size={{ xs: 12, md: 2 }}>
             <FormControl fullWidth size="small">
               <InputLabel>Status</InputLabel>
               <Select
@@ -391,7 +400,7 @@ const TransportStudents = () => {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} md={2}>
+          <Grid size={{ xs: 12, md: 2 }}>
             <Button
               fullWidth
               variant="outlined"

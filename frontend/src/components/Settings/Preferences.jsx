@@ -1,8 +1,11 @@
-import { useState } from 'react';
+/* eslint-disable no-unused-vars */
+/* eslint-disable react-hooks/exhaustive-deps */
+import { useState, useEffect } from 'react';
 import { useTheme } from '../../context/ThemeContext';
+import { settingsService } from '../../services/settings';
 import toast from 'react-hot-toast';
 
-export default function Preferences() {
+export default function Preferences({ preferences: initialPrefs, onSave }) {
   const {
     // State
     theme,
@@ -51,17 +54,64 @@ export default function Preferences() {
   } = useTheme();
 
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleSave = () => {
+  useEffect(() => {
+    if (initialPrefs) {
+      // Load existing preferences from props if provided
+      setTheme(initialPrefs.theme || theme);
+      setCompactView(initialPrefs.compactView || compactView);
+      setAnimations(initialPrefs.animations !== undefined ? initialPrefs.animations : animations);
+      setFontSize(initialPrefs.fontSize || fontSize);
+      setHighContrast(initialPrefs.highContrast || highContrast);
+      setReduceMotion(initialPrefs.reduceMotion || reduceMotion);
+      setLanguage(initialPrefs.language || language);
+      setDateFormat(initialPrefs.dateFormat || dateFormat);
+      setTimeFormat(initialPrefs.timeFormat || timeFormat);
+      setSidebarCollapsed(initialPrefs.sidebarCollapsed || sidebarCollapsed);
+      setNotifications(initialPrefs.notifications !== undefined ? initialPrefs.notifications : notifications);
+      setSoundAlerts(initialPrefs.soundAlerts !== undefined ? initialPrefs.soundAlerts : soundAlerts);
+      setAlertVolume(initialPrefs.alertVolume || alertVolume);
+      setAutoSave(initialPrefs.autoSave !== undefined ? initialPrefs.autoSave : autoSave);
+      setAutoSaveInterval(initialPrefs.autoSaveInterval || autoSaveInterval);
+    }
+  }, [initialPrefs]);
+
+  const handleSave = async () => {
     setSaving(true);
-    setTimeout(() => {
-      setSaving(false);
+    try {
+      const preferences = {
+        theme,
+        compactView,
+        animations,
+        fontSize,
+        highContrast,
+        reduceMotion,
+        language,
+        dateFormat,
+        timeFormat,
+        sidebarCollapsed,
+        notifications,
+        soundAlerts,
+        alertVolume,
+        autoSave,
+        autoSaveInterval
+      };
+      
+      await onSave(preferences);
       toast.success('Preferences saved successfully');
-    }, 500);
+    } catch (error) {
+      console.error('Error saving preferences:', error);
+      toast.error('Failed to save preferences');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleReset = () => {
-    if (window.confirm('Reset all preferences to default?')) {
+  const handleReset = async () => {
+    if (!window.confirm('Reset all preferences to default?')) return;
+    
+    try {
       setTheme('light');
       setCompactView(false);
       setAnimations(true);
@@ -77,7 +127,12 @@ export default function Preferences() {
       setAlertVolume(70);
       setAutoSave(true);
       setAutoSaveInterval(5);
+      
+      await handleSave();
       toast.success('Preferences reset to default');
+    } catch (error) {
+      console.error('Error resetting preferences:', error);
+      toast.error('Failed to reset preferences');
     }
   };
 
@@ -102,7 +157,8 @@ export default function Preferences() {
           borderRadius: '8px',
           display: 'flex',
           alignItems: 'center',
-          gap: '20px'
+          gap: '20px',
+          flexWrap: 'wrap'
         }}>
           <div style={{
             padding: '10px 20px',
@@ -116,6 +172,14 @@ export default function Preferences() {
           <button
             onClick={toggleTheme}
             className="theme-toggle"
+            style={{
+              padding: '10px 20px',
+              background: 'var(--primary)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer'
+            }}
           >
             {theme === 'light' ? '🌙 Switch to Dark' : '☀️ Switch to Light'}
           </button>
@@ -123,7 +187,7 @@ export default function Preferences() {
 
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(2, 1fr)',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
           gap: '30px'
         }}>
           {/* Display Preferences */}
@@ -290,7 +354,7 @@ export default function Preferences() {
           {/* Language & Regional */}
           <div>
             <h4 style={{
-              margin: '20px 0 20px 0',
+              margin: '0 0 20px 0',
               paddingBottom: '10px',
               borderBottom: '2px solid var(--border-color)',
               color: 'var(--warning)'
@@ -367,7 +431,7 @@ export default function Preferences() {
           {/* Auto Save */}
           <div>
             <h4 style={{
-              margin: '20px 0 20px 0',
+              margin: '0 0 20px 0',
               paddingBottom: '10px',
               borderBottom: '2px solid var(--border-color)',
               color: 'var(--danger)'

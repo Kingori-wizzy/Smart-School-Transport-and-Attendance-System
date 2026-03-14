@@ -1,23 +1,63 @@
-import { useState } from 'react';
+/* eslint-disable no-unused-vars */
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import Sidebar from '../../components/Layout/Sidebar';
 import ReportGenerator from '../../components/Reports/ReportGenerator';
 import ReportViewer from '../../components/Reports/ReportViewer';
+import { reportService } from '../../services/report';
+import toast from 'react-hot-toast';
 
 export default function ReportsPage() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState('generate');
+  const [savedReports, setSavedReports] = useState([]);
+  const [loading, setLoading] = useState(false);
 
   const tabs = [
     { id: 'generate', name: 'Generate Report', icon: '📊', description: 'Create new reports with custom parameters' },
     { id: 'saved', name: 'Saved Reports', icon: '📁', description: 'View and manage previously saved reports' }
   ];
 
+  useEffect(() => {
+    if (activeTab === 'saved') {
+      fetchSavedReports();
+    }
+  }, [activeTab]);
+
+  const fetchSavedReports = async () => {
+    try {
+      setLoading(true);
+      const reports = await reportService.getSavedReports();
+      setSavedReports(reports.data || []);
+    } catch (error) {
+      console.error('Error fetching saved reports:', error);
+      toast.error('Failed to load saved reports');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleLogout = () => {
     logout();
     navigate('/login');
+  };
+
+  const handleReportGenerated = () => {
+    toast.success('Report generated successfully');
+    // Optionally switch to saved tab
+    // setActiveTab('saved');
+  };
+
+  const handleDeleteReport = async (reportId) => {
+    try {
+      await reportService.deleteReport(reportId);
+      toast.success('Report deleted');
+      fetchSavedReports();
+    } catch (error) {
+      toast.error('Failed to delete report');
+    }
   };
 
   return (
@@ -87,8 +127,17 @@ export default function ReportsPage() {
             minHeight: '600px',
             padding: '20px'
           }}>
-            {activeTab === 'generate' && <ReportGenerator />}
-            {activeTab === 'saved' && <ReportViewer />}
+            {activeTab === 'generate' && (
+              <ReportGenerator onReportGenerated={handleReportGenerated} />
+            )}
+            {activeTab === 'saved' && (
+              <ReportViewer 
+                reports={savedReports} 
+                loading={loading}
+                onDelete={handleDeleteReport}
+                onRefresh={fetchSavedReports}
+              />
+            )}
           </div>
         </div>
       </div>

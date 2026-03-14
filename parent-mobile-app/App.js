@@ -13,9 +13,13 @@ import * as Notifications from 'expo-notifications';
 // Add this import to satisfy Native requirements
 import firebase from '@react-native-firebase/app';
 
+// Context Providers
 import { AuthProvider } from './src/context/AuthContext';
 import { SocketProvider } from './src/context/SocketContext';
 import { ThemeProvider } from './src/context/ThemeContext';
+import { ChildrenProvider } from './src/context/ChildrenContext'; // Added this
+
+// Navigation and Services
 import AppNavigator from './src/navigation/AppNavigator';
 import notificationService from './src/services/notifications';
 import { COLORS } from './src/constants/config';
@@ -126,9 +130,12 @@ export default function App() {
         <ThemeProvider>
           <AuthProvider>
             <SocketProvider>
-              <NavigationContainer ref={navigationRef}>
-                <AppNavigator />
-              </NavigationContainer>
+              <ChildrenProvider> 
+                <NavigationContainer ref={navigationRef}>
+                  <StatusBar style="auto" />
+                  <AppNavigator />
+                </NavigationContainer>
+              </ChildrenProvider>
             </SocketProvider>
           </AuthProvider>
         </ThemeProvider>

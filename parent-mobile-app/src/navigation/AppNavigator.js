@@ -1,9 +1,8 @@
 import React, { useEffect } from 'react';
-import { Text, Alert } from 'react-native';
+import { Text, Alert, ActivityIndicator, View } from 'react-native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useAuth } from '../context/AuthContext';
-import api from '../services/api';
 
 // Auth Screens
 import LoginScreen from '../screens/Auth/LoginScreen';
@@ -14,11 +13,10 @@ import ForgotPasswordScreen from '../screens/Auth/ForgotPasswordScreen';
 import DashboardScreen from '../screens/Main/DashboardScreen';
 import TrackingScreen from '../screens/Main/TrackingScreen';
 import AttendanceScreen from '../screens/Main/AttendanceScreen';
-import NotificationsScreen from '../screens/Main/NotificationsScreen';
 import MessagesScreen from '../screens/Main/MessagesScreen';
 import ProfileScreen from '../screens/Main/ProfileScreen';
 import TransportScreen from '../screens/Main/TransportScreen';
-import LinkChildScreen from '../screens/Main/LinkChildScreen'; // NEW IMPORT
+import LinkChildScreen from '../screens/Main/LinkChildScreen';
 
 // Child Screens
 import ChildDetailsScreen from '../screens/Child/ChildDetailsScreen';
@@ -62,10 +60,7 @@ const MainTabs = () => {
       screenOptions={{
         tabBarActiveTintColor: '#667eea',
         tabBarInactiveTintColor: '#999',
-        tabBarStyle: {
-          height: 60,
-          paddingBottom: 5,
-        },
+        tabBarStyle: { height: 60, paddingBottom: 5 },
         headerShown: false,
       }}
     >
@@ -73,35 +68,35 @@ const MainTabs = () => {
         name="Home"
         component={DashboardScreen}
         options={{
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 24 }}>🏠</Text>,
+          tabBarIcon: () => <Text style={{ fontSize: 24 }}>🏠</Text>,
         }}
       />
       <Tab.Screen
         name="Tracking"
         component={TrackingScreen}
         options={{
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 24 }}>📍</Text>,
+          tabBarIcon: () => <Text style={{ fontSize: 24 }}>📍</Text>,
         }}
       />
       <Tab.Screen
         name="Attendance"
         component={AttendanceScreen}
         options={{
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 24 }}>📊</Text>,
+          tabBarIcon: () => <Text style={{ fontSize: 24 }}>📊</Text>,
         }}
       />
       <Tab.Screen
         name="Messages"
         component={MessagesScreen}
         options={{
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 24 }}>💬</Text>,
+          tabBarIcon: () => <Text style={{ fontSize: 24 }}>💬</Text>,
         }}
       />
       <Tab.Screen
         name="Profile"
         component={ProfileScreen}
         options={{
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 24 }}>👤</Text>,
+          tabBarIcon: () => <Text style={{ fontSize: 24 }}>👤</Text>,
         }}
       />
     </Tab.Navigator>
@@ -111,58 +106,40 @@ const MainTabs = () => {
 const AppNavigator = () => {
   const { user, loading, logout } = useAuth();
 
-  // Role verification effect
   useEffect(() => {
-    const verifyRole = async () => {
-      if (user) {
-        // Check if user has parent role
-        if (user.role !== 'parent') {
-          Alert.alert(
-            'Access Denied',
-            'This app is for parents only. You will be logged out.',
-            [
-              {
-                text: 'OK',
-                onPress: async () => {
-                  await logout();
-                }
-              }
-            ]
-          );
-        } else {
-          console.log('✅ Parent role verified:', user.firstName);
-        }
-      }
-    };
-
-    verifyRole();
+    if (user && user.role !== 'parent') {
+      Alert.alert(
+        'Access Denied',
+        'This app is for parents only.',
+        [{ text: 'OK', onPress: () => logout() }]
+      );
+    }
   }, [user]);
 
   if (loading) {
-    return null;
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#667eea" />
+      </View>
+    );
   }
 
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       {!user ? (
-        <>
+        <Stack.Group>
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="Register" component={RegisterScreen} />
           <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-        </>
+        </Stack.Group>
       ) : (
-        <>
+        <Stack.Group>
           <Stack.Screen name="MainTabs" component={MainTabs} />
           <Stack.Screen name="ChildDetails" component={ChildDetailsScreen} />
           <Stack.Screen name="AddChild" component={AddChildScreen} />
-          <Stack.Screen name="LinkChild" component={LinkChildScreen} /> {/* NEW SCREEN */}
+          <Stack.Screen name="LinkChild" component={LinkChildScreen} />
           <Stack.Screen name="ChildHistory" component={ChildHistoryScreen} />
           <Stack.Screen name="EditChild" component={EditChildScreen} />
-          <Stack.Screen name="Tracking" component={TrackingScreen} />
-          <Stack.Screen name="Notifications" component={NotificationsScreen} />
-          <Stack.Screen name="Attendance" component={AttendanceScreen} />
-          <Stack.Screen name="Profile" component={ProfileScreen} />
-          <Stack.Screen name="Messages" component={MessagesScreen} />
           <Stack.Screen name="Transport" component={TransportScreen} />
           <Stack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
           <Stack.Screen name="HelpCenter" component={HelpCenterScreen} />
@@ -179,7 +156,7 @@ const AppNavigator = () => {
           <Stack.Screen name="RouteDetail" component={RouteDetailScreen} />
           <Stack.Screen name="GeofenceSettings" component={GeofenceSettingsScreen} />
           <Stack.Screen name="GeofenceHistory" component={GeofenceHistoryScreen} />
-        </>
+        </Stack.Group>
       )}
     </Stack.Navigator>
   );
