@@ -76,7 +76,7 @@ const Dashboard = () => {
       }
       clearInterval(interval);
     };
-  }, [socket, autoRefresh]);
+  }, [socket, autoRefresh, user?.role]); // Added user.role dependency
 
   const handleLiveGPSUpdate = (data) => {
     setBuses(prev => {
@@ -227,10 +227,13 @@ const Dashboard = () => {
       if (!silent) setLoading(true);
       setError(null);
       
+      console.log(`📡 Fetching dashboard data for role: ${user?.role}`);
+
       // Fetch all data in parallel with better error handling
       const [busesRes, studentsRes, attendanceRes, gpsRes, studentStatsRes, tripsRes] = await Promise.allSettled([
         transportService.getBuses(),
-        studentService.getStudents({ limit: 1000 }),
+        // 🔥 FIXED: Pass user role to studentService.getStudents()
+        studentService.getStudents({ limit: 1000 }, user?.role || 'admin'),
         attendanceService.getAttendanceStats(),
         transportService.getGPSStats(),
         studentService.getStats(),
@@ -245,10 +248,12 @@ const Dashboard = () => {
       }
       setBuses(busesArray);
 
-      // Process students
+      // Process students - Handle role-based response
       let studentsArray = [];
       if (studentsRes.status === 'fulfilled') {
+        // The studentService now returns { success, data, total } format
         studentsArray = studentsRes.value?.data || [];
+        console.log(`📊 Fetched ${studentsArray.length} students for role: ${user?.role}`);
       }
       setStudents(studentsArray);
 
@@ -383,7 +388,7 @@ const Dashboard = () => {
       {/* Main Content */}
       <div className="main-content">
         <div className="top-bar">
-          <h2>Dashboard</h2>
+          <h2>Dashboard {user?.role && `(${user.role})`}</h2>
           <div className="user-info">
             <span className="welcome-text">
               Welcome, {user?.name || user?.email || 'Admin'}

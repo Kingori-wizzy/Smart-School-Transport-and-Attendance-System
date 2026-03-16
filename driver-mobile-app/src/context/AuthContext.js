@@ -42,23 +42,14 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      console.log('🔐 AuthContext: Attempting login with', email);
-      
-      // ✅ FIXED: Use the correct endpoint
       const response = await api.post('/auth/login', { email, password });
-      
-      console.log('✅ AuthContext: Login response:', response.data);
       
       const { token, user } = response.data;
       
-      if (!token) {
-        console.error('❌ AuthContext: No token in response');
-        return { 
-          success: false, 
-          message: 'Invalid server response: no token received' 
-        };
+      if (!token || !user) {
+        throw new Error("Missing token or user in response");
       }
-      
+
       await AsyncStorage.multiSet([
         ['@auth_token', token],
         ['@driver', JSON.stringify(user)]
@@ -70,11 +61,24 @@ export const AuthProvider = ({ children }) => {
       return { success: true };
     } catch (error) {
       console.error('❌ AuthContext: Login error:', error.message);
-      console.error('❌ Response:', error.response?.data);
+      
+      let serverMessage = 'Login failed';
+      
+      if (error.response) {
+        console.log('Status:', error.response.status);
+        console.log('Full error response data:', error.response.data);
+        
+        serverMessage = error.response.data?.message 
+          || error.response.data?.error 
+          || error.response.data?.errors?.email?.[0] 
+          || 'Invalid email or password';
+      } else if (error.request) {
+        serverMessage = 'No response from server (network/cors?)';
+      }
       
       return { 
         success: false, 
-        message: error.response?.data?.message || 'Login failed' 
+        message: serverMessage 
       };
     }
   };
