@@ -199,6 +199,24 @@ router.post('/', isAdmin, validateDriver, async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating user:', error);
+    
+    // Handle duplicate key errors
+    if (error.code === 11000) {
+      return res.status(409).json({ 
+        success: false, 
+        message: 'Duplicate field value entered' 
+      });
+    }
+    
+    // Handle validation errors
+    if (error.name === 'ValidationError') {
+      const messages = Object.values(error.errors).map(val => val.message);
+      return res.status(400).json({ 
+        success: false, 
+        message: messages.join(', ') 
+      });
+    }
+    
     res.status(400).json({ 
       success: false, 
       message: error.message 

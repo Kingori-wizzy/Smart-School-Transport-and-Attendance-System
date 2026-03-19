@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const { body, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
+const { authMiddleware } = require('../middleware/authMiddleware');
 
 // Rate limiting
 const loginLimiter = rateLimit({
@@ -68,6 +69,49 @@ const validateEmail = (email) => {
   const re = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
   return re.test(email);
 };
+
+// ==================== NEW ENDPOINT: GET CURRENT USER ====================
+
+/**
+ * @route   GET /api/auth/me
+ * @desc    Get current authenticated user
+ * @access  Private
+ */
+router.get('/me', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+      .select('-password -pushToken -resetCode -resetCodeExpiry -__v')
+      .populate({
+        path: 'children',
+        select: 'firstName lastName name classLevel admissionNumber photo transportDetails'
+      });
+
+    if (!user) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'User not found' 
+      });
+    }
+
+    // Add full URL to profile image if exists
+    const userObj = user.toObject();
+    if (userObj.profileImage) {
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      userObj.profileImageUrl = `${baseUrl}${userObj.profileImage}`;
+    }
+
+    res.json({
+      success: true,
+      data: userObj
+    });
+  } catch (error) {
+    console.error('Error fetching current user:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
 
 // 📝 Register a new user
 router.post('/register', 

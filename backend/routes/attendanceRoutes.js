@@ -8,6 +8,86 @@ const { authMiddleware } = require('../middleware/authMiddleware');
 // All routes require authentication
 router.use(authMiddleware);
 
+// ==================== GENERAL ATTENDANCE ENDPOINT (NEW) ====================
+
+/**
+ * @route   GET /api/attendance
+ * @desc    Get all attendance records with pagination and filtering
+ * @access  Private (Admin only)
+ */
+router.get('/', async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 50, 
+      startDate, 
+      endDate, 
+      studentId, 
+      tripId,
+      eventType,
+      sortBy = 'createdAt',
+      sortOrder = 'desc'
+    } = req.query;
+
+    // Build query
+    const query = {};
+    
+    if (studentId) query.studentId = studentId;
+    if (tripId) query.tripId = tripId;
+    if (eventType) query.eventType = eventType;
+    
+    // Date range filter
+    if (startDate || endDate) {
+      query.createdAt = {};
+      if (startDate) query.createdAt.$gte = new Date(startDate);
+      if (endDate) query.createdAt.$lte = new Date(endDate + 'T23:59:59');
+    }
+    
+    // Pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Sort order
+    const sort = {};
+    sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
+    
+    // Execute queries
+    const [attendance, total] = await Promise.all([
+      Attendance.find(query)
+        .populate('studentId', 'firstName lastName name classLevel admissionNumber photo')
+        .populate('tripId', 'routeName busNumber driverId')
+        .populate('busId', 'busNumber registrationNumber')
+        .sort(sort)
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Attendance.countDocuments(query)
+    ]);
+
+    // Calculate summary statistics
+    const summary = {
+      totalRecords: total,
+      boardings: attendance.filter(a => a.eventType === 'board').length,
+      alightings: attendance.filter(a => a.eventType === 'alight').length,
+      late: attendance.filter(a => a.eventType === 'late').length
+    };
+
+    res.json({
+      success: true,
+      count: attendance.length,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit)),
+      summary,
+      data: attendance
+    });
+  } catch (error) {
+    console.error('Error fetching attendance records:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
 // ==================== DRIVER ENDPOINTS (for mobile app) ====================
 
 /**

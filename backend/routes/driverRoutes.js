@@ -74,16 +74,27 @@ router.use((req, res, next) => {
 
 // ==================== PROFILE & STATS ====================
 
-// Get driver profile
+// Get driver profile - FIXED: Removed problematic populate
 router.get('/profile', async (req, res) => {
   try {
     const driver = await User.findById(req.user.id)
-      .select('-password')
-      .populate('driverDetails.assignedBus', 'registrationNumber busNumber');
+      .select('-password');
+    
+    // Get assigned bus from trips or bus collection
+    const activeTrip = await Trip.findOne({
+      driverId: req.user.id,
+      status: 'in-progress'
+    }).populate('bus', 'registrationNumber busNumber');
+    
+    const responseData = {
+      ...driver.toObject(),
+      assignedBus: activeTrip?.bus || null,
+      assignedBusId: activeTrip?.busId || null
+    };
     
     res.json({
       success: true,
-      data: driver
+      data: responseData
     });
   } catch (error) {
     console.error('Error fetching driver profile:', error);
