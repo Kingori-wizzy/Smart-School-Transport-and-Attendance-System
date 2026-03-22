@@ -10,6 +10,7 @@ import {
   Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { MapContainer, TileLayer, Marker, Polyline } from 'react-native-leaflet-kit';
 import { useSocket } from '../../context/SocketContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -66,19 +67,19 @@ const InfoPanel = ({ busLocation, eta, isConnected, onCenter, onAlert, colors })
 
       <View style={styles.actionButtons}>
         <TouchableOpacity style={styles.actionButton} onPress={onCenter}>
-          <Text style={styles.actionIcon}>🎯</Text>
+          <Ionicons name="locate-outline" size={22} color={colors.textSecondary} />
           <Text style={[styles.actionLabel, { color: colors.textSecondary }]}>Center</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionButton} onPress={onAlert}>
-          <Text style={styles.actionIcon}>📢</Text>
+          <Ionicons name="alert-circle-outline" size={22} color={colors.textSecondary} />
           <Text style={[styles.actionLabel, { color: colors.textSecondary }]}>Alert</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionButton}>
-          <Text style={styles.actionIcon}>📞</Text>
+          <Ionicons name="call-outline" size={22} color={colors.textSecondary} />
           <Text style={[styles.actionLabel, { color: colors.textSecondary }]}>Call</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.actionButton}>
-          <Text style={styles.actionIcon}>📤</Text>
+          <Ionicons name="share-outline" size={22} color={colors.textSecondary} />
           <Text style={[styles.actionLabel, { color: colors.textSecondary }]}>Share</Text>
         </TouchableOpacity>
       </View>
@@ -103,7 +104,6 @@ export default function TrackingScreen({ route, navigation }) {
   });
   const [mapZoom, setMapZoom] = useState(13);
 
-  // ✅ FIX: Handle missing child in useEffect, not during render
   useEffect(() => {
     if (!child) {
       navigation.goBack();
@@ -132,8 +132,7 @@ export default function TrackingScreen({ route, navigation }) {
       
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status === 'granted') {
-        const location = await Location.getCurrentPositionAsync({});
-        // Optionally set user location
+        await Location.getCurrentPositionAsync({});
       }
 
       await fetchRouteData();
@@ -220,7 +219,10 @@ export default function TrackingScreen({ route, navigation }) {
     }
   };
 
-  // Show loading if no child or still loading
+  const toggleMapZoom = () => {
+    setMapZoom(prev => prev === 13 ? 15 : 13);
+  };
+
   if (!child && loading) {
     return (
       <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
@@ -245,7 +247,6 @@ export default function TrackingScreen({ route, navigation }) {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Map Container */}
       <View style={styles.mapContainer}>
         <MapContainer
           ref={mapRef}
@@ -256,13 +257,11 @@ export default function TrackingScreen({ route, navigation }) {
           isDark={isDarkMode}
           style={styles.map}
         >
-          {/* OpenStreetMap tiles */}
           <TileLayer
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           />
           
-          {/* Route polyline */}
           {routeCoords.length > 1 && (
             <Polyline
               positions={routeCoords}
@@ -272,7 +271,6 @@ export default function TrackingScreen({ route, navigation }) {
             />
           )}
 
-          {/* Stop markers */}
           {stops.map((stop, index) => (
             <StopMarker
               key={stop.id || index}
@@ -283,7 +281,6 @@ export default function TrackingScreen({ route, navigation }) {
             />
           ))}
 
-          {/* Bus marker */}
           {busLocation && (
             <BusMarker
               busLocation={busLocation}
@@ -295,24 +292,19 @@ export default function TrackingScreen({ route, navigation }) {
         </MapContainer>
       </View>
 
-      {/* Top Bar */}
       <LinearGradient colors={['rgba(0,0,0,0.7)', 'transparent']} style={styles.topBar}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backIcon}>←</Text>
+          <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
         <View style={styles.titleContainer}>
           <Text style={styles.childName}>{child.firstName}'s Bus</Text>
           <Text style={styles.busNumber}>{child.busNumber}</Text>
         </View>
-        <TouchableOpacity 
-          onPress={() => setMapZoom(prev => prev === 13 ? 15 : 13)} 
-          style={styles.mapTypeButton}
-        >
-          <Text style={styles.mapTypeIcon}>🔍</Text>
+        <TouchableOpacity onPress={toggleMapZoom} style={styles.mapTypeButton}>
+          <Ionicons name="search-outline" size={20} color="#fff" />
         </TouchableOpacity>
       </LinearGradient>
 
-      {/* Info Panel */}
       <InfoPanel
         busLocation={busLocation}
         eta={eta}
@@ -322,10 +314,10 @@ export default function TrackingScreen({ route, navigation }) {
         colors={colors}
       />
 
-      {/* Alert Banner */}
       {busLocation?.outsideGeofence && (
         <View style={[styles.alertBanner, { backgroundColor: colors.danger }]}>
-          <Text style={styles.alertText}>⚠️ Bus outside designated zone</Text>
+          <Ionicons name="warning-outline" size={16} color="#fff" />
+          <Text style={styles.alertText}>Bus outside designated zone</Text>
         </View>
       )}
     </View>
@@ -359,7 +351,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center', 
     alignItems: 'center' 
   },
-  backIcon: { fontSize: 24, color: '#fff' },
   titleContainer: { alignItems: 'center' },
   childName: { 
     fontSize: 18, 
@@ -384,7 +375,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center', 
     alignItems: 'center' 
   },
-  mapTypeIcon: { fontSize: 20 },
   bottomPanel: { 
     position: 'absolute', 
     bottom: 0, 
@@ -437,12 +427,9 @@ const styles = StyleSheet.create({
   actionButton: { 
     alignItems: 'center' 
   },
-  actionIcon: { 
-    fontSize: 22, 
-    marginBottom: 4 
-  },
   actionLabel: { 
-    fontSize: 11 
+    fontSize: 11,
+    marginTop: 4
   },
   alertBanner: { 
     position: 'absolute', 
@@ -451,7 +438,9 @@ const styles = StyleSheet.create({
     right: 20, 
     padding: 12, 
     borderRadius: 8, 
-    alignItems: 'center', 
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     elevation: 5, 
     shadowColor: '#000', 
     shadowOffset: { width: 0, height: 2 }, 
@@ -462,6 +451,7 @@ const styles = StyleSheet.create({
   alertText: { 
     color: '#fff', 
     fontWeight: 'bold', 
-    fontSize: 14 
+    fontSize: 14,
+    marginLeft: 8
   },
 });

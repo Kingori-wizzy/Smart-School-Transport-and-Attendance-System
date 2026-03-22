@@ -16,26 +16,23 @@ export const TripProvider = ({ children }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [scannedStudents, setScannedStudents] = useState({});
   
-  // ✅ useOffline hook provides all the methods we need
   const { isOnline, addToQueue, syncQueue, pendingCount } = useOffline();
 
   // Load cached data on mount
   useEffect(() => {
     loadCachedData();
     
-    // Set up periodic sync when online
     const syncInterval = setInterval(() => {
       if (isOnline) {
         syncAttendanceQueue();
         syncIncidentQueue();
         syncTripUpdatesQueue();
       }
-    }, 30000); // Sync every 30 seconds
+    }, 30000);
 
     return () => clearInterval(syncInterval);
   }, [isOnline]);
 
-  // Auto-sync when coming online
   useEffect(() => {
     if (isOnline) {
       syncAttendanceQueue();
@@ -60,7 +57,6 @@ export const TripProvider = ({ children }) => {
     }
   };
 
-  // Sync attendance queue (boardings/alightings)
   const syncAttendanceQueue = async () => {
     await syncQueue(QUEUE_KEYS.ATTENDANCE, async (item) => {
       const { method, url, data } = item;
@@ -72,33 +68,26 @@ export const TripProvider = ({ children }) => {
           await api.post(url, data);
         }
       }
-      
       console.log(`✅ Synced attendance: ${item.id}`);
     });
   };
 
-  // Sync incident queue
   const syncIncidentQueue = async () => {
     await syncQueue(QUEUE_KEYS.INCIDENTS, async (item) => {
       const { method, url, data } = item;
-      
       if (method === 'POST') {
         await api.post(url, data);
       }
-      
       console.log(`✅ Synced incident: ${item.id}`);
     });
   };
 
-  // Sync trip updates queue
   const syncTripUpdatesQueue = async () => {
     await syncQueue(QUEUE_KEYS.TRIP_UPDATES, async (item) => {
       const { method, url, data } = item;
-      
       if (method === 'POST') {
         await api.post(url, data);
       }
-      
       console.log(`✅ Synced trip update: ${item.id}`);
     });
   };
@@ -120,7 +109,6 @@ export const TripProvider = ({ children }) => {
       setLoading(true);
       
       if (!isOnline) {
-        // Use cached data if offline
         const cached = await AsyncStorage.getItem('@driver_trips');
         if (cached) {
           setTodayTrips(JSON.parse(cached));
@@ -134,12 +122,9 @@ export const TripProvider = ({ children }) => {
       if (response.data.success) {
         const trips = response.data.trips || [];
         setTodayTrips(trips);
-        
-        // Cache the trips
         await AsyncStorage.setItem('@driver_trips', JSON.stringify(trips));
         
-        // If there's an active trip, load its students
-        const active = trips.find(t => t.status === 'ongoing');
+        const active = trips.find(t => t.status === 'ongoing' || t.status === 'in-progress');
         if (active) {
           setActiveTrip(active);
           await fetchTripStudents(active._id);
@@ -152,10 +137,10 @@ export const TripProvider = ({ children }) => {
     }
   };
 
+  // FIXED: Correct API endpoint for fetching trip students
   const fetchTripStudents = async (tripId) => {
     try {
       if (!isOnline) {
-        // Try to get cached students
         const cached = await AsyncStorage.getItem(`@trip_students_${tripId}`);
         if (cached) {
           setTripStudents(JSON.parse(cached));
@@ -163,13 +148,12 @@ export const TripProvider = ({ children }) => {
         return;
       }
 
-      const response = await api.get(`/attendance/driver/trip/${tripId}/students`);
+      // CORRECT ENDPOINT: /driver/trips/:tripId/students
+      const response = await api.get(`/driver/trips/${tripId}/students`);
       
       if (response.data.success) {
         const students = response.data.data || [];
         setTripStudents(students);
-        
-        // Cache the students
         await AsyncStorage.setItem(`@trip_students_${tripId}`, JSON.stringify(students));
         
         // Load scanned status from cache
@@ -194,15 +178,13 @@ export const TripProvider = ({ children }) => {
       };
 
       if (!isOnline) {
-        // Add to offline queue
         await addToQueue(QUEUE_KEYS.ATTENDANCE, {
           type: 'board_student',
           method: 'POST',
-          url: `/attendance/driver/trip/${tripId}/board/${studentId}`,
+          url: `/driver/trips/${tripId}/board/${studentId}`,
           data: scanData
         });
         
-        // Optimistic update
         const key = `${tripId}_${studentId}`;
         const updatedScans = {
           ...scannedStudents,
@@ -216,22 +198,20 @@ export const TripProvider = ({ children }) => {
         
         setScannedStudents(updatedScans);
         
-        // Save to storage
         const scanMap = {};
         scanMap[tripId] = updatedScans;
         await AsyncStorage.setItem('@driver_scans', JSON.stringify(scanMap));
         
-        // Update trip students list
         setTripStudents(prev => prev.map(s => 
-          s._id === studentId ? { ...s, status: 'boarded' } : s
+          s._id === studentId ? { ...s, status: 'boarded', boarded: true } : s
         ));
         
         return { success: true, offline: true, queued: true };
       }
 
-      const response = await api.post(`/driver/trip/${tripId}/board/${studentId}`, scanData);
+      // CORRECT ENDPOINT: /driver/trips/:tripId/board/:studentId
+      const response = await api.post(`/driver/trips/${tripId}/board/${studentId}`, scanData);
       
-      // Update active trip if needed
       if (activeTrip && activeTrip._id === tripId) {
         setActiveTrip(prev => ({
           ...prev,
@@ -239,7 +219,6 @@ export const TripProvider = ({ children }) => {
         }));
       }
       
-      // Update local state
       const key = `${tripId}_${studentId}`;
       const updatedScans = {
         ...scannedStudents,
@@ -252,14 +231,12 @@ export const TripProvider = ({ children }) => {
       
       setScannedStudents(updatedScans);
       
-      // Save to storage
       const scanMap = {};
       scanMap[tripId] = updatedScans;
       await AsyncStorage.setItem('@driver_scans', JSON.stringify(scanMap));
       
-      // Update trip students list
       setTripStudents(prev => prev.map(s => 
-        s._id === studentId ? { ...s, status: 'boarded', boardedAt: new Date() } : s
+        s._id === studentId ? { ...s, status: 'boarded', boarded: true, boardedAt: new Date() } : s
       ));
       
       return { success: true, data: response.data };
@@ -282,15 +259,13 @@ export const TripProvider = ({ children }) => {
       };
 
       if (!isOnline) {
-        // Add to offline queue
         await addToQueue(QUEUE_KEYS.ATTENDANCE, {
           type: 'alight_student',
           method: 'POST',
-          url: `/attendance/driver/trip/${tripId}/alight/${studentId}`,
+          url: `/driver/trips/${tripId}/alight/${studentId}`,
           data: scanData
         });
         
-        // Optimistic update
         const key = `${tripId}_${studentId}`;
         const updatedScans = {
           ...scannedStudents,
@@ -304,22 +279,19 @@ export const TripProvider = ({ children }) => {
         
         setScannedStudents(updatedScans);
         
-        // Save to storage
         const scanMap = {};
         scanMap[tripId] = updatedScans;
         await AsyncStorage.setItem('@driver_scans', JSON.stringify(scanMap));
         
-        // Update trip students list
         setTripStudents(prev => prev.map(s => 
-          s._id === studentId ? { ...s, status: 'alighted' } : s
+          s._id === studentId ? { ...s, status: 'alighted', alighted: true } : s
         ));
         
         return { success: true, offline: true, queued: true };
       }
 
-      const response = await api.post(`/driver/trip/${tripId}/alight/${studentId}`, scanData);
+      const response = await api.post(`/driver/trips/${tripId}/alight/${studentId}`, scanData);
       
-      // Update local state
       const key = `${tripId}_${studentId}`;
       const updatedScans = {
         ...scannedStudents,
@@ -332,14 +304,12 @@ export const TripProvider = ({ children }) => {
       
       setScannedStudents(updatedScans);
       
-      // Save to storage
       const scanMap = {};
       scanMap[tripId] = updatedScans;
       await AsyncStorage.setItem('@driver_scans', JSON.stringify(scanMap));
       
-      // Update trip students list
       setTripStudents(prev => prev.map(s => 
-        s._id === studentId ? { ...s, status: 'alighted', alightedAt: new Date() } : s
+        s._id === studentId ? { ...s, status: 'alighted', alighted: true, alightedAt: new Date() } : s
       ));
       
       return { success: true, data: response.data };
@@ -355,7 +325,6 @@ export const TripProvider = ({ children }) => {
   const startTrip = async (tripId) => {
     try {
       if (!isOnline) {
-        // Add to offline queue
         await addToQueue(QUEUE_KEYS.TRIP_UPDATES, {
           type: 'start_trip',
           method: 'POST',
@@ -363,9 +332,8 @@ export const TripProvider = ({ children }) => {
           data: { timestamp: new Date().toISOString() }
         });
         
-        // Optimistic update
         const updatedTrips = todayTrips.map(t => 
-          t._id === tripId ? { ...t, status: 'ongoing' } : t
+          t._id === tripId ? { ...t, status: 'in-progress' } : t
         );
         setTodayTrips(updatedTrips);
         setActiveTrip(updatedTrips.find(t => t._id === tripId));
@@ -389,7 +357,6 @@ export const TripProvider = ({ children }) => {
   const endTrip = async (tripId) => {
     try {
       if (!isOnline) {
-        // Add to offline queue
         await addToQueue(QUEUE_KEYS.TRIP_UPDATES, {
           type: 'end_trip',
           method: 'POST',
@@ -397,7 +364,6 @@ export const TripProvider = ({ children }) => {
           data: { timestamp: new Date().toISOString() }
         });
         
-        // Optimistic update
         const updatedTrips = todayTrips.map(t => 
           t._id === tripId ? { ...t, status: 'completed' } : t
         );
@@ -424,17 +390,16 @@ export const TripProvider = ({ children }) => {
   const reportIncident = async (tripId, reportData) => {
     try {
       if (!isOnline) {
-        // Add to offline queue
         await addToQueue(QUEUE_KEYS.INCIDENTS, {
           type: 'report_incident',
           method: 'POST',
-          url: `/driver/trip/${tripId}/incident`,
-          data: reportData
+          url: `/driver/incident/report`,
+          data: { ...reportData, tripId }
         });
         return { success: true, offline: true, queued: true };
       }
 
-      const response = await api.post(`/driver/trip/${tripId}/incident`, reportData);
+      const response = await api.post(`/driver/incident/report`, { ...reportData, tripId });
       return { success: true, data: response.data };
     } catch (error) {
       console.error('Error reporting incident:', error);
@@ -448,7 +413,6 @@ export const TripProvider = ({ children }) => {
   const updateLocation = async (tripId, location) => {
     try {
       if (!isOnline) {
-        // Add to offline queue
         await addToQueue(QUEUE_KEYS.GPS, {
           type: 'update_location',
           method: 'POST',

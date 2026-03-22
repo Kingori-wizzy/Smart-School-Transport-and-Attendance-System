@@ -1,11 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TextInput,
   TouchableOpacity,
-  ScrollView,
   Alert,
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -15,15 +14,32 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../services/api';
 import { useChildren } from '../../context/ChildrenContext';
+import { useAuth } from '../../context/AuthContext';
 
 const LinkChildScreen = ({ navigation }) => {
   const [admissionNumber, setAdmissionNumber] = useState('');
   const [studentName, setStudentName] = useState('');
   const [loading, setLoading] = useState(false);
-  const [verificationStep, setVerificationStep] = useState('input'); // input, verifying, success
+  const [verificationStep, setVerificationStep] = useState('input');
   const [verifiedStudent, setVerifiedStudent] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
   
   const { refreshChildren } = useChildren();
+  const { user, isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    console.log('🔐 LinkChildScreen mounted');
+    console.log('   User:', user ? `${user.firstName} ${user.lastName}` : 'No user');
+    console.log('   Authenticated:', isAuthenticated());
+    
+    if (!isAuthenticated()) {
+      Alert.alert(
+        'Session Expired',
+        'Please log in again to continue.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    }
+  }, [user, isAuthenticated, navigation]);
 
   const handleVerify = async () => {
     if (!admissionNumber.trim()) {
@@ -31,31 +47,48 @@ const LinkChildScreen = ({ navigation }) => {
       return;
     }
 
+    if (!isAuthenticated()) {
+      Alert.alert('Session Expired', 'Please log in again to continue.');
+      return;
+    }
+
     setLoading(true);
     setVerificationStep('verifying');
+    setErrorMessage('');
 
     try {
+      console.log('🔍 Verifying admission:', admissionNumber);
+      
+      // api.post automatically attaches the token via interceptor
       const response = await api.post('/students/verify-admission', {
         admissionNumber: admissionNumber.trim().toUpperCase(),
         studentName: studentName.trim() || undefined
       });
 
-      if (response.data.success) {
-        setVerifiedStudent(response.data.data);
+      console.log('✅ Verification response:', response);
+
+      if (response.success) {
+        setVerifiedStudent(response.data);
         setVerificationStep('success');
-        
-        // Refresh children list
         await refreshChildren();
+        console.log('✅ Children list refreshed');
+      } else {
+        throw new Error(response.message || 'Verification failed');
       }
     } catch (error) {
-      console.error('Verification error:', error);
+      console.error('❌ Verification error:', error);
       
-      let errorMessage = 'Failed to verify admission number';
-      if (error.response?.data?.message) {
-        errorMessage = error.response.data.message;
+      let errorMsg = 'Failed to verify admission number';
+      if (error.message === 'Request timeout') {
+        errorMsg = 'Request timed out. Please check your internet connection and try again.';
+      } else if (error.response?.data?.message) {
+        errorMsg = error.response.data.message;
+      } else if (error.message) {
+        errorMsg = error.message;
       }
       
-      Alert.alert('Verification Failed', errorMessage);
+      setErrorMessage(errorMsg);
+      Alert.alert('Verification Failed', errorMsg);
       setVerificationStep('input');
     } finally {
       setLoading(false);
@@ -67,6 +100,7 @@ const LinkChildScreen = ({ navigation }) => {
     setStudentName('');
     setVerifiedStudent(null);
     setVerificationStep('input');
+    setErrorMessage('');
   };
 
   const renderInputStep = () => (
@@ -80,6 +114,13 @@ const LinkChildScreen = ({ navigation }) => {
         Enter the admission number provided by your school
       </Text>
 
+      {errorMessage ? (
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={20} color="#f44336" />
+          <Text style={styles.errorText}>{errorMessage}</Text>
+        </View>
+      ) : null}
+
       <View style={styles.inputContainer}>
         <Ionicons name="card-outline" size={20} color="#666" style={styles.inputIcon} />
         <TextInput
@@ -89,6 +130,7 @@ const LinkChildScreen = ({ navigation }) => {
           onChangeText={setAdmissionNumber}
           autoCapitalize="characters"
           autoCorrect={false}
+          editable={!loading}
         />
       </View>
 
@@ -100,6 +142,7 @@ const LinkChildScreen = ({ navigation }) => {
           value={studentName}
           onChangeText={setStudentName}
           autoCapitalize="words"
+          editable={!loading}
         />
       </View>
 
@@ -118,6 +161,7 @@ const LinkChildScreen = ({ navigation }) => {
       <TouchableOpacity
         style={styles.cancelButton}
         onPress={() => navigation.goBack()}
+        disabled={loading}
       >
         <Text style={styles.cancelButtonText}>Cancel</Text>
       </TouchableOpacity>
@@ -128,6 +172,7 @@ const LinkChildScreen = ({ navigation }) => {
     <View style={styles.verifyingContainer}>
       <ActivityIndicator size="large" color="#4CAF50" />
       <Text style={styles.verifyingText}>Verifying admission number...</Text>
+      <Text style={styles.verifyingSubtext}>Please wait, this may take a few seconds</Text>
     </View>
   );
 
@@ -168,7 +213,10 @@ const LinkChildScreen = ({ navigation }) => {
       <View style={styles.actionButtons}>
         <TouchableOpacity
           style={styles.dashboardButton}
-          onPress={() => navigation.navigate('Dashboard')}
+          onPress={() => {
+            refreshChildren();
+            navigation.replace('MainTabs');
+          }}
         >
           <Text style={styles.dashboardButtonText}>Go to Dashboard</Text>
         </TouchableOpacity>
@@ -198,183 +246,41 @@ const LinkChildScreen = ({ navigation }) => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  keyboardView: {
-    flex: 1,
-  },
-  formContainer: {
-    flex: 1,
-    padding: 20,
-    justifyContent: 'center',
-  },
-  iconContainer: {
-    alignItems: 'center',
-    marginBottom: 30,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 40,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    marginBottom: 16,
-    paddingHorizontal: 15,
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  inputIcon: {
-    marginRight: 10,
-  },
-  input: {
-    flex: 1,
-    paddingVertical: 15,
-    fontSize: 16,
-  },
-  verifyButton: {
-    backgroundColor: '#4CAF50',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-    marginTop: 20,
-  },
-  verifyButtonDisabled: {
-    backgroundColor: '#a5d6a7',
-  },
-  verifyButtonText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  cancelButton: {
-    marginTop: 15,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  cancelButtonText: {
-    color: '#666',
-    fontSize: 16,
-  },
-  verifyingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  verifyingText: {
-    marginTop: 20,
-    fontSize: 16,
-    color: '#666',
-  },
-  successContainer: {
-    flex: 1,
-    padding: 20,
-    justifyContent: 'center',
-  },
-  successIconContainer: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  successTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  successSubtitle: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 30,
-  },
-  studentCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 30,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  studentName: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 8,
-  },
-  studentClass: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 4,
-  },
-  studentAdmission: {
-    fontSize: 14,
-    color: '#999',
-    marginBottom: 12,
-  },
-  busInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#e8f5e9',
-    padding: 10,
-    borderRadius: 8,
-    marginTop: 10,
-  },
-  busInfoText: {
-    marginLeft: 8,
-    color: '#2e7d32',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  pendingText: {
-    color: '#f57c00',
-    fontSize: 14,
-    fontStyle: 'italic',
-    marginTop: 10,
-  },
-  actionButtons: {
-    gap: 12,
-  },
-  dashboardButton: {
-    backgroundColor: '#2196F3',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  dashboardButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  linkAnotherButton: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  linkAnotherButtonText: {
-    color: '#666',
-    fontSize: 16,
-  },
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  keyboardView: { flex: 1 },
+  formContainer: { flex: 1, padding: 20, justifyContent: 'center' },
+  iconContainer: { alignItems: 'center', marginBottom: 30 },
+  title: { fontSize: 28, fontWeight: 'bold', color: '#333', textAlign: 'center', marginBottom: 10 },
+  subtitle: { fontSize: 16, color: '#666', textAlign: 'center', marginBottom: 40 },
+  errorContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffebee', padding: 12, borderRadius: 8, marginBottom: 16 },
+  errorText: { flex: 1, color: '#f44336', fontSize: 14, marginLeft: 8 },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 12, marginBottom: 16, paddingHorizontal: 15, borderWidth: 1, borderColor: '#ddd' },
+  inputIcon: { marginRight: 10 },
+  input: { flex: 1, paddingVertical: 15, fontSize: 16 },
+  verifyButton: { backgroundColor: '#4CAF50', borderRadius: 12, paddingVertical: 16, alignItems: 'center', marginTop: 20 },
+  verifyButtonDisabled: { backgroundColor: '#a5d6a7' },
+  verifyButtonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
+  cancelButton: { marginTop: 15, paddingVertical: 12, alignItems: 'center' },
+  cancelButtonText: { color: '#666', fontSize: 16 },
+  verifyingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  verifyingText: { marginTop: 20, fontSize: 16, color: '#666' },
+  verifyingSubtext: { marginTop: 8, fontSize: 12, color: '#999' },
+  successContainer: { flex: 1, padding: 20, justifyContent: 'center' },
+  successIconContainer: { alignItems: 'center', marginBottom: 20 },
+  successTitle: { fontSize: 28, fontWeight: 'bold', color: '#333', textAlign: 'center', marginBottom: 10 },
+  successSubtitle: { fontSize: 16, color: '#666', textAlign: 'center', marginBottom: 30 },
+  studentCard: { backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 30, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 4 },
+  studentName: { fontSize: 22, fontWeight: 'bold', color: '#333', marginBottom: 8 },
+  studentClass: { fontSize: 16, color: '#666', marginBottom: 4 },
+  studentAdmission: { fontSize: 14, color: '#999', marginBottom: 12 },
+  busInfo: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#e8f5e9', padding: 10, borderRadius: 8, marginTop: 10 },
+  busInfoText: { marginLeft: 8, color: '#2e7d32', fontSize: 14, fontWeight: '500' },
+  pendingText: { color: '#f57c00', fontSize: 14, fontStyle: 'italic', marginTop: 10 },
+  actionButtons: { gap: 12 },
+  dashboardButton: { backgroundColor: '#2196F3', borderRadius: 12, paddingVertical: 16, alignItems: 'center' },
+  dashboardButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  linkAnotherButton: { backgroundColor: '#fff', borderRadius: 12, paddingVertical: 16, alignItems: 'center', borderWidth: 1, borderColor: '#ddd' },
+  linkAnotherButtonText: { color: '#666', fontSize: 16 },
 });
 
 export default LinkChildScreen;

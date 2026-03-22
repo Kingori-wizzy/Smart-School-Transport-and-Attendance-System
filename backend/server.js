@@ -5,6 +5,7 @@ const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
+const path = require('path');
 
 // Load environment variables
 dotenv.config();
@@ -39,10 +40,12 @@ app.use(cors({
     'http://localhost:5173',           // Admin frontend (Vite default)
     'http://localhost:3000',            // Alternative frontend port
     'http://192.168.100.3:8081',        // Expo mobile (your IP)
-    'http://192.168.100.3:8081',        // Alternative Expo port
+    'http://192.168.100.3:19000',       // Expo default port
     'http://localhost:19006',            // Expo web
     'http://localhost:19002',            // Expo dev tools
-    /\.exp\.direct$/                     // Expo tunnel domains
+    /\.exp\.direct$/,                    // Expo tunnel domains
+    /\.ngrok\.io$/,                      // ngrok tunnels
+    'http://10.0.2.2:5000'              // Android emulator
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
@@ -50,8 +53,9 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
 // Serve uploaded files
-app.use('/uploads', express.static('uploads'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Database connection
 mongoose.connect(process.env.MONGODB_URI, {
@@ -64,26 +68,49 @@ mongoose.connect(process.env.MONGODB_URI, {
 // Make mongoose accessible globally
 global.mongoose = mongoose;
 
-// Routes - Each only once!
+// ==================== ROUTES ====================
+// Mount routes - including both singular and plural for parent routes
+
+// Authentication
 app.use('/api/auth', authRoutes);
+
+// Core resources
 app.use('/api/students', studentRoutes);
 app.use('/api/buses', busRoutes);
 app.use('/api/trips', tripRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/gps', gpsRoutes);
 app.use('/api/geofences', geofenceRoutes);
+
+// Notifications
 app.use('/api/notifications', notificationRoutes);
-app.use('/api/parents', parentRoutes);
+
+// Parent routes - MOUNTED ON BOTH SINGULAR AND PLURAL for mobile app compatibility
+app.use('/api/parents', parentRoutes);   // Plural version (for admin panel)
+app.use('/api/parent', parentRoutes);    // Singular version (for mobile app)
+
+// User and role-specific routes
 app.use('/api/users', userRoutes);
 app.use('/api/driver', driverRoutes);
+app.use('/api/drivers', driverRoutes);   // Also mount on plural for consistency
+
+// Communication
 app.use('/api/sms', smsRoutes);
+
+// Analytics and reports
 app.use('/api/analytics', analyticsRoutes);
-app.use('/api/user', userRoutes);
+app.use('/api/reports', reportRoutes);
+
+// Transport management
 app.use('/api/transport', transportRoutes);
+app.use('/api/settings', settingsRoutes);
+
+// Additional routes
 app.use('/api/assignments', require('./routes/assignmentRoutes'));
 app.use('/api/routes', require('./routes/routeRoutes'));
-app.use('/api/reports', reportRoutes);
-app.use('/api/settings', settingsRoutes);
+
+// ==================== HEALTH & INFO ROUTES ====================
+
 // Health check route
 app.get('/api/health', (req, res) => {
   res.status(200).json({ 
@@ -92,7 +119,7 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     services: {
       database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-      ai: 'initialized'
+      ai: analyticsService ? 'initialized' : 'pending'
     }
   });
 });
@@ -102,6 +129,7 @@ app.get('/', (req, res) => {
   res.json({
     name: 'Smart School Transport API',
     version: '1.0.0',
+    status: 'running',
     endpoints: {
       auth: '/api/auth',
       students: '/api/students',
@@ -112,13 +140,19 @@ app.get('/', (req, res) => {
       geofences: '/api/geofences',
       notifications: '/api/notifications',
       parents: '/api/parents',
+      parent: '/api/parent',      // Singular version for mobile
       users: '/api/users',
       drivers: '/api/drivers',
       sms: '/api/sms',
-      analytics: '/api/analytics'
+      analytics: '/api/analytics',
+      reports: '/api/reports',
+      transport: '/api/transport',
+      settings: '/api/settings'
     }
   });
 });
+
+// ==================== SOCKET.IO SETUP ====================
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -130,8 +164,10 @@ const io = socketIo(server, {
       'http://localhost:5173', 
       'http://localhost:3000',
       'http://192.168.100.3:8081',
+      'http://192.168.100.3:19000',
       'http://localhost:19006',
-      /\.exp\.direct$/
+      /\.exp\.direct$/,
+      /\.ngrok\.io$/
     ],
     methods: ['GET', 'POST'],
     credentials: true
@@ -232,8 +268,6 @@ io.on('connection', (socket) => {
       studentName,
       timestamp: new Date()
     });
-    
-    // Also notify parent if they're online (parent room would be set up elsewhere)
   });
 
   // Test connection
@@ -258,6 +292,8 @@ io.on('connection', (socket) => {
 app.set('io', io);
 app.locals.io = io;
 
+// ==================== ERROR HANDLING ====================
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('❌ Server Error:', err.stack);
@@ -268,8 +304,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler - FIXED (removed the '*')
+// 404 handler - Catch all unmatched routes
 app.use((req, res) => {
+  // Log the requested path for debugging
+  console.log(`⚠️ 404 Not Found: ${req.method} ${req.originalUrl}`);
+  
   res.status(404).json({ 
     success: false, 
     message: 'Route not found',
@@ -277,30 +316,67 @@ app.use((req, res) => {
   });
 });
 
-// Start server
+// ==================== START SERVER ====================
+
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running securely on port ${PORT} (all interfaces)`);
-  console.log(`📱 Mobile app can connect to: http://YOUR_IP:${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0';
+
+server.listen(PORT, HOST, () => {
+  console.log('\n=================================');
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📡 Host: ${HOST}`);
+  console.log(`📱 Mobile app: http://192.168.100.3:${PORT}`);
   console.log(`💻 Admin frontend: http://localhost:5173`);
-  console.log(`🤖 AI Analytics Service: ${analyticsService ? 'Initialized' : 'Pending'}`);
+  console.log(`🤖 AI Analytics: ${analyticsService ? '✅ Initialized' : '⏳ Pending'}`);
+  console.log(`🗄️  MongoDB: ${mongoose.connection.readyState === 1 ? '✅ Connected' : '❌ Disconnected'}`);
+  console.log('=================================\n');
+  
+  // Log all mounted routes for debugging
+  console.log('📁 Mounted Routes:');
+  console.log('   - /api/auth');
+  console.log('   - /api/students');
+  console.log('   - /api/buses');
+  console.log('   - /api/trips');
+  console.log('   - /api/attendance');
+  console.log('   - /api/gps');
+  console.log('   - /api/geofences');
+  console.log('   - /api/notifications');
+  console.log('   - /api/parents (plural)');
+  console.log('   - /api/parent (singular) ← For mobile app');
+  console.log('   - /api/users');
+  console.log('   - /api/driver');
+  console.log('   - /api/drivers');
+  console.log('   - /api/sms');
+  console.log('   - /api/analytics');
+  console.log('   - /api/reports');
+  console.log('   - /api/transport');
+  console.log('   - /api/settings');
+  console.log('   - /api/assignments');
+  console.log('   - /api/routes');
+  console.log('=================================\n');
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    mongoose.connection.close();
-    console.log('Process terminated');
-  });
-});
+// ==================== GRACEFUL SHUTDOWN ====================
 
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully');
+const shutdown = (signal) => {
+  console.log(`\n${signal} received, shutting down gracefully...`);
   server.close(() => {
-    mongoose.connection.close();
-    console.log('Process terminated');
+    console.log('HTTP server closed');
+    mongoose.connection.close(() => {
+      console.log('MongoDB connection closed');
+      console.log('Process terminated');
+      process.exit(0);
+    });
   });
-});
+  
+  // Force close after 10 seconds
+  setTimeout(() => {
+    console.error('Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 10000);
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 module.exports = { app, server, io };

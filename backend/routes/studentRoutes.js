@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const Student = require('../models/Student');
 const User = require('../models/User');
+const Trip = require('../models/Trip');
+const Bus = require('../models/Bus'); // Add Bus import for busNumber sync
 
 // ✅ FIXED IMPORTS: Pulling everything from a single object as defined in your authMiddleware.js
 const { 
@@ -128,6 +130,320 @@ router.post('/verify-admission', isParent, async (req, res) => {
   }
 });
 
+// ==================== TRIP ASSIGNMENT ENDPOINTS ====================
+
+/**
+ * @route   GET /api/students/:studentId/trips
+ * @desc    Get all trips assigned to a student
+ * @access  Private (Admin/Parent)
+ */
+router.get('/:studentId/trips', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    
+    const student = await Student.findById(studentId)
+      .populate('tripAssignments.tripId', 'routeName tripType scheduledStartTime scheduledEndTime vehicleId status');
+    
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+    
+    // Check access
+    if (req.user.role === 'parent' && student.parentId?.toString() !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied'
+      });
+    }
+    
+    const activeTrips = (student.tripAssignments || []).filter(t => t.status === 'active');
+    
+    res.json({
+      success: true,
+      count: activeTrips.length,
+      data: activeTrips
+    });
+  } catch (error) {
+    console.error('Error fetching student trips:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route   POST /api/students/:studentId/assign-trip
+ * @desc    Assign a student to a trip
+ * @access  Private (Admin only)
+ */
+router.post('/:studentId/assign-trip', isAdmin, async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { tripId, tripType } = req.body;
+    
+    if (!tripId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Trip ID is required'
+      });
+    }
+    
+    // Check if student exists
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+    
+    // Check if trip exists
+    const trip = await Trip.findById(tripId);
+    if (!trip) {
+      return res.status(404).json({
+        success: false,
+        message: 'Trip not found'
+      });
+    }
+    
+    // Check if already assigned
+    const alreadyAssigned = student.tripAssignments?.some(
+      a => a.tripId?.toString() === tripId && a.status === 'active'
+    );
+    
+    if (alreadyAssigned) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student already assigned to this trip'
+      });
+    }
+    
+    // Assign student to trip
+    await Student.updateOne(
+      { _id: studentId },
+      {
+        $push: {
+          tripAssignments: {
+            tripId: tripId,
+            tripType: tripType || trip.tripType,
+            status: 'active',
+            assignedAt: new Date()
+          }
+        }
+      }
+    );
+    
+    // Also add student to trip's students array
+    await Trip.updateOne(
+      { _id: tripId },
+      { $addToSet: { students: studentId } }
+    );
+    
+    console.log(`✅ Student ${student.firstName} ${student.lastName} assigned to trip ${trip.routeName}`);
+    
+    res.json({
+      success: true,
+      message: 'Student assigned to trip successfully',
+      data: {
+        studentId,
+        tripId,
+        tripType: tripType || trip.tripType
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error assigning student to trip:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route   DELETE /api/students/:studentId/remove-trip/:tripId
+ * @desc    Remove a student from a trip
+ * @access  Private (Admin only)
+ */
+router.delete('/:studentId/remove-trip/:tripId', isAdmin, async (req, res) => {
+  try {
+    const { studentId, tripId } = req.params;
+    
+    // Check if student exists
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+    
+    // Update student - mark trip assignment as inactive
+    await Student.updateOne(
+      { _id: studentId, 'tripAssignments.tripId': tripId },
+      { $set: { 'tripAssignments.$.status': 'inactive' } }
+    );
+    
+    // Remove student from trip's students array
+    await Trip.updateOne(
+      { _id: tripId },
+      { $pull: { students: studentId } }
+    );
+    
+    console.log(`✅ Student removed from trip`);
+    
+    res.json({
+      success: true,
+      message: 'Student removed from trip successfully'
+    });
+    
+  } catch (error) {
+    console.error('Error removing student from trip:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route   POST /api/students/bulk-assign-trips
+ * @desc    Bulk assign students to trips
+ * @access  Private (Admin only)
+ */
+router.post('/bulk-assign-trips', isAdmin, async (req, res) => {
+  try {
+    const { assignments } = req.body;
+    
+    if (!Array.isArray(assignments)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Assignments must be an array'
+      });
+    }
+    
+    const results = {
+      successful: [],
+      failed: []
+    };
+    
+    for (const item of assignments) {
+      try {
+        const { studentId, tripId, tripType } = item;
+        
+        const student = await Student.findById(studentId);
+        if (!student) {
+          results.failed.push({ studentId, tripId, reason: 'Student not found' });
+          continue;
+        }
+        
+        const trip = await Trip.findById(tripId);
+        if (!trip) {
+          results.failed.push({ studentId, tripId, reason: 'Trip not found' });
+          continue;
+        }
+        
+        // Check if already assigned
+        const alreadyAssigned = student.tripAssignments?.some(
+          a => a.tripId?.toString() === tripId && a.status === 'active'
+        );
+        
+        if (alreadyAssigned) {
+          results.failed.push({ studentId, tripId, reason: 'Already assigned' });
+          continue;
+        }
+        
+        // Assign student
+        await Student.updateOne(
+          { _id: studentId },
+          {
+            $push: {
+              tripAssignments: {
+                tripId: tripId,
+                tripType: tripType || trip.tripType,
+                status: 'active',
+                assignedAt: new Date()
+              }
+            }
+          }
+        );
+        
+        await Trip.updateOne(
+          { _id: tripId },
+          { $addToSet: { students: studentId } }
+        );
+        
+        results.successful.push({ studentId, tripId });
+        
+      } catch (error) {
+        results.failed.push({ 
+          studentId: item.studentId, 
+          tripId: item.tripId, 
+          reason: error.message 
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Bulk assignment completed: ${results.successful.length} successful, ${results.failed.length} failed`,
+      results
+    });
+    
+  } catch (error) {
+    console.error('Error in bulk assignment:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route   GET /api/students/unassigned-trips
+ * @desc    Get students not assigned to a specific trip
+ * @access  Private (Admin only)
+ */
+router.get('/unassigned-trips/list', isAdmin, async (req, res) => {
+  try {
+    const { tripId } = req.query;
+    
+    let query = { usesTransport: true, isActive: true };
+    
+    const students = await Student.find(query)
+      .populate('transportDetails.busId', 'busNumber registrationNumber')
+      .select('firstName lastName admissionNumber classLevel transportDetails tripAssignments busNumber');
+    
+    // Filter out students already assigned to the trip
+    let unassignedStudents = students;
+    if (tripId) {
+      unassignedStudents = students.filter(student => {
+        const assigned = student.tripAssignments?.some(
+          a => a.tripId?.toString() === tripId && a.status === 'active'
+        );
+        return !assigned;
+      });
+    }
+    
+    res.json({
+      success: true,
+      count: unassignedStudents.length,
+      data: unassignedStudents
+    });
+    
+  } catch (error) {
+    console.error('Error fetching unassigned students:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 // ==================== BASIC CRUD OPERATIONS ====================
 
 /**
@@ -145,7 +461,7 @@ router.get('/', isAdmin, async (req, res) => {
       usesTransport,
       transportStatus,
       search,
-      simple // Add simple flag to skip population
+      simple
     } = req.query;
 
     const query = {};
@@ -164,15 +480,12 @@ router.get('/', isAdmin, async (req, res) => {
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    // Build query based on whether we need population
     let studentsQuery = Student.find(query);
     
     if (simple !== 'true') {
-      // Only populate if not requesting simple data
       studentsQuery = studentsQuery
         .populate('parentId', 'firstName lastName email phone')
         .populate('transportDetails.busId', 'busNumber registrationNumber');
-      // REMOVED: .populate('transportDetails.routeId', 'name') - THIS FIELD DOESN'T EXIST
     }
     
     const [students, total] = await Promise.all([
@@ -211,7 +524,7 @@ router.get('/transport', isAdminOrDriver, async (req, res) => {
     })
     .populate('parentId', 'firstName lastName phone')
     .populate('transportDetails.busId', 'busNumber')
-    .select('firstName lastName classLevel admissionNumber transportDetails qrCode');
+    .select('firstName lastName classLevel admissionNumber transportDetails qrCode tripAssignments busNumber');
 
     res.json({ success: true, count: students.length, data: students });
   } catch (error) {
@@ -231,7 +544,7 @@ router.get('/unlinked', isAdmin, async (req, res) => {
       parentId: { $exists: false },
       usesTransport: true 
     })
-    .select('firstName lastName admissionNumber classLevel transportDetails');
+    .select('firstName lastName admissionNumber classLevel transportDetails busNumber');
 
     res.json({ success: true, count: students.length, data: students });
   } catch (error) {
@@ -254,11 +567,36 @@ router.get('/by-bus/:busId', isAdminOrDriver, async (req, res) => {
       isActive: true
     })
     .populate('parentId', 'firstName lastName phone')
-    .select('firstName lastName classLevel admissionNumber transportDetails qrCode');
+    .select('firstName lastName classLevel admissionNumber transportDetails qrCode tripAssignments busNumber');
 
     res.json({ success: true, count: students.length, data: students });
   } catch (error) {
     console.error('Error fetching students by bus:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * @route   GET /api/students/by-bus-number/:busNumber
+ * @desc    Get all students assigned to a specific bus by bus number (for driver app)
+ * @access  Private (Admin/Driver)
+ */
+router.get('/by-bus-number/:busNumber', isAdminOrDriver, async (req, res) => {
+  try {
+    const { busNumber } = req.params;
+    const students = await Student.find({
+      $or: [
+        { busNumber: busNumber },
+        { 'transportDetails.busNumber': busNumber }
+      ],
+      usesTransport: true,
+      isActive: true
+    })
+    .select('firstName lastName classLevel admissionNumber transportDetails qrCode busNumber');
+
+    res.json({ success: true, count: students.length, data: students });
+  } catch (error) {
+    console.error('Error fetching students by bus number:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -272,14 +610,13 @@ router.get('/by-parent/:parentId', async (req, res) => {
   try {
     const { parentId } = req.params;
     
-    // Check if user has access
     if (req.user.role === 'parent' && req.user.id !== parentId) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
     
     const students = await Student.find({ parentId, isActive: true })
     .populate('transportDetails.busId', 'busNumber registrationNumber')
-    .select('firstName lastName classLevel admissionNumber transportDetails qrCode');
+    .select('firstName lastName classLevel admissionNumber transportDetails qrCode tripAssignments busNumber');
 
     res.json({ success: true, count: students.length, data: students });
   } catch (error) {
@@ -297,15 +634,13 @@ router.get('/:id', async (req, res) => {
   try {
     const student = await Student.findById(req.params.id)
       .populate('parentId', 'firstName lastName email phone')
-      .populate('transportDetails.busId', 'busNumber registrationNumber');
-      // REMOVED: .populate('transportDetails.routeId', 'name') - THIS FIELD DOESN'T EXIST
-      // REMOVED: .populate('notes.author', 'name') - This field might not exist either
+      .populate('transportDetails.busId', 'busNumber registrationNumber')
+      .populate('tripAssignments.tripId', 'routeName tripType scheduledStartTime vehicleId status');
 
     if (!student) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
 
-    // Check if parent has access to this student
     if (req.user.role === 'parent' && student.parentId?._id?.toString() !== req.user.id) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
@@ -319,7 +654,7 @@ router.get('/:id', async (req, res) => {
 
 /**
  * @route   POST /api/students
- * @desc    Create a new student
+ * @desc    Create a new student with auto-generated QR code and bus number sync
  * @access  Private (Admin only)
  */
 router.post('/', isAdmin, async (req, res) => {
@@ -335,11 +670,30 @@ router.post('/', isAdmin, async (req, res) => {
       });
     }
 
+    // Auto-generate QR code
+    const timestamp = Date.now();
+    const randomSuffix = Math.floor(Math.random() * 10000);
+    const qrCode = `STU-${req.body.admissionNumber?.toUpperCase()}-${timestamp}-${randomSuffix}`;
+
     const studentData = {
       ...req.body,
       admissionNumber: req.body.admissionNumber?.toUpperCase(),
-      usesTransport: req.body.usesTransport || false
+      usesTransport: req.body.usesTransport || false,
+      tripAssignments: [],
+      qrCode: qrCode
     };
+
+    // Sync bus number if busId is provided
+    if (studentData.transportDetails?.busId || studentData.busId) {
+      const busId = studentData.transportDetails?.busId || studentData.busId;
+      const bus = await Bus.findById(busId);
+      if (bus) {
+        studentData.busNumber = bus.busNumber;
+        if (studentData.transportDetails) {
+          studentData.transportDetails.busNumber = bus.busNumber;
+        }
+      }
+    }
 
     if (studentData.usesTransport) {
       studentData.transportDetails = {
@@ -354,7 +708,7 @@ router.post('/', isAdmin, async (req, res) => {
     
     res.status(201).json({ 
       success: true, 
-      message: 'Student created successfully', 
+      message: 'Student created successfully with QR code', 
       data: newStudent 
     });
   } catch (error) {
@@ -365,23 +719,43 @@ router.post('/', isAdmin, async (req, res) => {
 
 /**
  * @route   PUT /api/students/:id
- * @desc    Update a student
+ * @desc    Update a student with bus number sync
  * @access  Private (Admin only)
  */
 router.put('/:id', isAdmin, async (req, res) => {
   try {
-    const student = await Student.findByIdAndUpdate(
-      req.params.id,
-      { 
-        ...req.body, 
-        admissionNumber: req.body.admissionNumber?.toUpperCase() 
-      },
-      { new: true, runValidators: true }
-    );
-    
-    if (!student) {
+    const existingStudent = await Student.findById(req.params.id);
+    if (!existingStudent) {
       return res.status(404).json({ success: false, message: 'Student not found' });
     }
+
+    const updateData = { ...req.body };
+    
+    // If admission number changed, regenerate QR code
+    if (updateData.admissionNumber && updateData.admissionNumber !== existingStudent.admissionNumber) {
+      updateData.admissionNumber = updateData.admissionNumber?.toUpperCase();
+      const timestamp = Date.now();
+      const randomSuffix = Math.floor(Math.random() * 10000);
+      updateData.qrCode = `STU-${updateData.admissionNumber}-${timestamp}-${randomSuffix}`;
+    }
+    
+    // Sync bus number if busId changed
+    const busId = updateData.transportDetails?.busId || updateData.busId;
+    if (busId && busId !== (existingStudent.transportDetails?.busId || existingStudent.busId)) {
+      const bus = await Bus.findById(busId);
+      if (bus) {
+        updateData.busNumber = bus.busNumber;
+        if (updateData.transportDetails) {
+          updateData.transportDetails.busNumber = bus.busNumber;
+        }
+      }
+    }
+
+    const student = await Student.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    );
     
     res.json({ success: true, message: 'Student updated successfully', data: student });
   } catch (error) {
@@ -392,15 +766,27 @@ router.put('/:id', isAdmin, async (req, res) => {
 
 /**
  * @route   PATCH /api/students/:id/transport
- * @desc    Update student transport status
+ * @desc    Update student transport status with bus number sync
  * @access  Private (Admin only)
  */
 router.patch('/:id/transport', isAdmin, async (req, res) => {
   try {
     const { usesTransport, transportDetails } = req.body;
     const updateData = {};
+    
     if (usesTransport !== undefined) updateData.usesTransport = usesTransport;
-    if (transportDetails) updateData.transportDetails = transportDetails;
+    if (transportDetails) {
+      updateData.transportDetails = transportDetails;
+      
+      // Sync bus number if busId is provided
+      if (transportDetails.busId) {
+        const bus = await Bus.findById(transportDetails.busId);
+        if (bus) {
+          updateData.busNumber = bus.busNumber;
+          updateData.transportDetails.busNumber = bus.busNumber;
+        }
+      }
+    }
 
     const student = await Student.findByIdAndUpdate(
       req.params.id, 
@@ -445,7 +831,7 @@ router.delete('/:id', isAdmin, async (req, res) => {
 
 /**
  * @route   POST /api/students/:id/generate-qr
- * @desc    Generate QR code for a student
+ * @desc    Generate/Regenerate QR code for a student
  * @access  Private (Admin only)
  */
 router.post('/:id/generate-qr', isAdmin, async (req, res) => {
@@ -456,7 +842,8 @@ router.post('/:id/generate-qr', isAdmin, async (req, res) => {
     }
     
     const timestamp = Date.now();
-    student.qrCode = `STU-${student.admissionNumber}-${timestamp}`;
+    const randomSuffix = Math.floor(Math.random() * 10000);
+    student.qrCode = `STU-${student.admissionNumber}-${timestamp}-${randomSuffix}`;
     await student.save();
     
     res.json({ 
@@ -466,6 +853,25 @@ router.post('/:id/generate-qr', isAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Error generating QR code:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * @route   POST /api/students/sync-bus-numbers
+ * @desc    Sync all students with bus numbers (admin utility)
+ * @access  Private (Admin only)
+ */
+router.post('/sync-bus-numbers', isAdmin, async (req, res) => {
+  try {
+    const updated = await Student.syncAllBusNumbers();
+    res.json({
+      success: true,
+      message: `Synced ${updated} students with bus numbers`,
+      updatedCount: updated
+    });
+  } catch (error) {
+    console.error('Error syncing bus numbers:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });

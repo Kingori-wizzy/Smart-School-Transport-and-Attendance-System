@@ -27,6 +27,143 @@ const validateChild = [
   body('emergencyPhone').optional().matches(/^\+?[\d\s-]{10,}$/).withMessage('Valid phone number required')
 ];
 
+// ==================== CONVERSATIONS ENDPOINTS (with trailing slash support) ====================
+
+// 💬 Get all conversations for parent (messages from drivers)
+// Handle both /conversations and /conversations/ (with trailing slash)
+router.get(['/conversations', '/conversations/'], async (req, res) => {
+  try {
+    const parentId = req.user.id;
+    const { page = 1, limit = 20 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Find all notifications sent to this parent
+    const conversations = await Notification.find({
+      userId: parentId,
+      userType: 'parent',
+      type: { $in: ['driver_message', 'driver_broadcast', 'delay_report', 'trip_delayed'] }
+    })
+    .populate('studentId', 'firstName lastName name')
+    .populate('tripId', 'routeName')
+    .sort({ createdAt: -1 })
+    .skip(skip)
+    .limit(parseInt(limit))
+    .lean();
+    
+    const total = await Notification.countDocuments({
+      userId: parentId,
+      userType: 'parent',
+      type: { $in: ['driver_message', 'driver_broadcast', 'delay_report', 'trip_delayed'] }
+    });
+    
+    // Format conversations for the parent app
+    const formattedConversations = conversations.map(conv => ({
+      id: conv._id,
+      message: conv.message,
+      title: conv.title,
+      type: conv.type,
+      student: conv.studentId ? {
+        id: conv.studentId._id,
+        name: conv.studentId.name || `${conv.studentId.firstName} ${conv.studentId.lastName}`.trim()
+      } : null,
+      tripName: conv.tripId?.routeName || null,
+      isRead: conv.isRead || false,
+      createdAt: conv.createdAt,
+      metadata: conv.metadata || {}
+    }));
+    
+    const pagination = {
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total,
+      pages: Math.ceil(total / parseInt(limit))
+    };
+    
+    res.json({
+      success: true,
+      data: formattedConversations,
+      pagination,
+      count: formattedConversations.length
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching conversations:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// 📊 Get unread conversation count
+// Handle both /conversations/unread/count and with trailing slash
+router.get(['/conversations/unread/count', '/conversations/unread/count/'], async (req, res) => {
+  try {
+    const parentId = req.user.id;
+    
+    const unreadCount = await Notification.countDocuments({
+      userId: parentId,
+      userType: 'parent',
+      isRead: false,
+      type: { $in: ['driver_message', 'driver_broadcast', 'delay_report', 'trip_delayed'] }
+    });
+    
+    res.json({ 
+      success: true, 
+      unreadCount 
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching unread count:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ✅ Mark conversation as read
+// Handle both /conversations/:id/read and with trailing slash
+router.put(['/conversations/:conversationId/read', '/conversations/:conversationId/read/'], async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const parentId = req.user.id;
+    
+    // Validate ID
+    if (!mongoose.Types.ObjectId.isValid(conversationId)) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Invalid conversation ID format' 
+      });
+    }
+    
+    const notification = await Notification.findOneAndUpdate(
+      { _id: conversationId, userId: parentId },
+      { isRead: true, status: 'read', readAt: new Date() },
+      { new: true }
+    );
+    
+    if (!notification) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Conversation not found' 
+      });
+    }
+    
+    // Get updated unread count
+    const unreadCount = await Notification.countDocuments({
+      userId: parentId,
+      userType: 'parent',
+      isRead: false,
+      type: { $in: ['driver_message', 'driver_broadcast', 'delay_report', 'trip_delayed'] }
+    });
+    
+    res.json({ 
+      success: true, 
+      message: 'Marked as read',
+      unreadCount
+    });
+    
+  } catch (error) {
+    console.error('❌ Error marking conversation as read:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // 👨‍👩‍👧 Get parent's children (paginated)
 router.get('/children', async (req, res) => {
   try {
@@ -760,6 +897,18 @@ router.delete('/children/:childId', async (req, res) => {
       message: error.message 
     });
   }
+});
+
+// ==================== CATCH-ALL FOR CONVERSATIONS (Handles any trailing slash issues) ====================
+
+// Catch-all for any conversation routes with trailing slashes or spaces
+router.use(/\/conversations.*/, (req, res, next) => {
+  // If the URL has a trailing space or encoded space, redirect to clean URL
+  if (req.originalUrl.includes('%20') || req.originalUrl.endsWith(' ')) {
+    const cleanUrl = req.originalUrl.replace(/%20/g, '').trim();
+    return res.redirect(307, cleanUrl);
+  }
+  next();
 });
 
 module.exports = router;

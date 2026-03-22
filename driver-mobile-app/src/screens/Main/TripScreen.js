@@ -8,6 +8,8 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
+  Modal,
+  TextInput,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../context/AuthContext';
@@ -34,6 +36,20 @@ export default function TripScreen({ route, navigation }) {
     remaining: 0,
     progress: 0,
   });
+  
+  // Messaging state
+  const [showMessageModal, setShowMessageModal] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [messageText, setMessageText] = useState('');
+  const [messageType, setMessageType] = useState('info');
+  const [sendingMessage, setSendingMessage] = useState(false);
+  
+  // Delay report state
+  const [showDelayModal, setShowDelayModal] = useState(false);
+  const [delayReason, setDelayReason] = useState('');
+  const [delayMinutes, setDelayMinutes] = useState('15');
+  const [sendingDelay, setSendingDelay] = useState(false);
+  
   const locationWatcher = useRef(null);
 
   useEffect(() => {
@@ -56,7 +72,6 @@ export default function TripScreen({ route, navigation }) {
     try {
       setLoading(true);
       
-      // Fetch students for this trip
       const response = await api.get(`/driver/trips/${trip._id}/students`);
       console.log('Students response:', response.data);
       
@@ -266,6 +281,99 @@ export default function TripScreen({ route, navigation }) {
     navigation.navigate('QRScan', { tripId: trip._id });
   };
 
+  const handleViewRoute = () => {
+    navigation.navigate('Navigation', { tripId: trip._id });
+  };
+
+  // ==================== MESSAGING FUNCTIONS ====================
+
+  const handleOpenMessageModal = (student = null) => {
+    setSelectedStudent(student);
+    setMessageText('');
+    setMessageType('info');
+    setShowMessageModal(true);
+  };
+
+  const handleOpenDelayModal = () => {
+    setDelayReason('');
+    setDelayMinutes('15');
+    setShowDelayModal(true);
+  };
+
+  const handleSendMessage = async () => {
+    if (!messageText.trim()) {
+      Alert.alert('Error', 'Please enter a message');
+      return;
+    }
+
+    setSendingMessage(true);
+    try {
+      let endpoint;
+      let payload;
+
+      if (selectedStudent) {
+        // Send to specific parent
+        endpoint = `/driver/message/parent/${selectedStudent._id}`;
+        payload = {
+          message: messageText,
+          type: messageType,
+          tripId: trip._id
+        };
+      } else {
+        // Broadcast to all parents
+        endpoint = `/driver/message/broadcast/${trip._id}`;
+        payload = {
+          message: messageText,
+          type: messageType
+        };
+      }
+
+      const response = await api.post(endpoint, payload);
+      
+      if (response.data.success) {
+        Alert.alert('Success', `Message sent to ${selectedStudent ? `${selectedStudent.firstName}'s parent` : 'all parents'}`);
+        setShowMessageModal(false);
+        setMessageText('');
+        setSelectedStudent(null);
+      } else {
+        Alert.alert('Error', response.data.message || 'Failed to send message');
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+      Alert.alert('Error', error.response?.data?.message || 'Failed to send message');
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
+  const handleReportDelay = async () => {
+    if (!delayReason.trim()) {
+      Alert.alert('Error', 'Please enter a reason for the delay');
+      return;
+    }
+
+    setSendingDelay(true);
+    try {
+      const response = await api.post(`/driver/trips/${trip._id}/delay`, {
+        reason: delayReason,
+        estimatedDelayMinutes: parseInt(delayMinutes)
+      });
+      
+      if (response.data.success) {
+        Alert.alert('Success', 'Delay reported to admin');
+        setShowDelayModal(false);
+        setDelayReason('');
+      } else {
+        Alert.alert('Error', response.data.message || 'Failed to report delay');
+      }
+    } catch (error) {
+      console.error('Error reporting delay:', error);
+      Alert.alert('Error', error.response?.data?.message || 'Failed to report delay');
+    } finally {
+      setSendingDelay(false);
+    }
+  };
+
   const onRefresh = async () => {
     setRefreshing(true);
     await loadTripData();
@@ -298,6 +406,13 @@ export default function TripScreen({ route, navigation }) {
         </View>
         
         <View style={styles.studentActions}>
+          <TouchableOpacity
+            style={[styles.messageButton, { backgroundColor: colors.secondary || '#9C27B0' }]}
+            onPress={() => handleOpenMessageModal(student)}
+          >
+            <Ionicons name="chatbubble-outline" size={16} color="#fff" />
+          </TouchableOpacity>
+          
           {status === 'boarded' ? (
             <View style={[styles.statusBadge, { backgroundColor: colors.success || '#4CAF50' }]}>
               <Ionicons name="checkmark-circle" size={16} color="#fff" />
@@ -346,6 +461,13 @@ export default function TripScreen({ route, navigation }) {
   const busNumber = trip.busNumber || trip.vehicleId || 'N/A';
   const isTripActive = trip.status === 'in-progress' || trip.status === 'running';
   const isTripScheduled = trip.status === 'scheduled';
+  const hasPendingStudents = stats.remaining > 0;
+
+  const messageTypes = [
+    { id: 'info', label: 'Information', icon: 'information-circle', color: '#2196F3' },
+    { id: 'delay', label: 'Delay Update', icon: 'time', color: '#FF9800' },
+    { id: 'reminder', label: 'Reminder', icon: 'notifications', color: '#4CAF50' },
+  ];
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background || '#f5f5f5' }]}>
@@ -385,6 +507,9 @@ export default function TripScreen({ route, navigation }) {
             </Text>
             <Text style={[styles.progressStat, { color: colors.textSecondary || '#666' }]}>
               Alighted: {stats.alighted}
+            </Text>
+            <Text style={[styles.progressStat, { color: colors.textSecondary || '#666' }]}>
+              Remaining: {stats.remaining}
             </Text>
             <Text style={[styles.progressStat, { color: colors.textSecondary || '#666' }]}>
               Time: {format(new Date(), 'HH:mm')}
@@ -429,6 +554,32 @@ export default function TripScreen({ route, navigation }) {
             <Text style={styles.mainActionText}>Scan QR</Text>
           </TouchableOpacity>
 
+          <TouchableOpacity
+            style={[styles.mainActionButton, { backgroundColor: '#9C27B0' }]}
+            onPress={() => handleOpenMessageModal()}
+          >
+            <Ionicons name="chatbubble-outline" size={24} color="#fff" />
+            <Text style={styles.mainActionText}>Broadcast</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.mainActionButton, { backgroundColor: '#FF9800' }]}
+            onPress={handleOpenDelayModal}
+          >
+            <Ionicons name="time-outline" size={24} color="#fff" />
+            <Text style={styles.mainActionText}>Report Delay</Text>
+          </TouchableOpacity>
+
+          {isTripActive && hasPendingStudents && (
+            <TouchableOpacity
+              style={[styles.mainActionButton, { backgroundColor: colors.success || '#4CAF50' }]}
+              onPress={handleViewRoute}
+            >
+              <Ionicons name="map-outline" size={24} color="#fff" />
+              <Text style={styles.mainActionText}>View Route</Text>
+            </TouchableOpacity>
+          )}
+
           {isTripScheduled && (
             <TouchableOpacity
               style={[styles.mainActionButton, { backgroundColor: colors.success || '#4CAF50' }]}
@@ -470,6 +621,161 @@ export default function TripScreen({ route, navigation }) {
           )}
         </View>
       </ScrollView>
+
+      {/* Message Modal */}
+      <Modal
+        visible={showMessageModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowMessageModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContainer, { backgroundColor: colors.card || '#fff' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text || '#333' }]}>
+                {selectedStudent ? `Message ${selectedStudent.firstName}'s Parent` : 'Broadcast Message'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowMessageModal(false)} style={styles.closeButton}>
+                <Ionicons name="close" size={24} color={colors.textSecondary || '#666'} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView>
+              <Text style={[styles.modalLabel, { color: colors.textSecondary || '#666' }]}>Message Type</Text>
+              <View style={styles.typeContainer}>
+                {messageTypes.map(type => (
+                  <TouchableOpacity
+                    key={type.id}
+                    style={[
+                      styles.typeButton,
+                      messageType === type.id && { backgroundColor: type.color, borderColor: type.color }
+                    ]}
+                    onPress={() => setMessageType(type.id)}
+                  >
+                    <Ionicons 
+                      name={type.icon} 
+                      size={18} 
+                      color={messageType === type.id ? '#fff' : type.color} 
+                    />
+                    <Text style={[
+                      styles.typeText,
+                      messageType === type.id && { color: '#fff' }
+                    ]}>
+                      {type.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={[styles.modalLabel, { color: colors.textSecondary || '#666' }]}>Message</Text>
+              <TextInput
+                style={[styles.messageInput, { 
+                  backgroundColor: colors.background || '#f5f5f5',
+                  color: colors.text || '#333',
+                  borderColor: colors.border || '#ddd'
+                }]}
+                multiline
+                numberOfLines={4}
+                placeholder="Type your message here..."
+                placeholderTextColor={colors.textSecondary || '#999'}
+                value={messageText}
+                onChangeText={setMessageText}
+                textAlignVertical="top"
+              />
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalCancelButton, { borderColor: colors.border || '#ddd' }]}
+                  onPress={() => setShowMessageModal(false)}
+                >
+                  <Text style={[styles.modalCancelText, { color: colors.textSecondary || '#666' }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalSendButton, { backgroundColor: colors.primary || '#2196F3' }]}
+                  onPress={handleSendMessage}
+                  disabled={sendingMessage}
+                >
+                  {sendingMessage ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.modalSendText}>Send Message</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delay Report Modal */}
+      <Modal
+        visible={showDelayModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowDelayModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContainer, { backgroundColor: colors.card || '#fff' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text || '#333' }]}>Report Delay</Text>
+              <TouchableOpacity onPress={() => setShowDelayModal(false)} style={styles.closeButton}>
+                <Ionicons name="close" size={24} color={colors.textSecondary || '#666'} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView>
+              <Text style={[styles.modalLabel, { color: colors.textSecondary || '#666' }]}>Reason for Delay</Text>
+              <TextInput
+                style={[styles.messageInput, { 
+                  backgroundColor: colors.background || '#f5f5f5',
+                  color: colors.text || '#333',
+                  borderColor: colors.border || '#ddd'
+                }]}
+                multiline
+                numberOfLines={3}
+                placeholder="e.g., Heavy traffic, mechanical issue, etc."
+                placeholderTextColor={colors.textSecondary || '#999'}
+                value={delayReason}
+                onChangeText={setDelayReason}
+              />
+
+              <Text style={[styles.modalLabel, { color: colors.textSecondary || '#666' }]}>Estimated Delay (minutes)</Text>
+              <TextInput
+                style={[styles.delayInput, { 
+                  backgroundColor: colors.background || '#f5f5f5',
+                  color: colors.text || '#333',
+                  borderColor: colors.border || '#ddd'
+                }]}
+                keyboardType="numeric"
+                placeholder="15"
+                placeholderTextColor={colors.textSecondary || '#999'}
+                value={delayMinutes}
+                onChangeText={setDelayMinutes}
+              />
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalCancelButton, { borderColor: colors.border || '#ddd' }]}
+                  onPress={() => setShowDelayModal(false)}
+                >
+                  <Text style={[styles.modalCancelText, { color: colors.textSecondary || '#666' }]}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalSendButton, { backgroundColor: '#FF9800' }]}
+                  onPress={handleReportDelay}
+                  disabled={sendingDelay}
+                >
+                  {sendingDelay ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.modalSendText}>Report Delay</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -499,16 +805,17 @@ const styles = StyleSheet.create({
   detailValue: { fontSize: 14, fontWeight: '500' },
   statusChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   statusChipText: { color: '#fff', fontSize: 12, fontWeight: '600' },
-  actionRow: { flexDirection: 'row', justifyContent: 'space-around', marginHorizontal: 15, marginBottom: 15 },
-  mainActionButton: { flex: 1, marginHorizontal: 5, padding: 15, borderRadius: 10, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
-  mainActionText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginHorizontal: 15, marginBottom: 15, gap: 10 },
+  mainActionButton: { paddingHorizontal: 16, paddingVertical: 12, borderRadius: 10, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, minWidth: 100 },
+  mainActionText: { color: '#fff', fontSize: 13, fontWeight: '600' },
   studentsCard: { margin: 15, marginTop: 0, padding: 15, borderRadius: 10, elevation: 2 },
   studentsTitle: { fontSize: 16, fontWeight: '600', marginBottom: 15 },
   studentItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1 },
   studentInfo: { flex: 1 },
   studentName: { fontSize: 15, fontWeight: '500', marginBottom: 2 },
   studentDetails: { fontSize: 12, marginBottom: 2 },
-  studentActions: { marginLeft: 10 },
+  studentActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  messageButton: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
   statusBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 15, gap: 4 },
   statusBadgeText: { color: '#fff', fontSize: 11, fontWeight: '600' },
   actionButtons: { flexDirection: 'row', gap: 5 },
@@ -516,4 +823,22 @@ const styles = StyleSheet.create({
   actionButtonText: { color: '#fff', fontSize: 11, fontWeight: '600' },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 30 },
   emptyText: { marginTop: 10, fontSize: 14, textAlign: 'center' },
+  
+  // Modal Styles
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  modalContainer: { width: '90%', maxHeight: '80%', borderRadius: 12, overflow: 'hidden' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  modalTitle: { fontSize: 18, fontWeight: 'bold' },
+  closeButton: { padding: 4 },
+  modalLabel: { fontSize: 14, fontWeight: '600', marginTop: 16, marginBottom: 8, marginHorizontal: 16 },
+  typeContainer: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12, gap: 8 },
+  typeButton: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: '#ddd', backgroundColor: '#fff' },
+  typeText: { fontSize: 12, color: '#666' },
+  messageInput: { marginHorizontal: 16, padding: 12, borderWidth: 1, borderRadius: 8, minHeight: 100, fontSize: 14 },
+  delayInput: { marginHorizontal: 16, padding: 12, borderWidth: 1, borderRadius: 8, fontSize: 14 },
+  modalButtons: { flexDirection: 'row', padding: 16, gap: 12, borderTopWidth: 1, borderTopColor: '#eee', marginTop: 16 },
+  modalCancelButton: { flex: 1, paddingVertical: 12, borderRadius: 8, borderWidth: 1, alignItems: 'center' },
+  modalCancelText: { fontSize: 16, fontWeight: '500' },
+  modalSendButton: { flex: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
+  modalSendText: { color: '#fff', fontSize: 16, fontWeight: '500' },
 });

@@ -1,10 +1,32 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_URL } from '../constants/config';
 
+// Store token in memory for faster access
+let cachedToken = null;
+
 const api = {
+  // Set auth token (call after login or token refresh)
+  setAuthToken: (token) => {
+    cachedToken = token;
+    console.log(`🔑 Auth token ${token ? 'set' : 'cleared'} in memory`);
+  },
+
+  // Clear auth token
+  clearAuthToken: () => {
+    cachedToken = null;
+    console.log('🔑 Auth token cleared from memory');
+  },
+
+  // Get current token (from memory or storage)
+  getAuthToken: async () => {
+    if (cachedToken) return cachedToken;
+    return await AsyncStorage.getItem('@auth_token');
+  },
+
   async request(endpoint, options = {}) {
     try {
-      const token = await AsyncStorage.getItem('@auth_token');
+      // Get token (from memory or storage)
+      const token = await this.getAuthToken();
       
       // Debug token presence
       console.log(`🔑 Auth token present: ${!!token}`);
@@ -34,9 +56,11 @@ const api = {
       
       if (!response.ok) {
         let errorMessage = `Request failed with status ${response.status}`;
+        let errorData = null;
+        
         try {
           if (responseText) {
-            const errorData = JSON.parse(responseText);
+            errorData = JSON.parse(responseText);
             errorMessage = errorData.message || errorData.error || errorMessage;
           }
         } catch (e) {
@@ -46,10 +70,19 @@ const api = {
         // Handle 401 Unauthorized - token expired or invalid
         if (response.status === 401) {
           console.log('🔑 Token expired or invalid, clearing storage');
+          this.clearAuthToken();
           await AsyncStorage.multiRemove(['@auth_token', '@user', '@user_role']);
+          
+          // Emit logout event if needed
+          if (global.eventEmitter) {
+            global.eventEmitter.emit('auth:unauthorized');
+          }
         }
         
-        throw new Error(errorMessage);
+        const error = new Error(errorMessage);
+        error.status = response.status;
+        error.data = errorData;
+        throw error;
       }
 
       if (!responseText) {
@@ -69,6 +102,7 @@ const api = {
         endpoint,
         method: options.method,
         message: error.message,
+        status: error.status
       });
       throw error;
     }
@@ -80,7 +114,7 @@ const api = {
     savePushToken: async (token) => {
       try {
         // Check if user is logged in first
-        const authToken = await AsyncStorage.getItem('@auth_token');
+        const authToken = await api.getAuthToken();
         if (!authToken) {
           console.log('⚠️ Cannot save push token: User not authenticated');
           return { success: false, message: 'Not authenticated' };
@@ -134,6 +168,8 @@ const api = {
         // If login successful and token exists, store it
         if (response.token) {
           await AsyncStorage.setItem('@auth_token', response.token);
+          api.setAuthToken(response.token);
+          
           if (response.user) {
             await AsyncStorage.setItem('@user', JSON.stringify(response.user));
             await AsyncStorage.setItem('@user_role', response.user.role);
@@ -178,6 +214,7 @@ const api = {
       } catch (error) {
         // If verify fails, clear token
         await AsyncStorage.multiRemove(['@auth_token', '@user', '@user_role']);
+        api.clearAuthToken();
         throw error;
       }
     },
@@ -188,13 +225,14 @@ const api = {
       } finally {
         // Always clear local storage even if API call fails
         await AsyncStorage.multiRemove(['@auth_token', '@user', '@user_role']);
+        api.clearAuthToken();
         console.log('✅ User logged out, tokens cleared');
       }
     },
     
     // Check if user is authenticated
     isAuthenticated: async () => {
-      const token = await AsyncStorage.getItem('@auth_token');
+      const token = await api.getAuthToken();
       return !!token;
     },
     
@@ -227,6 +265,16 @@ const api = {
     
     getChildTrips: (childId) => 
       api.request(`/parents/children/${childId}/trips/recent`),
+    
+    // ==================== CONVERSATIONS ====================
+    getConversations: (page = 1, limit = 20) => 
+      api.request(`/parent/conversations?page=${page}&limit=${limit}`),
+    
+    getUnreadCount: () => 
+      api.request('/parent/conversations/unread/count'),
+    
+    markConversationRead: (conversationId) => 
+      api.request(`/parent/conversations/${conversationId}/read`, { method: 'PUT' }),
   },
 
   // ==================== ATTENDANCE ====================
@@ -310,7 +358,7 @@ const api = {
       api.request('/user/change-password', { method: 'POST', body: JSON.stringify(passwordData) }),
     
     uploadPhoto: async (formData) => {
-      const token = await AsyncStorage.getItem('@auth_token');
+      const token = await api.getAuthToken();
       return fetch(`${API_URL}/user/profile/photo`, {
         method: 'POST',
         headers: {
@@ -336,6 +384,7 @@ const api = {
   setAuthToken: async (token) => {
     if (token) {
       await AsyncStorage.setItem('@auth_token', token);
+      cachedToken = token;
       console.log('✅ Auth token manually set');
     }
   },
@@ -343,11 +392,13 @@ const api = {
   // Helper to clear token
   clearAuthToken: async () => {
     await AsyncStorage.removeItem('@auth_token');
+    cachedToken = null;
     console.log('✅ Auth token cleared');
   },
   
   // Helper to get current token
   getAuthToken: async () => {
+    if (cachedToken) return cachedToken;
     return await AsyncStorage.getItem('@auth_token');
   },
 };

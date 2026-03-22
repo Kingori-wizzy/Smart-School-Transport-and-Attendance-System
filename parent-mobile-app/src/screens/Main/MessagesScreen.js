@@ -13,6 +13,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import api from '../../services/api';
@@ -35,7 +36,11 @@ const ChatBubble = ({ message, isOwn }) => (
       </Text>
       <Text style={[styles.messageTime, isOwn && styles.ownMessageTime]}>
         {format(new Date(message.timestamp), 'HH:mm')}
-        {isOwn && <Text style={styles.messageStatus}> {message.read ? '✓✓' : '✓'}</Text>}
+        {isOwn && (
+          <Text style={styles.messageStatus}>
+            {message.read ? ' ✓✓' : ' ✓'}
+          </Text>
+        )}
       </Text>
     </View>
   </View>
@@ -83,7 +88,7 @@ const ConversationItem = ({ conversation, onPress }) => {
 
 const EmptyConversations = () => (
   <View style={styles.emptyContainer}>
-    <Text style={styles.emptyIcon}>💬</Text>
+    <Ionicons name="chatbubbles-outline" size={60} color="#ccc" />
     <Text style={styles.emptyTitle}>No Messages</Text>
     <Text style={styles.emptyText}>
       Start a conversation with the school, teachers, or drivers.
@@ -127,7 +132,8 @@ export default function MessagesScreen({ route, navigation }) {
   const loadConversations = async () => {
     try {
       setLoading(true);
-      const data = await api.messages.getConversations();
+      const response = await api.get('/parent/conversations');
+      const data = response.data?.data || [];
       setConversations(data);
     } catch (error) {
       console.error('Error loading conversations:', error);
@@ -138,7 +144,8 @@ export default function MessagesScreen({ route, navigation }) {
 
   const loadMessages = async (conversationId) => {
     try {
-      const data = await api.messages.getMessages(conversationId);
+      const response = await api.get(`/parent/conversations/${conversationId}/messages`);
+      const data = response.data?.data || [];
       setMessages(data);
       scrollToBottom();
     } catch (error) {
@@ -204,7 +211,10 @@ export default function MessagesScreen({ route, navigation }) {
     scrollToBottom();
 
     try {
-      const sentMessage = await api.messages.sendMessage(selectedConversation.id, newMessage.text);
+      const response = await api.post(`/parent/conversations/${selectedConversation.id}/messages`, {
+        text: newMessage.text
+      });
+      const sentMessage = response.data?.data;
       
       setMessages(prev =>
         prev.map(msg => msg.id === tempId ? sentMessage : msg)
@@ -281,7 +291,7 @@ export default function MessagesScreen({ route, navigation }) {
     >
       <LinearGradient colors={[COLORS.primary, COLORS.secondary]} style={styles.header}>
         <TouchableOpacity onPress={goBack} style={styles.backButton}>
-          <Text style={styles.backIcon}>←</Text>
+          <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>
           {selectedConversation ? selectedConversation.name : 'Messages'}
@@ -291,8 +301,9 @@ export default function MessagesScreen({ route, navigation }) {
 
       {!isConnected && (
         <View style={styles.offlineBanner}>
+          <Ionicons name="wifi-outline" size={16} color="#fff" />
           <Text style={styles.offlineText}>
-            🔴 You're offline. Messages may be delayed.
+            You're offline. Messages may be delayed.
           </Text>
         </View>
       )}
@@ -338,6 +349,7 @@ export default function MessagesScreen({ route, navigation }) {
               value={inputText}
               onChangeText={handleInputChange}
               placeholder="Type a message..."
+              placeholderTextColor="#999"
               multiline
               maxLength={500}
               editable={!sending}
@@ -351,7 +363,7 @@ export default function MessagesScreen({ route, navigation }) {
                 colors={[COLORS.primary, COLORS.secondary]}
                 style={styles.sendGradient}
               >
-                <Text style={styles.sendButtonText}>➤</Text>
+                <Ionicons name="send" size={20} color="#fff" />
               </LinearGradient>
             </TouchableOpacity>
           </View>
@@ -367,10 +379,9 @@ const styles = StyleSheet.create({
   loadingText: { marginTop: 10, fontSize: 16, color: '#666' },
   header: { paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
-  backIcon: { fontSize: 24, color: '#fff' },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
-  offlineBanner: { backgroundColor: '#f44336', padding: 8, alignItems: 'center' },
-  offlineText: { color: '#fff', fontSize: 12 },
+  offlineBanner: { backgroundColor: '#f44336', padding: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  offlineText: { color: '#fff', fontSize: 12, marginLeft: 8 },
   listContent: { paddingVertical: 8 },
   conversationItem: { flexDirection: 'row', backgroundColor: '#fff', padding: 15, marginVertical: 1, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   conversationAvatar: { width: 50, height: 50, borderRadius: 25, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
@@ -392,7 +403,7 @@ const styles = StyleSheet.create({
   senderInitials: { fontSize: 14, fontWeight: 'bold', color: '#fff' },
   messageBubble: { maxWidth: '75%', padding: 10, borderRadius: 16 },
   ownBubble: { backgroundColor: COLORS.primary, borderBottomRightRadius: 4 },
-  otherBubble: { backgroundColor: '#fff', borderBottomLeftRadius: 4 },
+  otherBubble: { backgroundColor: '#fff', borderBottomLeftRadius: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 1, elevation: 1 },
   senderName: { fontSize: 11, color: '#666', marginBottom: 2 },
   messageText: { fontSize: 14, lineHeight: 18 },
   ownMessageText: { color: '#fff' },
@@ -406,9 +417,7 @@ const styles = StyleSheet.create({
   sendButton: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden' },
   sendButtonDisabled: { opacity: 0.5 },
   sendGradient: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  sendButtonText: { color: '#fff', fontSize: 18 },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60, paddingHorizontal: 30 },
-  emptyIcon: { fontSize: 60, marginBottom: 20, opacity: 0.5 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 8 },
   emptyText: { fontSize: 14, color: '#666', textAlign: 'center', lineHeight: 20 },
 });

@@ -8,6 +8,7 @@ import {
   TextInput,
   Image,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
@@ -16,6 +17,7 @@ import api from '../../services/api';
 
 const ContactItem = ({ contact, onPress, colors }) => {
   const getInitials = (name) => {
+    if (!name) return '?';
     return name
       .split(' ')
       .map(word => word[0])
@@ -40,62 +42,95 @@ const ContactItem = ({ contact, onPress, colors }) => {
       <View style={styles.contactInfo}>
         <Text style={[styles.contactName, { color: colors.text }]}>{contact.name}</Text>
         <Text style={[styles.contactRole, { color: colors.textSecondary }]}>
-          {contact.role === 'driver' ? '🚌 Driver' : '🏫 School Admin'}
+          {contact.role === 'driver' ? '🚌 Driver' : contact.role === 'admin' ? '🏫 School Admin' : '👤 Staff'}
         </Text>
+        {contact.busNumber && (
+          <Text style={[styles.contactBus, { color: colors.primary }]}>
+            Bus: {contact.busNumber}
+          </Text>
+        )}
       </View>
     </TouchableOpacity>
   );
 };
 
-const EmptyState = ({ colors, searchQuery }) => (
-  <View style={styles.emptyContainer}>
-    <Text style={[styles.emptyIcon, { color: colors.textSecondary }]}>👥</Text>
-    <Text style={[styles.emptyTitle, { color: colors.text }]}>No Contacts Found</Text>
-    <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-      {searchQuery
-        ? `No contacts matching "${searchQuery}"`
-        : 'No available contacts to message'}
-    </Text>
-  </View>
-);
+const EmptyState = ({ colors, searchQuery, loading }) => {
+  if (loading) return null;
+  
+  return (
+    <View style={styles.emptyContainer}>
+      <Text style={[styles.emptyIcon, { color: colors.textSecondary }]}>👥</Text>
+      <Text style={[styles.emptyTitle, { color: colors.text }]}>No Contacts Found</Text>
+      <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+        {searchQuery
+          ? `No contacts matching "${searchQuery}"`
+          : 'No drivers assigned to your children yet'}
+      </Text>
+    </View>
+  );
+};
 
 export default function NewMessageScreen({ route, navigation }) {
   const { colors } = useTheme();
-  const { user } = useAuth();
+  const { user, childrenList } = useAuth();
   
   const [loading, setLoading] = useState(true);
   const [contacts, setContacts] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
-    loadContacts();
-  }, []);
+    loadDriversFromChildren();
+  }, [childrenList]);
 
-  const loadContacts = async () => {
+  const loadDriversFromChildren = async () => {
     try {
-      // Fetch drivers and admins the parent can message
-      const data = await api.messages.getAvailableContacts();
-      setContacts(data);
+      setLoading(true);
+      
+      // Extract drivers from children's bus assignments
+      const driverContacts = [];
+      const uniqueDrivers = new Map();
+      
+      for (const child of childrenList) {
+        if (child.busId && child.busNumber && !uniqueDrivers.has(child.busNumber)) {
+          uniqueDrivers.set(child.busNumber, {
+            id: child.busId,
+            name: `Driver - ${child.busNumber}`,
+            role: 'driver',
+            busNumber: child.busNumber,
+            studentName: child.fullName || `${child.firstName} ${child.lastName}`,
+            studentId: child.id,
+            avatar: null,
+          });
+        }
+      }
+      
+      setContacts(Array.from(uniqueDrivers.values()));
+      
     } catch (error) {
       console.error('Error loading contacts:', error);
+      Alert.alert('Error', 'Failed to load contacts');
     } finally {
       setLoading(false);
     }
   };
 
   const handleSelectContact = (contact) => {
-    // Create or get conversation
     navigation.navigate('Chat', {
-      conversationId: contact.conversationId || `new-${contact.id}`,
+      conversationId: `driver-${contact.id}`,
+      title: contact.name,
       name: contact.name,
-      avatar: contact.avatar,
+      student: { id: contact.studentId, name: contact.studentName },
+      tripName: contact.busNumber,
       isNew: true,
       contactId: contact.id,
+      contactType: 'driver',
     });
   };
 
   const filteredContacts = contacts.filter(c =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase())
+    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (c.studentName && c.studentName.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (c.busNumber && c.busNumber.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   return (
@@ -104,7 +139,7 @@ export default function NewMessageScreen({ route, navigation }) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Text style={styles.backIcon}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>New Message</Text>
+        <Text style={styles.headerTitle}>Contact Driver</Text>
         <View style={{ width: 40 }} />
       </LinearGradient>
 
@@ -112,7 +147,7 @@ export default function NewMessageScreen({ route, navigation }) {
         <Text style={[styles.searchIcon, { color: colors.textSecondary }]}>🔍</Text>
         <TextInput
           style={[styles.searchInput, { color: colors.text }]}
-          placeholder="Search contacts..."
+          placeholder="Search by driver name, bus number, or student..."
           placeholderTextColor={colors.textSecondary}
           value={searchQuery}
           onChangeText={setSearchQuery}
@@ -127,6 +162,9 @@ export default function NewMessageScreen({ route, navigation }) {
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+            Loading drivers...
+          </Text>
         </View>
       ) : filteredContacts.length > 0 ? (
         <FlatList
@@ -136,9 +174,16 @@ export default function NewMessageScreen({ route, navigation }) {
             <ContactItem contact={item} onPress={handleSelectContact} colors={colors} />
           )}
           contentContainerStyle={styles.listContent}
+          ListHeaderComponent={
+            <View style={styles.infoHeader}>
+              <Text style={[styles.infoText, { color: colors.textSecondary }]}>
+                Contact your child's bus driver directly
+              </Text>
+            </View>
+          }
         />
       ) : (
-        <EmptyState colors={colors} searchQuery={searchQuery} />
+        <EmptyState colors={colors} searchQuery={searchQuery} loading={loading} />
       )}
     </View>
   );
@@ -155,14 +200,18 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, fontSize: 14 },
   clearIcon: { fontSize: 16, padding: 5 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { marginTop: 10, fontSize: 14 },
   listContent: { paddingBottom: 20 },
+  infoHeader: { paddingHorizontal: 15, paddingVertical: 10 },
+  infoText: { fontSize: 12, textAlign: 'center' },
   contactItem: { flexDirection: 'row', alignItems: 'center', padding: 15, borderBottomWidth: 1 },
   contactAvatar: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   contactAvatarImage: { width: 50, height: 50, borderRadius: 25 },
   contactAvatarText: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
   contactInfo: { flex: 1 },
   contactName: { fontSize: 16, fontWeight: '600', marginBottom: 2 },
-  contactRole: { fontSize: 12 },
+  contactRole: { fontSize: 12, marginBottom: 2 },
+  contactBus: { fontSize: 11 },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 30, marginTop: -50 },
   emptyIcon: { fontSize: 60, marginBottom: 20 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 8 },

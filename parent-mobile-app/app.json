@@ -36,7 +36,7 @@
         "backgroundColor": "#667eea"
       },
       "package": "com.smartschool.parent",
-      "versionCode": 2,
+      "versionCode": 3,
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION",
@@ -74,7 +74,9 @@
         {
           "android": {
             "usesCleartextTraffic": true,
-            "extraMavenRepos": ["../../node_modules/@react-native-firebase/messaging/android/libs"],
+            "extraMavenRepos": [
+              "../../node_modules/@react-native-firebase/messaging/android/libs"
+            ],
             "minSdkVersion": 23,
             "compileSdkVersion": 33,
             "targetSdkVersion": 33

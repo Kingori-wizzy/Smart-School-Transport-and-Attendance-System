@@ -83,6 +83,13 @@ const TransportStudents = () => {
     suspended: 0
   });
   
+  // Parent assignment modal state
+  const [openParentDialog, setOpenParentDialog] = useState(false);
+  const [selectedStudentForParent, setSelectedStudentForParent] = useState(null);
+  const [selectedParentId, setSelectedParentId] = useState('');
+  const [parents, setParents] = useState([]);
+  const [assigningParent, setAssigningParent] = useState(false);
+  
   // Bus assignment modal state
   const [openAssignBusModal, setOpenAssignBusModal] = useState(false);
   const [assignStudent, setAssignStudent] = useState(null);
@@ -95,6 +102,7 @@ const TransportStudents = () => {
   useEffect(() => {
     fetchStudents();
     fetchBuses();
+    fetchParents();
     fetchClasses();
     fetchStats();
   }, [page, rowsPerPage, searchTerm, filterClass, filterBus, filterStatus, filterLinked]);
@@ -142,6 +150,20 @@ const TransportStudents = () => {
       }
     } catch (error) {
       console.error('Error fetching buses:', error);
+    }
+  };
+
+  const fetchParents = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/users?role=parent', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setParents(data.data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching parents:', error);
     }
   };
 
@@ -283,6 +305,51 @@ const TransportStudents = () => {
     setQrStudent(null);
   };
 
+  // Parent assignment handlers
+  const handleOpenParentDialog = (student) => {
+    setSelectedStudentForParent(student);
+    setSelectedParentId(student.parentId?._id || student.parentId || '');
+    fetchParents();
+    setOpenParentDialog(true);
+  };
+
+  const handleAssignParent = async () => {
+    if (!selectedParentId) {
+      toast.error('Please select a parent');
+      return;
+    }
+    
+    setAssigningParent(true);
+    try {
+      const response = await fetch(`http://localhost:5000/api/students/${selectedStudentForParent._id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ parentId: selectedParentId })
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to assign parent');
+      }
+      
+      toast.success(`Parent assigned to ${selectedStudentForParent.firstName} ${selectedStudentForParent.lastName}`);
+      setOpenParentDialog(false);
+      setSelectedStudentForParent(null);
+      setSelectedParentId('');
+      fetchStudents();
+      fetchStats();
+    } catch (error) {
+      console.error('Error assigning parent:', error);
+      toast.error(error.message || 'Failed to assign parent');
+    } finally {
+      setAssigningParent(false);
+    }
+  };
+
   const handleOpenAssignBus = (student) => {
     setAssignStudent(student);
     setSelectedBusId(student.transportDetails?.busId?._id || student.busId || '');
@@ -360,6 +427,7 @@ const TransportStudents = () => {
         'Name': `${s.firstName || ''} ${s.lastName || ''}`.trim(),
         'Class': s.classLevel || '',
         'Parent Linked': s.parentId ? 'Yes' : 'No',
+        'Parent Email': s.parentId?.email || '',
         'Bus': s.transportDetails?.busId?.busNumber || s.busNumber || 'Not Assigned',
         'Status': s.transportDetails?.status || s.transportStatus || '',
         'Pickup': s.transportDetails?.pickupPoint?.name || s.pickupPoint || '',
@@ -623,7 +691,7 @@ const TransportStudents = () => {
                       <Chip
                         size="small"
                         icon={<LinkIcon />}
-                        label="Linked"
+                        label={student.parentId?.firstName ? `${student.parentId.firstName} ${student.parentId.lastName}` : 'Linked'}
                         color="success"
                         variant="outlined"
                       />
@@ -669,6 +737,15 @@ const TransportStudents = () => {
                   </TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Tooltip title="Assign Parent">
+                        <IconButton
+                          size="small"
+                          color="secondary"
+                          onClick={() => handleOpenParentDialog(student)}
+                        >
+                          <PersonAddIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
                       <Tooltip title="Assign Bus">
                         <IconButton
                           size="small"
@@ -743,6 +820,44 @@ const TransportStudents = () => {
         onClose={handleCloseQRModal}
         student={qrStudent}
       />
+
+      {/* Assign Parent Modal */}
+      <Dialog open={openParentDialog} onClose={() => setOpenParentDialog(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Assign Parent to {selectedStudentForParent?.firstName} {selectedStudentForParent?.lastName}
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ mt: 2 }}>
+            <FormControl fullWidth>
+              <InputLabel>Select Parent</InputLabel>
+              <Select
+                value={selectedParentId}
+                onChange={(e) => setSelectedParentId(e.target.value)}
+                label="Select Parent"
+              >
+                <MenuItem value="">None</MenuItem>
+                {parents.map(parent => (
+                  <MenuItem key={parent._id} value={parent._id}>
+                    {parent.firstName} {parent.lastName} - {parent.email}
+                  </MenuItem>
+                ))}
+              </Select>
+              <FormHelperText>Select a parent to link this student to their account</FormHelperText>
+            </FormControl>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpenParentDialog(false)}>Cancel</Button>
+          <Button 
+            onClick={handleAssignParent} 
+            variant="contained" 
+            color="primary"
+            disabled={assigningParent}
+          >
+            {assigningParent ? 'Assigning...' : 'Assign Parent'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Assign Bus Modal */}
       <Dialog

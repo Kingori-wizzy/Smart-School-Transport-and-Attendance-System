@@ -52,7 +52,6 @@ export default function DashboardScreen({ navigation }) {
       console.log(`📊 Fetching attendance for child: ${child.firstName} (${childId})`);
       
       try {
-        // Use the correct API endpoint format
         const response = await api.attendance.getToday(childId);
         console.log(`✅ Attendance response for ${child.firstName}:`, response);
         
@@ -113,8 +112,8 @@ export default function DashboardScreen({ navigation }) {
   const ChildCard = ({ child }) => {
     const childId = child._id || child.id;
     const attendance = childAttendance[childId] || { present: false, status: 'loading' };
-    const hasBus = !!(child.busId || child.transportDetails?.busId);
-    const busNumber = child.busId?.busNumber || child.transportDetails?.busId?.busNumber || 'N/A';
+    const hasBus = !!(child.busId || child.busNumber);
+    const busNumber = child.busNumber || child.busId?.busNumber || 'N/A';
     
     return (
       <View style={[styles.childCard, { backgroundColor: colors.card }]}>

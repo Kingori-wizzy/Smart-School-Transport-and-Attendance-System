@@ -27,6 +27,13 @@ export default function EnhancedTransportManagement() {
   const [selectedStudents, setSelectedStudents] = useState([]);
   const [assignLoading, setAssignLoading] = useState(false);
   
+  // NEW: Trip Student Assignment Modal State
+  const [showTripAssignModal, setShowTripAssignModal] = useState(false);
+  const [selectedTripForAssignment, setSelectedTripForAssignment] = useState(null);
+  const [availableStudentsForTrip, setAvailableStudentsForTrip] = useState([]);
+  const [selectedStudentsForTrip, setSelectedStudentsForTrip] = useState([]);
+  const [tripAssignLoading, setTripAssignLoading] = useState(false);
+  
   const [formData, setFormData] = useState({
     // Bus fields
     busNumber: '',
@@ -252,16 +259,73 @@ export default function EnhancedTransportManagement() {
         _id: trip._id,
         tripName: `${trip.routeName || 'Trip'}${trip.tripType ? ` - ${trip.tripType}` : ''}`,
         route: trip.routeName || 'Unknown Route',
+        routeId: trip.routeId,
         bus: trip.vehicleId || 'Unknown Bus',
+        busNumber: trip.vehicleId,
         driver: typeof trip.driverId === 'object' ? trip.driverId?.name || 'Unknown Driver' : 'Unknown Driver',
+        driverId: typeof trip.driverId === 'object' ? trip.driverId?._id : trip.driverId,
         startTime: trip.scheduledStartTime ? format(new Date(trip.scheduledStartTime), 'HH:mm') : '--:--',
         endTime: trip.scheduledEndTime ? format(new Date(trip.scheduledEndTime), 'HH:mm') : '--:--',
+        tripDate: trip.scheduledStartTime ? format(new Date(trip.scheduledStartTime), 'yyyy-MM-dd') : '',
+        tripType: trip.tripType || 'morning',
         status: trip.status || 'scheduled',
-        students: trip.students?.length || 0
+        students: trip.students || [],
+        studentsCount: trip.students?.length || 0
       }));
     } catch (error) {
       console.error('Error fetching trips:', error);
       return [];
+    }
+  };
+
+  // NEW: Fetch students not assigned to a specific trip
+  const fetchStudentsNotInTrip = async (tripId) => {
+    try {
+      const response = await fetch(`http://localhost:5000/api/students/unassigned-trips/list?tripId=${tripId}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      if (!data.success) return [];
+      return data.data || [];
+    } catch (error) {
+      console.error('Error fetching unassigned students:', error);
+      return [];
+    }
+  };
+
+  // NEW: Assign student to trip
+  const assignStudentToTrip = async (studentId, tripId, tripType) => {
+    try {
+      const response = await fetch(`http://localhost:5000/api/students/${studentId}/assign-trip`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ tripId, tripType })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to assign student');
+      return true;
+    } catch (error) {
+      console.error('Error assigning student to trip:', error);
+      throw error;
+    }
+  };
+
+  // NEW: Remove student from trip
+  const removeStudentFromTrip = async (studentId, tripId) => {
+    try {
+      const response = await fetch(`http://localhost:5000/api/students/${studentId}/remove-trip/${tripId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to remove student');
+      return true;
+    } catch (error) {
+      console.error('Error removing student from trip:', error);
+      throw error;
     }
   };
 
@@ -548,11 +612,11 @@ export default function EnhancedTransportManagement() {
       setFormData({
         ...formData,
         routeId: item.routeId || item.route?._id || '',
-        busId: item.vehicleId ? buses.find(b => b.busNumber === item.vehicleId)?._id : '',
+        busId: item.busNumber ? buses.find(b => b.busNumber === item.busNumber)?._id : '',
         driverId: item.driverId || item.driver?._id || '',
-        startTime: item.scheduledStartTime ? format(new Date(item.scheduledStartTime), 'HH:mm') : '',
-        endTime: item.scheduledEndTime ? format(new Date(item.scheduledEndTime), 'HH:mm') : '',
-        tripDate: item.scheduledStartTime ? format(new Date(item.scheduledStartTime), 'yyyy-MM-dd') : '',
+        startTime: item.startTime || '',
+        endTime: item.endTime || '',
+        tripDate: item.tripDate || '',
         tripType: item.tripType || 'morning',
         status: item.status || 'scheduled'
       });
@@ -649,6 +713,87 @@ export default function EnhancedTransportManagement() {
       console.error('Error ending trip:', error);
       toast.error(error.message || 'Failed to end trip');
     }
+  };
+
+  // NEW: Open Trip Assignment Modal
+  const openTripAssignModal = async (trip) => {
+    setSelectedTripForAssignment(trip);
+    setTripAssignLoading(true);
+    try {
+      const unassignedStudents = await fetchStudentsNotInTrip(trip._id);
+      setAvailableStudentsForTrip(unassignedStudents);
+      setSelectedStudentsForTrip([]);
+      setShowTripAssignModal(true);
+    } catch (error) {
+      console.error('Error fetching unassigned students:', error);
+      toast.error('Failed to fetch students');
+    } finally {
+      setTripAssignLoading(false);
+    }
+  };
+
+  // NEW: Handle Assign Students to Trip
+  const handleAssignStudentsToTrip = async () => {
+    if (!selectedTripForAssignment) return;
+    if (selectedStudentsForTrip.length === 0) {
+      toast.error('Please select at least one student');
+      return;
+    }
+
+    setTripAssignLoading(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+      for (const studentId of selectedStudentsForTrip) {
+        try {
+          await assignStudentToTrip(studentId, selectedTripForAssignment._id, selectedTripForAssignment.tripType);
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to assign student ${studentId}:`, error);
+          failCount++;
+        }
+      }
+
+      if (successCount > 0) {
+        toast.success(`Successfully assigned ${successCount} student(s) to trip`);
+      }
+      if (failCount > 0) {
+        toast.error(`Failed to assign ${failCount} student(s)`);
+      }
+      
+      setShowTripAssignModal(false);
+      setSelectedTripForAssignment(null);
+      setSelectedStudentsForTrip([]);
+      fetchAllData(); // Refresh data
+    } catch (error) {
+      console.error('Error assigning students to trip:', error);
+      toast.error(error.message || 'Failed to assign students');
+    } finally {
+      setTripAssignLoading(false);
+    }
+  };
+
+  // NEW: Handle Remove Student from Trip
+  const handleRemoveStudentFromTrip = async (tripId, studentId, studentName) => {
+    if (!window.confirm(`Remove ${studentName} from this trip?`)) return;
+    
+    try {
+      await removeStudentFromTrip(studentId, tripId);
+      toast.success(`${studentName} removed from trip`);
+      fetchAllData(); // Refresh data
+    } catch (error) {
+      console.error('Error removing student:', error);
+      toast.error(error.message || 'Failed to remove student');
+    }
+  };
+
+  const toggleStudentSelectionForTrip = (studentId) => {
+    setSelectedStudentsForTrip(prev => 
+      prev.includes(studentId) 
+        ? prev.filter(id => id !== studentId)
+        : [...prev, studentId]
+    );
   };
 
   const handleViewOnMap = (route) => {
@@ -959,7 +1104,7 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Fuel</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Students</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-               </tr>
+              </tr>
             </thead>
             <tbody>
               {buses.map(bus => {
@@ -1084,7 +1229,7 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Rating</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-               </tr>
+              </tr>
             </thead>
             <tbody>
               {drivers.map(driver => (
@@ -1186,7 +1331,7 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Stops</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-               </tr>
+              </tr>
             </thead>
             <tbody>
               {routes.map(route => (
@@ -1264,7 +1409,7 @@ export default function EnhancedTransportManagement() {
           </table>
         )}
 
-        {/* Trips Tab */}
+        {/* Trips Tab - ENHANCED with Student Assignment */}
         {activeTab === 'trips' && (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -1276,7 +1421,7 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Students</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-               </tr>
+              </tr>
             </thead>
             <tbody>
               {trips.map(trip => (
@@ -1291,17 +1436,42 @@ export default function EnhancedTransportManagement() {
                   </td>
                   <td style={{ padding: '15px' }}>
                     <div>{trip.startTime} - {trip.endTime}</div>
+                    <div style={{ fontSize: '11px', color: '#666' }}>{trip.tripDate}</div>
                   </td>
                   <td style={{ padding: '15px' }}>
-                    <span style={{
-                      background: trip.students > 0 ? '#4CAF50' : '#999',
-                      color: 'white',
-                      padding: '4px 8px',
-                      borderRadius: '12px',
-                      fontSize: '12px'
-                    }}>
-                      {trip.students}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span style={{
+                        background: trip.studentsCount > 0 ? '#4CAF50' : '#999',
+                        color: 'white',
+                        padding: '4px 8px',
+                        borderRadius: '12px',
+                        fontSize: '12px'
+                      }}>
+                        {trip.studentsCount}
+                      </span>
+                      {trip.studentsCount > 0 && (
+                        <button
+                          onClick={() => {
+                            // Show student list
+                            const studentList = trip.students?.map(s => 
+                              `${s.firstName} ${s.lastName}`
+                            ).join('\n') || 'No student details';
+                            alert(`Students on this trip:\n\n${studentList}`);
+                          }}
+                          style={{
+                            padding: '4px 8px',
+                            background: '#2196F3',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            fontSize: '11px'
+                          }}
+                        >
+                          👥 View
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td style={{ padding: '15px' }}>
                     <span style={{
@@ -1348,6 +1518,21 @@ export default function EnhancedTransportManagement() {
                           ⏹️ End
                         </button>
                       )}
+                      <button
+                        onClick={() => openTripAssignModal(trip)}
+                        style={{
+                          padding: '6px 10px',
+                          background: '#9C27B0',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '12px'
+                        }}
+                        title="Assign students to this trip"
+                      >
+                        👥 Assign
+                      </button>
                       <button
                         onClick={() => handleEdit(trip)}
                         style={{
@@ -1396,7 +1581,7 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Pickup</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Dropoff</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-               </tr>
+              </tr>
             </thead>
             <tbody>
               {assignments.map(student => {
@@ -1702,7 +1887,7 @@ export default function EnhancedTransportManagement() {
         </div>
       )}
 
-      {/* Student Assignment Modal */}
+      {/* Student Assignment Modal (Bus) */}
       {showAssignModal && selectedBusForAssignment && (
         <div style={{
           position: 'fixed',
@@ -1786,7 +1971,7 @@ export default function EnhancedTransportManagement() {
                       <th style={{ padding: '12px', textAlign: 'left' }}>Admission No.</th>
                       <th style={{ padding: '12px', textAlign: 'left' }}>Class</th>
                       <th style={{ padding: '12px', textAlign: 'left' }}>Pickup Point</th>
-                     </tr>
+                    </tr>
                   </thead>
                   <tbody>
                     {availableStudents.map(student => (
@@ -1875,6 +2060,219 @@ export default function EnhancedTransportManagement() {
                   setShowAssignModal(false);
                   setSelectedBusForAssignment(null);
                   setSelectedStudents([]);
+                }}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: '#f44336',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '500'
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NEW: Trip Student Assignment Modal */}
+      {showTripAssignModal && selectedTripForAssignment && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1002,
+          overflowY: 'auto'
+        }}>
+          <div style={{
+            background: 'white',
+            padding: '30px',
+            borderRadius: '10px',
+            width: '700px',
+            maxWidth: '90%',
+            maxHeight: '90vh',
+            overflowY: 'auto'
+          }}>
+            <h3 style={{ margin: '0 0 10px 0' }}>
+              Assign Students to Trip
+            </h3>
+            <p style={{ color: '#666', marginBottom: '5px' }}>
+              <strong>{selectedTripForAssignment.tripName}</strong>
+            </p>
+            <p style={{ color: '#666', marginBottom: '20px' }}>
+              Bus: {selectedTripForAssignment.bus} | Time: {selectedTripForAssignment.startTime} - {selectedTripForAssignment.endTime}
+            </p>
+
+            <div style={{
+              marginBottom: '20px',
+              padding: '12px',
+              background: '#e3f2fd',
+              borderRadius: '6px'
+            }}>
+              <strong>Currently assigned students:</strong> {selectedTripForAssignment.studentsCount}
+              {selectedTripForAssignment.studentsCount > 0 && (
+                <button
+                  onClick={() => {
+                    const studentList = selectedTripForAssignment.students?.map(s => 
+                      `${s.firstName} ${s.lastName}`
+                    ).join('\n') || 'No student details';
+                    alert(`Students currently on this trip:\n\n${studentList}`);
+                  }}
+                  style={{
+                    marginLeft: '10px',
+                    padding: '4px 12px',
+                    background: '#2196F3',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  View List
+                </button>
+              )}
+            </div>
+
+            <input
+              type="text"
+              placeholder="🔍 Search students by name or admission number..."
+              onChange={(e) => {
+                const searchTerm = e.target.value.toLowerCase();
+                const filtered = availableStudentsForTrip.filter(s => 
+                  `${s.firstName} ${s.lastName}`.toLowerCase().includes(searchTerm) ||
+                  s.admissionNumber?.toLowerCase().includes(searchTerm)
+                );
+                setAvailableStudentsForTrip(filtered);
+              }}
+              style={{
+                width: '100%',
+                padding: '10px',
+                border: '1px solid #ddd',
+                borderRadius: '6px',
+                marginBottom: '20px',
+                fontSize: '14px'
+              }}
+            />
+
+            {tripAssignLoading && availableStudentsForTrip.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px' }}>
+                <div className="loading-spinner" style={{ margin: '0 auto' }} />
+                <p style={{ marginTop: '10px', color: '#666' }}>Loading students...</p>
+              </div>
+            ) : (
+              <div style={{
+                maxHeight: '400px',
+                overflowY: 'auto',
+                border: '1px solid #eee',
+                borderRadius: '8px',
+                marginBottom: '20px'
+              }}>
+                {availableStudentsForTrip.length === 0 ? (
+                  <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
+                    No unassigned students found. All students may already be assigned to this trip.
+                  </div>
+                ) : (
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ background: '#f8f9fa', position: 'sticky', top: 0 }}>
+                        <th style={{ padding: '12px', textAlign: 'left', width: '40px' }}>
+                          <input
+                            type="checkbox"
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedStudentsForTrip(availableStudentsForTrip.map(s => s._id));
+                              } else {
+                                setSelectedStudentsForTrip([]);
+                              }
+                            }}
+                            checked={selectedStudentsForTrip.length === availableStudentsForTrip.length && availableStudentsForTrip.length > 0}
+                          />
+                        </th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Student Name</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Admission No.</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Class</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Assigned Bus</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {availableStudentsForTrip.map(student => (
+                        <tr key={student._id} style={{ borderBottom: '1px solid #eee' }}>
+                          <td style={{ padding: '12px' }}>
+                            <input
+                              type="checkbox"
+                              checked={selectedStudentsForTrip.includes(student._id)}
+                              onChange={() => toggleStudentSelectionForTrip(student._id)}
+                            />
+                          </td>
+                          <td style={{ padding: '12px' }}>
+                            <div style={{ fontWeight: '500' }}>
+                              {student.firstName} {student.lastName}
+                            </div>
+                          </td>
+                          <td style={{ padding: '12px', fontSize: '13px', color: '#666' }}>
+                            {student.admissionNumber}
+                          </td>
+                          <td style={{ padding: '12px' }}>
+                            {student.classLevel}
+                          </td>
+                          <td style={{ padding: '12px' }}>
+                            {student.transportDetails?.busId?.busNumber || student.busId?.busNumber || 'Not assigned'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '20px',
+              padding: '10px',
+              background: '#f5f5f5',
+              borderRadius: '6px'
+            }}>
+              <span>Selected: <strong>{selectedStudentsForTrip.length}</strong> students</span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={handleAssignStudentsToTrip}
+                disabled={selectedStudentsForTrip.length === 0 || tripAssignLoading}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: selectedStudentsForTrip.length === 0 ? '#ccc' : '#4CAF50',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: selectedStudentsForTrip.length === 0 ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '500'
+                }}
+              >
+                {tripAssignLoading ? 'Assigning...' : `Assign ${selectedStudentsForTrip.length} Student(s)`}
+              </button>
+              <button
+                onClick={() => {
+                  setShowTripAssignModal(false);
+                  setSelectedTripForAssignment(null);
+                  setSelectedStudentsForTrip([]);
                 }}
                 style={{
                   flex: 1,

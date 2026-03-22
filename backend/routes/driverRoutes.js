@@ -10,18 +10,188 @@ const Bus = require('../models/Bus');
 const Attendance = require('../models/AttendanceRecord');
 const GPSLog = require('../models/GPSLog');
 const IncidentReport = require('../models/IncidentReport');
+const Notification = require('../models/Notification');
+
+// Helper function to calculate distance between two points (Haversine formula)
+function getDistance(point1, point2) {
+  if (!point1 || !point2) return Infinity;
+  
+  const R = 6371;
+  const lat1 = point1.lat * Math.PI / 180;
+  const lat2 = point2.lat * Math.PI / 180;
+  const deltaLat = (point2.lat - point1.lat) * Math.PI / 180;
+  const deltaLng = (point2.lng - point1.lng) * Math.PI / 180;
+  
+  const a = Math.sin(deltaLat/2) * Math.sin(deltaLat/2) +
+            Math.cos(lat1) * Math.cos(lat2) *
+            Math.sin(deltaLng/2) * Math.sin(deltaLng/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  
+  return R * c;
+}
+
+// Helper function to send push notifications via Firebase
+async function sendPushNotification(fcmToken, notification) {
+  try {
+    console.log(`📱 Push notification to ${fcmToken}:`, notification);
+    return true;
+  } catch (error) {
+    console.error('Error sending push:', error);
+    return false;
+  }
+}
+
+// Helper function to notify parent about student event
+async function notifyParent(studentId, tripId, eventType, additionalData = {}) {
+  try {
+    const student = await Student.findById(studentId).populate('parentId', 'fcmToken firstName lastName email');
+    if (!student || !student.parentId) return false;
+    
+    const parent = student.parentId;
+    const trip = await Trip.findById(tripId);
+    
+    let title, message, notificationType;
+    
+    if (eventType === 'board') {
+      title = `🚌 ${student.firstName} has boarded the bus`;
+      message = `${student.firstName} ${student.lastName} has boarded the bus at ${new Date().toLocaleTimeString()}`;
+      notificationType = 'board';
+    } else if (eventType === 'alight') {
+      title = `🏠 ${student.firstName} has alighted`;
+      message = `${student.firstName} ${student.lastName} has alighted from the bus at ${new Date().toLocaleTimeString()}`;
+      notificationType = 'alight';
+    } else if (eventType === 'trip_start') {
+      title = `🚍 Trip Started: ${trip?.routeName || 'School Bus'}`;
+      message = `Your child's bus has started its journey. Estimated arrival time will be shared shortly.`;
+      notificationType = 'trip_started';
+    } else if (eventType === 'trip_end') {
+      title = `✅ Trip Completed: ${trip?.routeName || 'School Bus'}`;
+      message = `Your child's bus trip has been completed. Thank you!`;
+      notificationType = 'trip_completed';
+    } else if (eventType === 'delay') {
+      title = `⏰ Delay Update: ${trip?.routeName || 'School Bus'}`;
+      message = additionalData.message || `The bus is delayed by approximately ${additionalData.minutes} minutes due to ${additionalData.reason || 'unforeseen circumstances'}.`;
+      notificationType = 'trip_delayed';
+    } else {
+      return false;
+    }
+    
+    const notification = new Notification({
+      userId: parent._id,
+      userType: 'parent',
+      parentId: parent._id,
+      studentId: student._id,
+      tripId: tripId,
+      message: message,
+      title: title,
+      type: notificationType,
+      status: 'sent',
+      isRead: false,
+      metadata: {
+        eventType,
+        timestamp: new Date(),
+        ...additionalData
+      }
+    });
+    await notification.save();
+    
+    if (parent.fcmToken) {
+      await sendPushNotification(parent.fcmToken, {
+        title,
+        body: message,
+        data: {
+          type: notificationType,
+          studentId: student._id.toString(),
+          tripId: tripId?.toString(),
+          ...additionalData
+        }
+      });
+    }
+    
+    console.log(`📧 Notification sent to parent of ${student.firstName}: ${title}`);
+    return true;
+  } catch (error) {
+    console.error('Error notifying parent:', error);
+    return false;
+  }
+}
+
+// Helper function to notify all parents on a trip
+async function notifyAllParents(tripId, eventType, additionalData = {}) {
+  try {
+    const trip = await Trip.findById(tripId).populate('students', 'parentId firstName lastName');
+    if (!trip) return false;
+    
+    const parentIds = [...new Set(trip.students.map(s => s.parentId).filter(Boolean))];
+    const parents = await User.find({ _id: { $in: parentIds } });
+    
+    let title, message, notificationType;
+    
+    if (eventType === 'trip_start') {
+      title = `🚍 Trip Started: ${trip.routeName}`;
+      message = `The bus has started its journey. Students will be notified as they board.`;
+      notificationType = 'trip_started';
+    } else if (eventType === 'trip_end') {
+      title = `✅ Trip Completed: ${trip.routeName}`;
+      message = `The bus trip has been completed. All students have arrived safely.`;
+      notificationType = 'trip_completed';
+    } else if (eventType === 'delay') {
+      title = `⏰ Delay Update: ${trip.routeName}`;
+      message = additionalData.message || `The bus is delayed by approximately ${additionalData.minutes} minutes due to ${additionalData.reason || 'unforeseen circumstances'}.`;
+      notificationType = 'trip_delayed';
+    } else if (eventType === 'driver_message') {
+      title = `📢 Message from Driver: ${trip.routeName}`;
+      message = additionalData.message;
+      notificationType = 'driver_broadcast';
+    } else {
+      return false;
+    }
+    
+    const notifications = [];
+    for (const parent of parents) {
+      const notification = new Notification({
+        userId: parent._id,
+        userType: 'parent',
+        parentId: parent._id,
+        tripId: tripId,
+        message: message,
+        title: title,
+        type: notificationType,
+        status: 'sent',
+        isRead: false,
+        metadata: {
+          eventType,
+          timestamp: new Date(),
+          ...additionalData
+        }
+      });
+      await notification.save();
+      notifications.push(notification);
+      
+      if (parent.fcmToken) {
+        await sendPushNotification(parent.fcmToken, {
+          title,
+          body: message,
+          data: { type: notificationType, tripId: tripId?.toString(), ...additionalData }
+        });
+      }
+    }
+    
+    console.log(`📧 Broadcast notification sent to ${notifications.length} parents`);
+    return true;
+  } catch (error) {
+    console.error('Error notifying all parents:', error);
+    return false;
+  }
+}
 
 // ==================== PUBLIC ROUTES ====================
 
-// Driver login (NO authentication required for login)
 router.post('/auth/driver/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     
-    const driver = await User.findOne({ 
-      email, 
-      role: 'driver' 
-    }).select('+password');
+    const driver = await User.findOne({ email, role: 'driver' }).select('+password');
 
     if (!driver) {
       return res.status(401).json({ message: 'Invalid credentials' });
@@ -61,9 +231,8 @@ router.post('/auth/driver/login', async (req, res) => {
   }
 });
 
-// ==================== PROTECTED ROUTES (require auth) ====================
+// ==================== PROTECTED ROUTES ====================
 
-// All subsequent driver routes require authentication
 router.use(authMiddleware);
 router.use((req, res, next) => {
   if (req.user.role !== 'driver') {
@@ -74,48 +243,38 @@ router.use((req, res, next) => {
 
 // ==================== PROFILE & STATS ====================
 
-// Get driver profile - FIXED: Removed problematic populate
 router.get('/profile', async (req, res) => {
   try {
-    const driver = await User.findById(req.user.id)
-      .select('-password');
+    const driver = await User.findById(req.user.id).select('-password');
     
-    // Get assigned bus from active trip using vehicleId
     const activeTrip = await Trip.findOne({
       driverId: req.user.id,
-      status: 'in-progress'
+      status: { $in: ['in-progress', 'running'] }
     });
     
     const responseData = {
       ...driver.toObject(),
       assignedBus: activeTrip ? {
-        busNumber: activeTrip.vehicleId || 'Not Assigned'
+        busNumber: activeTrip.vehicleId || 'Not Assigned',
+        tripId: activeTrip._id,
+        routeName: activeTrip.routeName
       } : null,
       assignedBusId: activeTrip?.vehicleId || null
     };
     
-    res.json({
-      success: true,
-      data: responseData
-    });
+    res.json({ success: true, data: responseData });
   } catch (error) {
     console.error('Error fetching driver profile:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// Get driver stats
 router.get('/stats', async (req, res) => {
   try {
     const driverId = req.user.id;
-    
     const startOfMonth = new Date();
     startOfMonth.setDate(1);
     startOfMonth.setHours(0, 0, 0, 0);
-    
     const endOfMonth = new Date(startOfMonth);
     endOfMonth.setMonth(endOfMonth.getMonth() + 1);
 
@@ -129,8 +288,6 @@ router.get('/stats', async (req, res) => {
     const totalStudents = trips.reduce((sum, trip) => sum + (trip.students?.length || 0), 0);
     const totalDistance = trips.reduce((sum, trip) => sum + (trip.distance || 15), 0);
 
-    console.log(`Driver stats: ${totalTrips} total trips, ${completedTrips} completed`);
-
     res.json({
       success: true,
       data: {
@@ -143,50 +300,41 @@ router.get('/stats', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching driver stats:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
 // ==================== TRIP MANAGEMENT ====================
 
-// Get driver's current trip - FIXED: Removed populate
 router.get('/current-trip', async (req, res) => {
   try {
     const trip = await Trip.findOne({
       driverId: req.user.id,
-      status: 'in-progress',
-    });
+      status: { $in: ['in-progress', 'running'] },
+    }).populate('students', 'firstName lastName admissionNumber qrCode');
 
     if (!trip) {
       return res.json({ success: true, data: null });
     }
 
-    const formattedTrip = {
-      id: trip._id,
-      routeName: trip.routeName || 'Unknown Route',
-      busNumber: trip.vehicleId || 'Not Assigned',
-      status: trip.status,
-      startTime: trip.startTime,
-      studentCount: trip.students?.length || 0
-    };
-    
     res.json({
       success: true,
-      data: formattedTrip
+      data: {
+        id: trip._id,
+        routeName: trip.routeName || 'Unknown Route',
+        busNumber: trip.vehicleId || 'Not Assigned',
+        status: trip.status,
+        startTime: trip.startTime,
+        studentCount: trip.students?.length || 0,
+        students: trip.students || []
+      }
     });
   } catch (error) {
     console.error('Error fetching current trip:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// DRIVER-SPECIFIC ENDPOINT: Get today's trips for driver - FIXED: Removed populates
 router.get('/trips/today', async (req, res) => {
   try {
     const today = new Date();
@@ -194,15 +342,10 @@ router.get('/trips/today', async (req, res) => {
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    console.log('Searching for trips between:', today, 'and', tomorrow);
-
     const trips = await Trip.find({
       driverId: req.user.id,
       scheduledStartTime: { $gte: today, $lt: tomorrow },
-    })
-    .sort({ scheduledStartTime: 1 });
-
-    console.log(`Found ${trips.length} trips for driver ${req.user.id}`);
+    }).populate('students', 'firstName lastName admissionNumber qrCode').sort({ scheduledStartTime: 1 });
 
     const formattedTrips = trips.map(trip => ({
       _id: trip._id,
@@ -215,36 +358,26 @@ router.get('/trips/today', async (req, res) => {
       busNumber: trip.vehicleId || 'Not Assigned',
       status: trip.status || 'scheduled',
       studentCount: trip.students?.length || 0,
+      students: trip.students || [],
       type: trip.tripType || 'morning_pickup'
     }));
 
-    res.json({
-      success: true,
-      trips: formattedTrips,
-      count: formattedTrips.length
-    });
+    res.json({ success: true, trips: formattedTrips, count: formattedTrips.length });
   } catch (error) {
     console.error('Error fetching trips:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// DRIVER-SPECIFIC ENDPOINT: Get trip details by ID - FIXED: Removed populates
 router.get('/trips/:tripId', async (req, res) => {
   try {
     const trip = await Trip.findOne({
       _id: req.params.tripId,
       driverId: req.user.id,
-    });
+    }).populate('students', 'firstName lastName admissionNumber qrCode');
 
     if (!trip) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Trip not found' 
-      });
+      return res.status(404).json({ success: false, message: 'Trip not found' });
     }
     
     res.json({
@@ -264,74 +397,32 @@ router.get('/trips/:tripId', async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching trip details:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// DRIVER-SPECIFIC ENDPOINT: Get students for a trip - CRITICAL FIX for ObjectId error
 router.get('/trips/:tripId/students', async (req, res) => {
   try {
-    const trip = await Trip.findById(req.params.tripId);
+    const trip = await Trip.findById(req.params.tripId).populate('students', 'firstName lastName classLevel admissionNumber transportDetails qrCode busNumber');
       
     if (!trip) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Trip not found' 
-      });
+      return res.status(404).json({ success: false, message: 'Trip not found' });
     }
 
-    // Get the bus number from the trip's vehicleId field
-    const busNumber = trip.vehicleId;
-    
-    if (!busNumber) {
-      return res.json({
-        success: true,
-        count: 0,
-        data: [],
-        message: 'No bus assigned to this trip'
-      });
-    }
-
-    // CRITICAL FIX: Only use busNumber field, NOT busId (which expects ObjectId)
-    // This prevents the "Cast to ObjectId failed" error
-    const students = await Student.find({ 
-      $or: [
-        { busNumber: busNumber },
-        { 'transportDetails.busNumber': busNumber }
-      ],
-      usesTransport: true,
-      isActive: true
-    }).select(
-      'firstName lastName classLevel admissionNumber transportDetails qrCode busNumber'
-    );
-
-    console.log(`Found ${students.length} students for bus number: ${busNumber}`);
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-
-    // Get attendance records for today
     const boardedRecords = await Attendance.find({
       tripId: req.params.tripId,
-      eventType: 'board',
-      createdAt: { $gte: today, $lt: tomorrow }
+      eventType: 'board'
     });
 
     const alightedRecords = await Attendance.find({
       tripId: req.params.tripId,
-      eventType: 'alight',
-      createdAt: { $gte: today, $lt: tomorrow }
+      eventType: 'alight'
     });
 
     const boardedSet = new Set(boardedRecords.map(r => r.studentId.toString()));
     const alightedSet = new Set(alightedRecords.map(r => r.studentId.toString()));
 
-    const studentsWithStatus = students.map(s => ({
+    const studentsWithStatus = (trip.students || []).map(s => ({
       _id: s._id,
       id: s._id,
       firstName: s.firstName,
@@ -340,6 +431,7 @@ router.get('/trips/:tripId/students', async (req, res) => {
       admissionNumber: s.admissionNumber,
       pickupPoint: s.transportDetails?.pickupPoint?.name || s.pickupPoint,
       dropOffPoint: s.transportDetails?.dropoffPoint?.name || s.dropOffPoint,
+      coordinates: s.transportDetails?.pickupPoint?.coordinates,
       qrCode: s.qrCode,
       boarded: boardedSet.has(s._id.toString()),
       alighted: alightedSet.has(s._id.toString()),
@@ -347,351 +439,490 @@ router.get('/trips/:tripId/students', async (req, res) => {
               boardedSet.has(s._id.toString()) ? 'boarded' : 'pending'
     }));
 
-    res.json({
-      success: true,
-      count: studentsWithStatus.length,
-      data: studentsWithStatus
-    });
+    console.log(`Trip ${trip.routeName} (${trip._id}): ${studentsWithStatus.length} students, ${boardedSet.size} boarded, ${alightedSet.size} alighted`);
+
+    res.json({ success: true, count: studentsWithStatus.length, data: studentsWithStatus });
   } catch (error) {
     console.error('Error fetching students:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// Start trip
+// ==================== QR CODE LOOKUP ENDPOINTS ====================
+
+router.get('/student/by-qr/:qrCode', async (req, res) => {
+  try {
+    const { qrCode } = req.params;
+    const decodedQR = decodeURIComponent(qrCode);
+    
+    const student = await Student.findOne({ qrCode: decodedQR, isActive: true })
+      .select('firstName lastName admissionNumber classLevel busNumber qrCode');
+    
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found for this QR code' });
+    }
+    
+    res.json({ success: true, data: student });
+  } catch (error) {
+    console.error('Error finding student by QR:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/student/by-admission/:admissionNumber', async (req, res) => {
+  try {
+    const { admissionNumber } = req.params;
+    const decodedAdmission = decodeURIComponent(admissionNumber).toUpperCase();
+    
+    const student = await Student.findOne({ admissionNumber: decodedAdmission, isActive: true })
+      .select('firstName lastName admissionNumber classLevel busNumber qrCode');
+    
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    
+    res.json({ success: true, data: student });
+  } catch (error) {
+    console.error('Error finding student by admission:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ==================== MESSAGING ENDPOINTS ====================
+
+// Send message to parent about specific student
+router.post('/message/parent/:studentId', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { message, tripId } = req.body;
+    
+    const student = await Student.findById(studentId).populate('parentId', 'firstName lastName phone email fcmToken');
+    if (!student || !student.parentId) {
+      return res.status(404).json({ success: false, message: 'Student or parent not found' });
+    }
+    
+    const parent = student.parentId;
+    
+    const notification = new Notification({
+      userId: parent._id,
+      userType: 'parent',
+      parentId: parent._id,
+      studentId: student._id,
+      tripId: tripId || null,
+      message: message,
+      title: `📨 Message from Driver: ${student.firstName} ${student.lastName}`,
+      type: 'driver_message',
+      status: 'sent',
+      isRead: false,
+      metadata: {
+        driverId: req.user.id,
+        driverName: `${req.user.firstName} ${req.user.lastName}`,
+        timestamp: new Date()
+      }
+    });
+    await notification.save();
+    
+    if (parent.fcmToken) {
+      await sendPushNotification(parent.fcmToken, {
+        title: `Message from Driver (${student.firstName})`,
+        body: message,
+        data: { type: 'driver_message', studentId, tripId }
+      });
+    }
+    
+    res.json({ success: true, message: 'Message sent to parent', data: notification });
+  } catch (error) {
+    console.error('Error sending message to parent:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Send broadcast message to all parents on current trip
+router.post('/message/broadcast/:tripId', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const { message } = req.body;
+    
+    const trip = await Trip.findById(tripId).populate('students', 'parentId firstName lastName');
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+    
+    // Get all unique parent IDs from students on this trip
+    const parentIds = [...new Set(trip.students.map(s => s.parentId).filter(Boolean))];
+    const parents = await User.find({ _id: { $in: parentIds } });
+    
+    let notifications = 0;
+    for (const parent of parents) {
+      const notification = new Notification({
+        userId: parent._id,
+        userType: 'parent',
+        parentId: parent._id,
+        tripId: tripId,
+        message: message,
+        title: `📢 Broadcast: ${trip.routeName}`,
+        type: 'driver_broadcast',
+        status: 'sent',
+        isRead: false,
+        metadata: {
+          driverId: req.user.id,
+          driverName: `${req.user.firstName} ${req.user.lastName}`,
+          timestamp: new Date()
+        }
+      });
+      await notification.save();
+      notifications++;
+      
+      if (parent.fcmToken) {
+        await sendPushNotification(parent.fcmToken, {
+          title: `📢 Message from Driver: ${trip.routeName}`,
+          body: message,
+          data: { type: 'driver_broadcast', tripId }
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Broadcast message sent to ${notifications} parents`
+    });
+  } catch (error) {
+    console.error('Error sending broadcast:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Send delay notification (admin and parents)
+router.post('/trips/:tripId/delay', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const { reason, estimatedDelayMinutes } = req.body;
+    
+    const trip = await Trip.findById(tripId);
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+    
+    const lastGPS = await GPSLog.findOne({ tripId }).sort({ timestamp: -1 });
+    
+    // Notify admins
+    const admins = await User.find({ role: 'admin' });
+    let adminNotifications = 0;
+    
+    for (const admin of admins) {
+      const notification = new Notification({
+        userId: admin._id,
+        userType: 'admin',
+        parentId: admin._id,
+        tripId: tripId,
+        message: `Delay on Trip ${trip.routeName}: ${reason}. Estimated delay: ${estimatedDelayMinutes} minutes.`,
+        title: `⏰ Delay Alert: ${trip.routeName}`,
+        type: 'delay_report',
+        status: 'sent',
+        isRead: false,
+        metadata: {
+          driverId: req.user.id,
+          driverName: `${req.user.firstName} ${req.user.lastName}`,
+          location: lastGPS ? { lat: lastGPS.lat, lng: lastGPS.lon } : null,
+          reason,
+          estimatedDelayMinutes
+        }
+      });
+      await notification.save();
+      adminNotifications++;
+    }
+    
+    // Notify all parents about the delay
+    const parentIds = [...new Set(trip.students.map(s => s.parentId).filter(Boolean))];
+    const parents = await User.find({ _id: { $in: parentIds } });
+    
+    for (const parent of parents) {
+      const notification = new Notification({
+        userId: parent._id,
+        userType: 'parent',
+        parentId: parent._id,
+        tripId: tripId,
+        message: `The bus is delayed by approximately ${estimatedDelayMinutes} minutes due to ${reason}.`,
+        title: `⏰ Bus Delay: ${trip.routeName}`,
+        type: 'delay_report',
+        status: 'sent',
+        isRead: false,
+        metadata: {
+          reason,
+          estimatedDelayMinutes,
+          reportedAt: new Date()
+        }
+      });
+      await notification.save();
+    }
+    
+    // Update trip with delay info
+    trip.delayInfo = {
+      isDelayed: true,
+      reason,
+      estimatedDelayMinutes,
+      reportedAt: new Date(),
+      estimatedArrivalTime: new Date(Date.now() + estimatedDelayMinutes * 60000)
+    };
+    await trip.save();
+    
+    res.json({ 
+      success: true, 
+      message: `Delay reported to ${adminNotifications} admins and ${parents.length} parents`, 
+      data: trip.delayInfo 
+    });
+  } catch (error) {
+    console.error('Error reporting delay:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ==================== ROUTE OPTIMIZATION & NAVIGATION ====================
+
+router.get('/trips/:tripId/optimized-route', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const trip = await Trip.findById(tripId).populate('students', 'firstName lastName admissionNumber transportDetails');
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found' });
+    
+    const attendance = await Attendance.find({ tripId: tripId, eventType: 'board' });
+    const boardedStudentIds = new Set(attendance.map(a => a.studentId.toString()));
+    
+    const pendingStudents = (trip.students || []).filter(s => !boardedStudentIds.has(s._id.toString()));
+    
+    if (pendingStudents.length === 0) {
+      return res.json({ success: true, message: 'All students have boarded', data: { students: [], waypoints: [], totalRemaining: 0 } });
+    }
+    
+    const lastGPS = await GPSLog.findOne({ tripId }).sort({ timestamp: -1 });
+    const currentLocation = lastGPS ? { lat: lastGPS.lat, lng: lastGPS.lon } : null;
+    
+    const waypoints = pendingStudents
+      .filter(s => s.transportDetails?.pickupPoint?.coordinates?.lat)
+      .map(s => ({
+        studentId: s._id,
+        name: `${s.firstName} ${s.lastName}`,
+        location: {
+          lat: s.transportDetails.pickupPoint.coordinates.lat,
+          lng: s.transportDetails.pickupPoint.coordinates.lng
+        }
+      }));
+    
+    if (currentLocation && waypoints.length > 0) {
+      waypoints.sort((a, b) => getDistance(currentLocation, a.location) - getDistance(currentLocation, b.location));
+    }
+    
+    res.json({
+      success: true,
+      data: { students: pendingStudents, waypoints, currentLocation, totalRemaining: pendingStudents.length }
+    });
+  } catch (error) {
+    console.error('Error getting optimized route:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/trips/:tripId/next-student', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const trip = await Trip.findById(tripId).populate('students', 'firstName lastName admissionNumber transportDetails');
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found' });
+    
+    const boardedRecords = await Attendance.find({ tripId: tripId, eventType: 'board' });
+    const boardedIds = new Set(boardedRecords.map(a => a.studentId.toString()));
+    
+    const nextStudent = (trip.students || []).find(s => !boardedIds.has(s._id.toString()));
+    if (!nextStudent) return res.json({ success: true, message: 'All students have boarded', data: null });
+    
+    const lastGPS = await GPSLog.findOne({ tripId }).sort({ timestamp: -1 });
+    
+    res.json({
+      success: true,
+      data: {
+        student: {
+          _id: nextStudent._id,
+          firstName: nextStudent.firstName,
+          lastName: nextStudent.lastName,
+          admissionNumber: nextStudent.admissionNumber,
+          pickupPoint: nextStudent.transportDetails?.pickupPoint?.name,
+          coordinates: nextStudent.transportDetails?.pickupPoint?.coordinates
+        },
+        currentLocation: lastGPS ? { lat: lastGPS.lat, lng: lastGPS.lon } : null
+      }
+    });
+  } catch (error) {
+    console.error('Error getting next student:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.put('/students/:studentId/pickup-location', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { lat, lng, address } = req.body;
+    
+    const student = await Student.findById(studentId);
+    if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
+    
+    if (!student.transportDetails) student.transportDetails = {};
+    if (!student.transportDetails.pickupPoint) student.transportDetails.pickupPoint = {};
+    
+    student.transportDetails.pickupPoint.coordinates = { lat, lng };
+    if (address) student.transportDetails.pickupPoint.name = address;
+    await student.save();
+    
+    res.json({ success: true, message: 'Pickup location updated', data: { pickupPoint: student.transportDetails.pickupPoint } });
+  } catch (error) {
+    console.error('Error updating pickup location:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ==================== TRIP ACTIONS ====================
+
 router.post('/trips/:tripId/start', async (req, res) => {
   try {
     const trip = await Trip.findOneAndUpdate(
-      {
-        _id: req.params.tripId,
-        driverId: req.user.id,
-        status: 'scheduled',
-      },
-      {
-        status: 'in-progress',
-        startTime: new Date(),
-      },
+      { _id: req.params.tripId, driverId: req.user.id, status: 'scheduled' },
+      { status: 'in-progress', startTime: new Date() },
       { new: true }
     );
-
-    if (!trip) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Trip not found or already started' 
-      });
-    }
-
-    // Update bus status if vehicleId exists
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found or already started' });
+    
     if (trip.vehicleId) {
       const bus = await Bus.findOne({ busNumber: trip.vehicleId });
-      if (bus) {
-        await Bus.findByIdAndUpdate(bus._id, { status: 'on-trip' });
-      }
+      if (bus) await Bus.findByIdAndUpdate(bus._id, { status: 'on-trip' });
     }
-
-    res.json({
-      success: true,
-      message: 'Trip started successfully',
-      data: trip
-    });
+    
+    // Notify all parents that trip has started
+    await notifyAllParents(trip._id, 'trip_start');
+    
+    res.json({ success: true, message: 'Trip started successfully', data: trip });
   } catch (error) {
     console.error('Error starting trip:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// End trip
 router.post('/trips/:tripId/end', async (req, res) => {
   try {
     const trip = await Trip.findOneAndUpdate(
-      {
-        _id: req.params.tripId,
-        driverId: req.user.id,
-        status: 'in-progress',
-      },
-      {
-        status: 'completed',
-        endTime: new Date(),
-      },
+      { _id: req.params.tripId, driverId: req.user.id, status: 'in-progress' },
+      { status: 'completed', endTime: new Date() },
       { new: true }
     );
-
-    if (!trip) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Trip not found or not in progress' 
-      });
-    }
-
-    // Update bus status back to active
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found or not in progress' });
+    
     if (trip.vehicleId) {
       const bus = await Bus.findOne({ busNumber: trip.vehicleId });
-      if (bus) {
-        await Bus.findByIdAndUpdate(bus._id, { status: 'active' });
-      }
+      if (bus) await Bus.findByIdAndUpdate(bus._id, { status: 'active' });
     }
-
-    res.json({
-      success: true,
-      message: 'Trip ended successfully',
-      data: trip
-    });
+    
+    // Notify all parents that trip has ended
+    await notifyAllParents(trip._id, 'trip_end');
+    
+    res.json({ success: true, message: 'Trip ended successfully', data: trip });
   } catch (error) {
     console.error('Error ending trip:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
 // ==================== ATTENDANCE MANAGEMENT ====================
 
-// Board student - FIXED: Use vehicleId
-router.post('/trips/:tripId/board/:studentId', async (req, res) => {
+router.post('/trips/:tripId/board/:studentIdentifier', async (req, res) => {
   try {
-    const { tripId, studentId } = req.params;
-    const { method = 'qr', location, timestamp } = req.body;
-
+    const { tripId, studentIdentifier } = req.params;
+    const { method = 'qr', location } = req.body;
+    
+    let studentId = studentIdentifier;
+    if (studentIdentifier.startsWith('STU-')) {
+      const student = await Student.findOne({ qrCode: studentIdentifier });
+      if (!student) return res.status(404).json({ success: false, message: 'Student not found for this QR code' });
+      studentId = student._id;
+    }
+    
     const trip = await Trip.findOne({ _id: tripId, driverId: req.user.id });
-    if (!trip) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Trip not found' 
-      });
-    }
-
-    // Check if already boarded
-    const existing = await Attendance.findOne({
-      studentId,
-      tripId,
-      eventType: 'board'
-    });
-
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: 'Student already boarded'
-      });
-    }
-
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found' });
+    
+    const isStudentAssigned = trip.students && trip.students.some(s => s.toString() === studentId.toString());
+    if (!isStudentAssigned) return res.status(400).json({ success: false, message: 'Student not assigned to this trip' });
+    
+    const existing = await Attendance.findOne({ studentId: studentId, tripId, eventType: 'board' });
+    if (existing) return res.status(409).json({ success: false, message: 'Student already boarded for this trip' });
+    
     const attendance = new Attendance({
-      studentId,
+      studentId: studentId,
       tripId,
-      busId: trip.vehicleId,
-      busNumber: trip.vehicleId,
-      driverName: req.user.name || req.user.firstName,
-      createdAt: timestamp || new Date(),
       eventType: 'board',
-      method,
-      location: location ? {
-        type: 'Point',
-        coordinates: [location.lng, location.lat]
-      } : null
+      scannerId: req.user.id,
+      gpsSnapshot: location ? { lat: location.lat, lon: location.lng } : null
     });
     await attendance.save();
-
-    // Update trip students array
-    await Trip.findByIdAndUpdate(tripId, {
-      $addToSet: { students: { student: studentId, status: 'boarded' } }
-    });
-
-    res.json({ 
-      success: true, 
-      message: 'Student boarded successfully',
-      data: attendance
-    });
+    
+    // Notify parent that student boarded
+    await notifyParent(studentId, tripId, 'board');
+    
+    res.json({ success: true, message: 'Student boarded successfully', data: attendance });
   } catch (error) {
     console.error('Error boarding student:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// Alight student - FIXED: Use vehicleId
-router.post('/trips/:tripId/alight/:studentId', async (req, res) => {
+router.post('/trips/:tripId/alight/:studentIdentifier', async (req, res) => {
   try {
-    const { tripId, studentId } = req.params;
-    const { method = 'qr', location, timestamp } = req.body;
-
+    const { tripId, studentIdentifier } = req.params;
+    const { method = 'qr', location } = req.body;
+    
+    let studentId = studentIdentifier;
+    if (studentIdentifier.startsWith('STU-')) {
+      const student = await Student.findOne({ qrCode: studentIdentifier });
+      if (!student) return res.status(404).json({ success: false, message: 'Student not found for this QR code' });
+      studentId = student._id;
+    }
+    
     const trip = await Trip.findOne({ _id: tripId, driverId: req.user.id });
-    if (!trip) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Trip not found' 
-      });
-    }
-
-    // Find boarding record
-    const boardingRecord = await Attendance.findOne({
-      studentId,
-      tripId,
-      eventType: 'board'
-    });
-
-    if (!boardingRecord) {
-      return res.status(404).json({
-        success: false,
-        message: 'No boarding record found'
-      });
-    }
-
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found' });
+    
+    const isStudentAssigned = trip.students && trip.students.some(s => s.toString() === studentId.toString());
+    if (!isStudentAssigned) return res.status(400).json({ success: false, message: 'Student not assigned to this trip' });
+    
+    const boardingRecord = await Attendance.findOne({ studentId: studentId, tripId, eventType: 'board' });
+    if (!boardingRecord) return res.status(404).json({ success: false, message: 'No boarding record found. Student must board first.' });
+    
+    const existingAlight = await Attendance.findOne({ studentId: studentId, tripId, eventType: 'alight' });
+    if (existingAlight) return res.status(409).json({ success: false, message: 'Student already alighted for this trip' });
+    
     const attendance = new Attendance({
-      studentId,
+      studentId: studentId,
       tripId,
-      busId: trip.vehicleId,
-      busNumber: trip.vehicleId,
-      driverName: req.user.name || req.user.firstName,
-      createdAt: timestamp || new Date(),
       eventType: 'alight',
-      method,
-      location: location ? {
-        type: 'Point',
-        coordinates: [location.lng, location.lat]
-      } : null,
-      metadata: {
-        relatedBoardId: boardingRecord._id
-      }
+      scannerId: req.user.id,
+      gpsSnapshot: location ? { lat: location.lat, lon: location.lng } : null
     });
     await attendance.save();
-
-    // Update trip students array
-    await Trip.updateOne(
-      { _id: tripId, 'students.student': studentId },
-      { $set: { 'students.$.status': 'alighted' } }
-    );
-
-    res.json({ 
-      success: true, 
-      message: 'Student alighted successfully',
-      data: attendance
-    });
+    
+    // Notify parent that student alighted
+    await notifyParent(studentId, tripId, 'alight');
+    
+    res.json({ success: true, message: 'Student alighted successfully', data: attendance });
   } catch (error) {
     console.error('Error alighting student:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
-  }
-});
-
-// Sync offline scans
-router.post('/attendance/sync-offline', async (req, res) => {
-  try {
-    const { scans, deviceId } = req.body;
-
-    if (!Array.isArray(scans) || scans.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid scans array'
-      });
-    }
-
-    const results = [];
-    const syncBatch = Date.now().toString();
-
-    for (const scan of scans) {
-      try {
-        const { studentId, tripId, method, timestamp, location, type } = scan;
-
-        // Check for duplicate
-        const existing = await Attendance.findOne({
-          studentId,
-          tripId,
-          eventType: type,
-          createdAt: timestamp
-        });
-
-        if (existing) {
-          results.push({
-            success: true,
-            studentId,
-            status: 'duplicate'
-          });
-          continue;
-        }
-
-        const attendance = new Attendance({
-          studentId,
-          tripId,
-          createdAt: timestamp || new Date(),
-          eventType: type,
-          method: method || 'qr',
-          location: location ? {
-            type: 'Point',
-            coordinates: [location.lng, location.lat]
-          } : null,
-          metadata: {
-            deviceId,
-            syncedFromOffline: true,
-            syncBatch
-          }
-        });
-
-        await attendance.save();
-
-        results.push({
-          success: true,
-          studentId,
-          status: 'synced'
-        });
-
-      } catch (error) {
-        results.push({
-          success: false,
-          studentId: scan.studentId,
-          error: error.message
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      batch: syncBatch,
-      summary: {
-        total: scans.length,
-        synced: results.filter(r => r.success).length,
-        failed: results.filter(r => !r.success).length
-      },
-      results
-    });
-
-  } catch (error) {
-    console.error('Offline sync error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
 // ==================== GPS & LOCATION ====================
 
-// Update GPS location - FIXED: Use vehicleId
 router.post('/gps/update', async (req, res) => {
   try {
     const { tripId, lat, lon, speed, heading, fuelLevel } = req.body;
-
     const trip = await Trip.findOne({ _id: tripId, driverId: req.user.id });
-    if (!trip) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Trip not found' 
-      });
-    }
-
-    const vehicleId = trip.vehicleId || 'unknown-vehicle';
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found' });
     
     const gpsLog = new GPSLog({
-      vehicleId,
+      vehicleId: trip.vehicleId || 'unknown-vehicle',
       tripId,
       lat,
       lon,
@@ -701,8 +932,7 @@ router.post('/gps/update', async (req, res) => {
       timestamp: new Date(),
     });
     await gpsLog.save();
-
-    // Update bus location if bus exists
+    
     if (trip.vehicleId) {
       const bus = await Bus.findOne({ busNumber: trip.vehicleId });
       if (bus) {
@@ -717,109 +947,81 @@ router.post('/gps/update', async (req, res) => {
         });
       }
     }
-
-    await Trip.findByIdAndUpdate(tripId, {
-      lastLocation: { lat, lon, timestamp: new Date() }
-    });
-
-    res.json({ 
-      success: true,
-      message: 'GPS updated successfully' 
-    });
+    
+    await Trip.findByIdAndUpdate(tripId, { lastLocation: { lat, lon, timestamp: new Date() } });
+    res.json({ success: true, message: 'GPS updated successfully' });
   } catch (error) {
     console.error('Error updating GPS:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
-  }
-});
-
-// ==================== ROUTES & NAVIGATION ====================
-
-// Get route coordinates
-router.get('/route/:routeId/coordinates', async (req, res) => {
-  try {
-    const mockCoordinates = [
-      { latitude: -1.2864, longitude: 36.8172 },
-      { latitude: -1.2964, longitude: 36.8272 },
-      { latitude: -1.3064, longitude: 36.8372 },
-      { latitude: -1.3164, longitude: 36.8472 },
-      { latitude: -1.3264, longitude: 36.8572 },
-    ];
-    res.json({
-      success: true,
-      data: mockCoordinates
-    });
-  } catch (error) {
-    console.error('Error fetching route coordinates:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
 // ==================== INCIDENTS & EMERGENCY ====================
 
-// Report incident
 router.post('/incident/report', async (req, res) => {
   try {
     const { tripId, type, description, photos, location } = req.body;
-    
     const trip = await Trip.findOne({ _id: tripId, driverId: req.user.id });
-    if (!trip) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Trip not found' 
-      });
-    }
-
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found' });
+    
+    const lastGPS = await GPSLog.findOne({ tripId }).sort({ timestamp: -1 });
+    
     const report = new IncidentReport({
       tripId,
       type,
       description,
       reportedBy: req.user.id,
-      location,
+      location: location || (lastGPS ? { lat: lastGPS.lat, lng: lastGPS.lon } : null),
       media: photos?.map(url => ({ url, type: 'image' })) || [],
       severity: type === 'emergency' ? 'critical' : 'medium',
       status: 'reported'
     });
     await report.save();
-
-    res.json({ 
-      success: true, 
-      message: 'Report submitted successfully',
-      data: report
-    });
+    
+    if (type === 'emergency') {
+      const parentIds = [...new Set(trip.students.map(s => s.parentId).filter(Boolean))];
+      const parents = await User.find({ _id: { $in: parentIds } });
+      for (const parent of parents) {
+        const notification = new Notification({
+          userId: parent._id,
+          userType: 'parent',
+          parentId: parent._id,
+          tripId: tripId,
+          message: description || 'Emergency situation reported. Please check app for updates.',
+          title: `🚨 EMERGENCY - ${trip.routeName}`,
+          type: 'alert',
+          status: 'sent',
+          isRead: false,
+          metadata: {
+            incidentId: report._id,
+            timestamp: new Date()
+          }
+        });
+        await notification.save();
+        
+        if (parent.fcmToken) {
+          await sendPushNotification(parent.fcmToken, {
+            title: `🚨 EMERGENCY - ${trip.routeName}`,
+            body: description || 'Emergency situation reported. Please check app for updates.',
+            data: { type: 'emergency', tripId, incidentId: report._id }
+          });
+        }
+      }
+    }
+    
+    res.json({ success: true, message: 'Incident reported successfully', data: report });
   } catch (error) {
-    console.error('Error submitting report:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    console.error('Error reporting incident:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// Emergency SOS
 router.post('/emergency', async (req, res) => {
   try {
     const { tripId, location } = req.body;
-
     const trip = await Trip.findOne({ _id: tripId, driverId: req.user.id });
-    if (!trip) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Trip not found' 
-      });
-    }
-
-    const admins = await User.find({ role: 'admin' });
+    if (!trip) return res.status(404).json({ success: false, message: 'Trip not found' });
     
-    console.log(`EMERGENCY from driver ${req.user.id} on trip ${tripId}`);
-    console.log('Location:', location);
-    console.log(`Notifying ${admins.length} admins`);
-
     const report = new IncidentReport({
       tripId,
       type: 'emergency',
@@ -830,62 +1032,131 @@ router.post('/emergency', async (req, res) => {
       status: 'reported'
     });
     await report.save();
-
-    res.json({ 
-      success: true, 
-      message: 'Emergency alert sent' 
-    });
+    
+    // Notify all parents of emergency
+    const parentIds = [...new Set(trip.students.map(s => s.parentId).filter(Boolean))];
+    const parents = await User.find({ _id: { $in: parentIds } });
+    for (const parent of parents) {
+      const notification = new Notification({
+        userId: parent._id,
+        userType: 'parent',
+        parentId: parent._id,
+        tripId: tripId,
+        message: 'Emergency situation reported. Please check app for updates.',
+        title: `🚨 EMERGENCY - ${trip.routeName}`,
+        type: 'alert',
+        status: 'sent',
+        isRead: false,
+        metadata: {
+          incidentId: report._id,
+          timestamp: new Date()
+        }
+      });
+      await notification.save();
+      
+      if (parent.fcmToken) {
+        await sendPushNotification(parent.fcmToken, {
+          title: `🚨 EMERGENCY - ${trip.routeName}`,
+          body: 'Emergency situation reported. Please check app for updates.',
+          data: { type: 'emergency', tripId, incidentId: report._id }
+        });
+      }
+    }
+    
+    res.json({ success: true, message: 'Emergency alert sent' });
   } catch (error) {
     console.error('Error sending emergency:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
 // ==================== DRIVER HISTORY ====================
 
-// Get driver trip history - FIXED: Removed bus populate
 router.get('/history', async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const trips = await Trip.find({
-      driverId: req.user.id,
-      status: 'completed'
-    })
-    .sort({ endTime: -1 })
-    .skip(skip)
-    .limit(parseInt(limit));
-
-    const total = await Trip.countDocuments({
-      driverId: req.user.id,
-      status: 'completed'
-    });
-
-    const formattedTrips = trips.map(trip => ({
-      ...trip.toObject(),
-      busNumber: trip.vehicleId || 'Not Assigned'
-    }));
-
+    
+    const trips = await Trip.find({ driverId: req.user.id, status: 'completed' })
+      .sort({ endTime: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+    
+    const total = await Trip.countDocuments({ driverId: req.user.id, status: 'completed' });
+    
     res.json({
       success: true,
-      data: formattedTrips,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / parseInt(limit))
-      }
+      data: trips.map(trip => ({ ...trip.toObject(), busNumber: trip.vehicleId || 'Not Assigned' })),
+      pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
     });
   } catch (error) {
     console.error('Error fetching driver history:', error);
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ==================== ROUTE COORDINATES ====================
+
+router.get('/route/:routeId/coordinates', async (req, res) => {
+  try {
+    const mockCoordinates = [
+      { latitude: -1.2864, longitude: 36.8172 },
+      { latitude: -1.2964, longitude: 36.8272 },
+      { latitude: -1.3064, longitude: 36.8372 },
+      { latitude: -1.3164, longitude: 36.8472 },
+      { latitude: -1.3264, longitude: 36.8572 },
+    ];
+    res.json({ success: true, data: mockCoordinates });
+  } catch (error) {
+    console.error('Error fetching route coordinates:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ==================== ATTENDANCE SYNC ====================
+
+router.post('/attendance/sync-offline', async (req, res) => {
+  try {
+    const { scans, deviceId } = req.body;
+    if (!Array.isArray(scans) || scans.length === 0) {
+      return res.status(400).json({ success: false, message: 'Invalid scans array' });
+    }
+    
+    const results = [];
+    const syncBatch = Date.now().toString();
+    
+    for (const scan of scans) {
+      try {
+        const { studentId, tripId, method, timestamp, location, type } = scan;
+        const existing = await Attendance.findOne({ studentId, tripId, eventType: type, createdAt: timestamp });
+        
+        if (existing) {
+          results.push({ success: true, studentId, status: 'duplicate' });
+          continue;
+        }
+        
+        const attendance = new Attendance({
+          studentId, tripId, createdAt: timestamp || new Date(), eventType: type,
+          method: method || 'qr',
+          location: location ? { type: 'Point', coordinates: [location.lng, location.lat] } : null,
+          metadata: { deviceId, syncedFromOffline: true, syncBatch }
+        });
+        await attendance.save();
+        results.push({ success: true, studentId, status: 'synced' });
+      } catch (error) {
+        results.push({ success: false, studentId: scan.studentId, error: error.message });
+      }
+    }
+    
+    res.json({
+      success: true,
+      batch: syncBatch,
+      summary: { total: scans.length, synced: results.filter(r => r.success).length, failed: results.filter(r => !r.success).length },
+      results
     });
+  } catch (error) {
+    console.error('Offline sync error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
