@@ -8,12 +8,10 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer
 } from 'recharts';
-import { reportService } from '../../services/report';
-import exportService from '../../services/exportService';
 
 const COLORS = ['#4CAF50', '#2196F3', '#FF9800', '#f44336', '#9C27B0', '#673AB7'];
 
-export default function ReportGenerator() {
+export default function ReportGenerator({ onReportGenerated }) {
   const [reportType, setReportType] = useState('attendance');
   const [dateRange, setDateRange] = useState('week');
   const [startDate, setStartDate] = useState(format(subDays(new Date(), 7), 'yyyy-MM-dd'));
@@ -50,8 +48,14 @@ export default function ReportGenerator() {
 
   const fetchSavedReports = async () => {
     try {
-      const response = await reportService.getSavedReports();
-      setSavedReports(response.data || []);
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:5000/api/reports', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setSavedReports(data.data || []);
+      }
     } catch (error) {
       console.error('Error fetching saved reports:', error);
     }
@@ -100,40 +104,158 @@ export default function ReportGenerator() {
     setGenerating(true);
     
     try {
-      let data;
-      
+      let url = '';
       switch(reportType) {
         case 'attendance':
-          data = await reportService.generateAttendanceReport({ startDate, endDate });
+          url = `http://localhost:5000/api/reports/attendance?startDate=${startDate}&endDate=${endDate}`;
           break;
         case 'transport':
-          data = await reportService.generateTransportReport({ startDate, endDate });
+          url = `http://localhost:5000/api/reports/transport?startDate=${startDate}&endDate=${endDate}`;
           break;
         case 'drivers':
-          data = await reportService.generateDriverReport({ startDate, endDate });
+          url = `http://localhost:5000/api/reports/drivers?startDate=${startDate}&endDate=${endDate}`;
           break;
         case 'routes':
-          data = await reportService.generateRouteReport({ startDate, endDate });
+          url = `http://localhost:5000/api/reports/routes?startDate=${startDate}&endDate=${endDate}`;
           break;
         case 'alerts':
-          data = await reportService.generateIncidentReport({ startDate, endDate });
+          url = `http://localhost:5000/api/reports/alerts?startDate=${startDate}&endDate=${endDate}`;
           break;
         case 'combined':
-          data = await reportService.generateCombinedReport({ startDate, endDate });
+          url = `http://localhost:5000/api/reports/combined?startDate=${startDate}&endDate=${endDate}`;
           break;
         default:
-          data = await reportService.generateAttendanceReport({ startDate, endDate });
+          url = `http://localhost:5000/api/reports/attendance?startDate=${startDate}&endDate=${endDate}`;
       }
       
-      setPreviewData(data);
-      setReportData(data);
-      toast.success('Report preview generated');
+      const token = localStorage.getItem('token');
+      const response = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        setPreviewData(data.data);
+        setReportData(data.data);
+        toast.success('Report preview generated');
+        if (onReportGenerated) onReportGenerated();
+      } else {
+        throw new Error(data.message || 'Failed to generate report');
+      }
     } catch (error) {
       console.error('Error generating report:', error);
-      toast.error('Failed to generate report');
+      toast.error(error.message || 'Failed to generate report');
     } finally {
       setGenerating(false);
     }
+  };
+
+  // Helper function to convert data to CSV
+  const convertToCSV = (data) => {
+    if (!data) return '';
+    
+    // If data has rawData, use that
+    const sourceData = data.rawData || data;
+    
+    if (Array.isArray(sourceData) && sourceData.length > 0) {
+      const headers = Object.keys(sourceData[0]);
+      const rows = sourceData.map(row => 
+        headers.map(header => {
+          let value = row[header];
+          // Handle nested objects
+          if (typeof value === 'object') {
+            value = JSON.stringify(value);
+          }
+          // Escape quotes and commas
+          if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+            value = `"${value.replace(/"/g, '""')}"`;
+          }
+          return value;
+        }).join(',')
+      );
+      return [headers.join(','), ...rows].join('\n');
+    }
+    
+    // Fallback for non-array data
+    return JSON.stringify(sourceData, null, 2);
+  };
+
+  // Helper function to generate PDF-friendly HTML
+  const generatePDFHTML = (data) => {
+    const reportTitle = reportTypes.find(r => r.id === reportType)?.name || 'Report';
+    
+    let summaryHtml = '';
+    if (data.summary) {
+      summaryHtml = `
+        <div class="summary">
+          ${Object.entries(data.summary).map(([key, value]) => `
+            <div class="card">
+              <div class="card-value">${value}${key.includes('rate') ? '%' : key.includes('Distance') ? ' km' : key.includes('Fuel') ? ' L' : ''}</div>
+              <div>${key.replace(/([A-Z])/g, ' $1').trim()}</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+    
+    let tableHtml = '';
+    if (data.dailyTrend && data.dailyTrend.length > 0) {
+      tableHtml = `
+        <h3>Data Preview</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Present</th>
+              <th>Absent</th>
+              <th>Late</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.dailyTrend.slice(0, 20).map(day => `
+              <tr>
+                <td>${day.date}</td>
+                <td>${day.present || 0}</td>
+                <td>${day.absent || 0}</td>
+                <td>${day.late || 0}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>${reportTitle}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 40px; margin: 0; }
+          h1 { color: #333; border-bottom: 2px solid #2196F3; padding-bottom: 10px; }
+          .period { color: #666; margin: 20px 0; }
+          .summary { display: flex; gap: 20px; margin: 30px 0; flex-wrap: wrap; }
+          .card { background: #f5f5f5; padding: 20px; border-radius: 8px; flex: 1; min-width: 150px; text-align: center; }
+          .card-value { font-size: 28px; font-weight: bold; color: #2196F3; }
+          table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+          th { background: #2196F3; color: white; padding: 12px; text-align: left; }
+          td { padding: 10px; border-bottom: 1px solid #ddd; }
+          .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #999; text-align: center; }
+        </style>
+      </head>
+      <body>
+        <h1>${reportTitle}</h1>
+        <div class="period">Period: ${startDate} to ${endDate}</div>
+        ${summaryHtml}
+        ${tableHtml}
+        <div class="footer">
+          Generated on ${format(new Date(), 'MMMM dd, yyyy HH:mm:ss')}<br>
+          Smart School Transport System
+        </div>
+      </body>
+      </html>
+    `;
   };
 
   const generateReport = async () => {
@@ -144,30 +266,53 @@ export default function ReportGenerator() {
 
     setLoading(true);
     try {
-      let filename = `${reportType}_report_${startDate}_to_${endDate}`;
+      const filename = `${reportType}_report_${startDate}_to_${endDate}`;
+      let blob;
+      let fileExtension;
+      let mimeType;
       
       switch(exportFormat) {
         case 'csv':
-          await exportService.exportToCSV(reportData.rawData || reportData, filename);
+          const csvContent = convertToCSV(reportData);
+          blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+          fileExtension = 'csv';
+          mimeType = 'text/csv';
           break;
+          
         case 'excel':
-          await exportService.exportToExcel(reportData.rawData || reportData, filename, reportType);
+          // For Excel, create CSV with .xls extension (Excel can open CSV files)
+          const excelContent = convertToCSV(reportData);
+          blob = new Blob([excelContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+          fileExtension = 'xls';
+          mimeType = 'application/vnd.ms-excel';
           break;
+          
         case 'pdf':
-          await exportService.exportToPDF(reportData.rawData || reportData, filename, {
-            title: reportTypes.find(r => r.id === reportType)?.name || 'Report',
-            headers: reportData.headers,
-            columns: reportData.columns
-          });
-          break;
         default:
-          toast.error('Unsupported format');
+          const pdfHtml = generatePDFHTML(reportData);
+          blob = new Blob([pdfHtml], { type: 'text/html;charset=utf-8;' });
+          fileExtension = 'html';
+          mimeType = 'text/html';
+          // Note: For true PDF generation, you would need a library like jsPDF
+          // For now, we save as HTML which can be printed to PDF
+          toast.info('Note: Saving as HTML. Use browser print (Ctrl+P) to save as PDF');
+          break;
       }
+      
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${filename}.${fileExtension}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
       
       toast.success(`Report exported as ${exportFormat.toUpperCase()}`);
     } catch (error) {
       console.error('Error exporting report:', error);
-      toast.error('Failed to export report');
+      toast.error('Failed to export report: ' + error.message);
     } finally {
       setLoading(false);
     }
@@ -185,15 +330,28 @@ export default function ReportGenerator() {
         type: reportType,
         dateRange: { start: startDate, end: endDate },
         format: exportFormat,
-        data: reportData
+        data: reportData,
+        createdAt: new Date().toISOString()
       };
       
-      await reportService.saveReport(report);
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:5000/api/reports', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(report)
+      });
+      const result = await response.json();
+      
+      if (!response.ok) throw new Error(result.message || 'Failed to save report');
+      
       await fetchSavedReports();
       toast.success('Report saved successfully');
     } catch (error) {
       console.error('Error saving report:', error);
-      toast.error('Failed to save report');
+      toast.error(error.message || 'Failed to save report');
     }
   };
 
@@ -367,7 +525,7 @@ export default function ReportGenerator() {
               fontWeight: '500'
             }}
           >
-            {generating ? '⏳ Generating...' : '👁️ Preview Report'}
+            {generating ? 'Generating...' : 'Preview Report'}
           </button>
           
           <button
@@ -388,7 +546,7 @@ export default function ReportGenerator() {
               opacity: !previewData || loading ? 0.7 : 1
             }}
           >
-            {loading ? '⏳ Exporting...' : `📥 Generate ${exportFormat.toUpperCase()}`}
+            {loading ? 'Exporting...' : `Export ${exportFormat.toUpperCase()}`}
           </button>
           
           <button
@@ -409,7 +567,7 @@ export default function ReportGenerator() {
               opacity: !previewData ? 0.7 : 1
             }}
           >
-            💾 Save Report
+            Save Report
           </button>
         </div>
       </div>
@@ -433,8 +591,8 @@ export default function ReportGenerator() {
             borderBottom: '2px solid #f0f0f0'
           }}>
             <div>
-              <h2 style={{ margin: '0 0 5px 0', color: '#333' }}>{previewData.title}</h2>
-              <p style={{ color: '#666', margin: 0 }}>Period: {previewData.period}</p>
+              <h2 style={{ margin: '0 0 5px 0', color: '#333' }}>{previewData.title || `${reportTypes.find(r => r.id === reportType)?.name}`}</h2>
+              <p style={{ color: '#666', margin: 0 }}>Period: {startDate} to {endDate}</p>
             </div>
             <div style={{
               background: '#e3f2fd',
@@ -614,6 +772,7 @@ export default function ReportGenerator() {
                   <button
                     onClick={() => {
                       setPreviewData(report.data);
+                      setReportData(report.data);
                       toast.success('Loading report...');
                     }}
                     style={{
@@ -629,7 +788,11 @@ export default function ReportGenerator() {
                     View
                   </button>
                   <button
-                    onClick={() => exportService.exportToPDF(report.data, report.name)}
+                    onClick={() => {
+                      setReportData(report.data);
+                      setExportFormat(report.format || 'pdf');
+                      setTimeout(() => generateReport(), 100);
+                    }}
                     style={{
                       padding: '6px 12px',
                       background: '#4CAF50',

@@ -30,7 +30,9 @@ import {
   DialogActions,
   Tooltip,
   Badge,
-  LinearProgress
+  LinearProgress,
+  Autocomplete,
+  FormHelperText
 } from '@mui/material';
 import {
   Search as SearchIcon,
@@ -41,11 +43,14 @@ import {
   CheckCircle as CheckCircleIcon,
   Warning as WarningIcon,
   Refresh as RefreshIcon,
-  FileDownload as FileDownloadIcon
+  FileDownload as FileDownloadIcon,
+  Edit as EditIcon,
+  Delete as DeleteIcon,
+  DirectionsBus as DirectionsBusIcon,
+  PersonAdd as PersonAddIcon,
+  AssignmentTurnedIn as AssignmentTurnedInIcon
 } from '@mui/icons-material';
-import DirectionsBus from '@mui/icons-material/DirectionsBus';
 import { useAuth } from '../../context/AuthContext';
-import api from '../../services/api';
 import StudentForm from '../../components/Students/StudentForm';
 import QRCodeModal from '../../components/Students/QRCodeModal';
 import { formatDate, formatNumber } from '../../utils/formatters';
@@ -62,6 +67,7 @@ const TransportStudents = () => {
   const [filterClass, setFilterClass] = useState('');
   const [filterBus, setFilterBus] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterLinked, setFilterLinked] = useState('');
   const [openForm, setOpenForm] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [openQRModal, setOpenQRModal] = useState(false);
@@ -72,8 +78,18 @@ const TransportStudents = () => {
     totalTransport: 0,
     linked: 0,
     unlinked: 0,
-    active: 0
+    active: 0,
+    pending: 0,
+    suspended: 0
   });
+  
+  // Bus assignment modal state
+  const [openAssignBusModal, setOpenAssignBusModal] = useState(false);
+  const [assignStudent, setAssignStudent] = useState(null);
+  const [selectedBusId, setSelectedBusId] = useState('');
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [pickupPoint, setPickupPoint] = useState('');
+  const [dropoffPoint, setDropoffPoint] = useState('');
 
   // Fetch initial data
   useEffect(() => {
@@ -81,7 +97,7 @@ const TransportStudents = () => {
     fetchBuses();
     fetchClasses();
     fetchStats();
-  }, [page, rowsPerPage, searchTerm, filterClass, filterBus, filterStatus]);
+  }, [page, rowsPerPage, searchTerm, filterClass, filterBus, filterStatus, filterLinked]);
 
   const fetchStudents = async () => {
     try {
@@ -93,12 +109,20 @@ const TransportStudents = () => {
         ...(searchTerm && { search: searchTerm }),
         ...(filterClass && { class: filterClass }),
         ...(filterBus && { busId: filterBus }),
-        ...(filterStatus && { 'transportDetails.status': filterStatus })
+        ...(filterStatus && { transportStatus: filterStatus })
       };
 
-      const response = await api.get('/students', { params });
-      setStudents(response.data.data || []);
-      setTotalCount(response.data.total || 0);
+      const response = await fetch(`http://localhost:5000/api/students?${new URLSearchParams(params).toString()}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        setStudents(data.data || []);
+        setTotalCount(data.total || 0);
+      } else {
+        setStudents([]);
+      }
     } catch (error) {
       console.error('Error fetching students:', error);
       toast.error('Failed to load students');
@@ -109,8 +133,13 @@ const TransportStudents = () => {
 
   const fetchBuses = async () => {
     try {
-      const response = await api.get('/buses');
-      setBuses(response.data.data || []);
+      const response = await fetch('http://localhost:5000/api/buses', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setBuses(data.data || []);
+      }
     } catch (error) {
       console.error('Error fetching buses:', error);
     }
@@ -127,9 +156,25 @@ const TransportStudents = () => {
 
   const fetchStats = async () => {
     try {
-      const response = await api.get('/students/stats/summary');
-      if (response.data.success) {
-        setStats(response.data.data);
+      const response = await fetch('http://localhost:5000/api/students/stats/summary', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      if (data.success) {
+        const transportStudents = students.filter(s => s.usesTransport).length;
+        const linkedStudents = students.filter(s => s.parentId).length;
+        const unlinkedStudents = students.filter(s => !s.parentId && s.usesTransport).length;
+        const activeStudents = students.filter(s => s.transportDetails?.status === 'active' || s.transportStatus === 'active').length;
+        const pendingStudents = students.filter(s => s.transportDetails?.status === 'pending' || s.transportStatus === 'pending').length;
+        
+        setStats({
+          totalTransport: transportStudents,
+          linked: linkedStudents,
+          unlinked: unlinkedStudents,
+          active: activeStudents,
+          pending: pendingStudents,
+          suspended: students.filter(s => s.transportDetails?.status === 'suspended' || s.transportStatus === 'suspended').length
+        });
       }
     } catch (error) {
       console.error('Error fetching stats:', error);
@@ -153,29 +198,71 @@ const TransportStudents = () => {
 
   const handleSaveStudent = async (studentData) => {
     try {
-      if (selectedStudent) {
-        await api.put(`/students/${selectedStudent._id}`, studentData);
-        toast.success('Student updated successfully');
-      } else {
-        await api.post('/students', studentData);
-        toast.success('Student added successfully');
+      const url = selectedStudent 
+        ? `http://localhost:5000/api/students/${selectedStudent._id}`
+        : 'http://localhost:5000/api/students';
+      const method = selectedStudent ? 'PUT' : 'POST';
+      
+      const response = await fetch(url, {
+        method,
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(studentData)
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to save student');
       }
+      
+      toast.success(selectedStudent ? 'Student updated successfully' : 'Student added successfully');
       fetchStudents();
       fetchStats();
       handleCloseForm();
     } catch (error) {
       console.error('Error saving student:', error);
-      toast.error(error.response?.data?.message || 'Failed to save student');
+      toast.error(error.message || 'Failed to save student');
+    }
+  };
+
+  const handleDeleteStudent = async (student) => {
+    if (!window.confirm(`Are you sure you want to delete ${student.firstName} ${student.lastName}?`)) return;
+    
+    try {
+      const response = await fetch(`http://localhost:5000/api/students/${student._id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to delete student');
+      }
+      
+      toast.success('Student deleted successfully');
+      fetchStudents();
+      fetchStats();
+    } catch (error) {
+      console.error('Error deleting student:', error);
+      toast.error(error.message || 'Failed to delete student');
     }
   };
 
   const handleGenerateQR = async (student) => {
     try {
-      const response = await api.post(`/students/${student._id}/generate-qr`);
-      if (response.data.success) {
+      const response = await fetch(`http://localhost:5000/api/students/${student._id}/generate-qr`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      
+      if (data.success) {
         setQrStudent({
           ...student,
-          qrCode: response.data.qrCode
+          qrCode: data.qrCode
         });
         setOpenQRModal(true);
         fetchStudents();
@@ -194,6 +281,71 @@ const TransportStudents = () => {
   const handleCloseQRModal = () => {
     setOpenQRModal(false);
     setQrStudent(null);
+  };
+
+  const handleOpenAssignBus = (student) => {
+    setAssignStudent(student);
+    setSelectedBusId(student.transportDetails?.busId?._id || student.busId || '');
+    setPickupPoint(student.transportDetails?.pickupPoint?.name || student.pickupPoint || '');
+    setDropoffPoint(student.transportDetails?.dropoffPoint?.name || student.dropOffPoint || '');
+    setOpenAssignBusModal(true);
+  };
+
+  const handleAssignBus = async () => {
+    if (!selectedBusId) {
+      toast.error('Please select a bus');
+      return;
+    }
+    
+    setAssignLoading(true);
+    try {
+      const updateData = {
+        busId: selectedBusId,
+        transportDetails: {
+          busId: selectedBusId,
+          status: 'active',
+          pickupPoint: {
+            name: pickupPoint || 'School Gate',
+            coordinates: { lat: 0, lng: 0 }
+          },
+          dropoffPoint: {
+            name: dropoffPoint || 'Home',
+            coordinates: { lat: 0, lng: 0 }
+          }
+        },
+        usesTransport: true
+      };
+
+      const response = await fetch(`http://localhost:5000/api/students/${assignStudent._id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(updateData)
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to assign bus');
+      }
+      
+      const assignedBus = buses.find(b => b._id === selectedBusId);
+      toast.success(`Student assigned to bus ${assignedBus?.busNumber || 'selected bus'} successfully`);
+      setOpenAssignBusModal(false);
+      setAssignStudent(null);
+      setSelectedBusId('');
+      setPickupPoint('');
+      setDropoffPoint('');
+      fetchStudents();
+      fetchStats();
+    } catch (error) {
+      console.error('Error assigning bus:', error);
+      toast.error(error.message || 'Failed to assign bus');
+    } finally {
+      setAssignLoading(false);
+    }
   };
 
   const handleExport = () => {
@@ -233,15 +385,16 @@ const TransportStudents = () => {
     }
   };
 
-  const getStatusChip = (status) => {
+  const getStatusChip = (student) => {
+    const status = student.transportDetails?.status || student.transportStatus;
     const statusMap = {
       'active': { color: 'success', label: 'Active' },
       'inactive': { color: 'default', label: 'Inactive' },
       'suspended': { color: 'error', label: 'Suspended' },
       'pending': { color: 'warning', label: 'Pending' },
-      'assigned': { color: 'success', label: 'Active' }
+      'assigned': { color: 'success', label: 'Assigned' }
     };
-    const statusInfo = statusMap[status] || { color: 'default', label: status };
+    const statusInfo = statusMap[status] || { color: 'default', label: status || 'Not Set' };
     return <Chip size="small" color={statusInfo.color} label={statusInfo.label} />;
   };
 
@@ -302,7 +455,7 @@ const TransportStudents = () => {
           <StatCard
             title="Total Transport"
             value={stats.totalTransport}
-            icon={<DirectionsBus sx={{ color: '#1976d2' }} />}
+            icon={<DirectionsBusIcon sx={{ color: '#1976d2' }} />}
             color="primary"
           />
         </Grid>
@@ -325,8 +478,8 @@ const TransportStudents = () => {
         </Grid>
         <Grid size={{ xs: 12, sm: 6, md: 3 }}>
           <StatCard
-            title="Unlinked"
-            value={stats.unlinked}
+            title="Pending"
+            value={stats.pending}
             icon={<WarningIcon sx={{ color: '#d32f2f' }} />}
             color="error"
           />
@@ -336,7 +489,7 @@ const TransportStudents = () => {
       {/* Filters */}
       <Paper sx={{ p: 2, mb: 3 }}>
         <Grid container spacing={2} alignItems="center">
-          <Grid size={{ xs: 12, md: 4 }}>
+          <Grid size={{ xs: 12, md: 3 }}>
             <TextField
               fullWidth
               size="small"
@@ -376,9 +529,10 @@ const TransportStudents = () => {
                 label="Bus"
               >
                 <MenuItem value="">All</MenuItem>
+                <MenuItem value="unassigned">Not Assigned</MenuItem>
                 {buses.map(bus => (
                   <MenuItem key={bus._id} value={bus._id}>
-                    {bus.busNumber || bus.registrationNumber}
+                    {bus.busNumber}
                   </MenuItem>
                 ))}
               </Select>
@@ -401,6 +555,20 @@ const TransportStudents = () => {
             </FormControl>
           </Grid>
           <Grid size={{ xs: 12, md: 2 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel>Parent Linked</InputLabel>
+              <Select
+                value={filterLinked}
+                onChange={(e) => setFilterLinked(e.target.value)}
+                label="Parent Linked"
+              >
+                <MenuItem value="">All</MenuItem>
+                <MenuItem value="linked">Linked</MenuItem>
+                <MenuItem value="unlinked">Unlinked</MenuItem>
+              </Select>
+            </FormControl>
+          </Grid>
+          <Grid size={{ xs: 12, md: 1 }}>
             <Button
               fullWidth
               variant="outlined"
@@ -474,7 +642,7 @@ const TransportStudents = () => {
                      'Not Assigned'}
                   </TableCell>
                   <TableCell>
-                    {getStatusChip(student.transportDetails?.status || student.transportStatus)}
+                    {getStatusChip(student)}
                   </TableCell>
                   <TableCell>
                     {student.qrCode ? (
@@ -500,13 +668,35 @@ const TransportStudents = () => {
                     )}
                   </TableCell>
                   <TableCell>
-                    <Button
-                      size="small"
-                      variant="outlined"
-                      onClick={() => handleEditStudent(student)}
-                    >
-                      Edit
-                    </Button>
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Tooltip title="Assign Bus">
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={() => handleOpenAssignBus(student)}
+                        >
+                          <DirectionsBusIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Edit">
+                        <IconButton
+                          size="small"
+                          color="warning"
+                          onClick={() => handleEditStudent(student)}
+                        >
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Delete">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => handleDeleteStudent(student)}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
                   </TableCell>
                 </TableRow>
               ))
@@ -553,6 +743,68 @@ const TransportStudents = () => {
         onClose={handleCloseQRModal}
         student={qrStudent}
       />
+
+      {/* Assign Bus Modal */}
+      <Dialog
+        open={openAssignBusModal}
+        onClose={() => setOpenAssignBusModal(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          Assign Bus to {assignStudent?.firstName} {assignStudent?.lastName}
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ mt: 2 }}>
+            <FormControl fullWidth size="small" sx={{ mb: 2 }}>
+              <InputLabel>Select Bus</InputLabel>
+              <Select
+                value={selectedBusId}
+                onChange={(e) => setSelectedBusId(e.target.value)}
+                label="Select Bus"
+              >
+                <MenuItem value="">None</MenuItem>
+                {buses.map(bus => (
+                  <MenuItem key={bus._id} value={bus._id}>
+                    {bus.busNumber} - Capacity: {bus.capacity}
+                  </MenuItem>
+                ))}
+              </Select>
+              <FormHelperText>Choose a bus to assign to this student</FormHelperText>
+            </FormControl>
+            
+            <TextField
+              fullWidth
+              size="small"
+              label="Pickup Point"
+              value={pickupPoint}
+              onChange={(e) => setPickupPoint(e.target.value)}
+              placeholder="Where student gets on"
+              sx={{ mb: 2 }}
+            />
+            
+            <TextField
+              fullWidth
+              size="small"
+              label="Dropoff Point"
+              value={dropoffPoint}
+              onChange={(e) => setDropoffPoint(e.target.value)}
+              placeholder="Where student gets off"
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOpenAssignBusModal(false)}>Cancel</Button>
+          <Button 
+            variant="contained" 
+            onClick={handleAssignBus}
+            disabled={assignLoading || !selectedBusId}
+            startIcon={assignLoading ? <LinearProgress sx={{ width: 20 }} /> : <AssignmentTurnedInIcon />}
+          >
+            {assignLoading ? 'Assigning...' : 'Assign Bus'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };

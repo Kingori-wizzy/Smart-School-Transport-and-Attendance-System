@@ -8,41 +8,25 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
-  FlatList
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../context/AuthContext';
-import { useTrip } from '../../context/TripContext';
 import { useTheme } from '../../context/ThemeContext';
 import api from '../../services/api';
-import { COLORS } from '../../constants/config';
 import { format } from 'date-fns';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function TripScreen({ route, navigation }) {
-  const { trip: initialTrip } = route.params;
+  const { trip: initialTrip } = route.params || {};
   const { user } = useAuth();
   const { colors } = useTheme();
-  const {
-    activeTrip,
-    tripStudents,
-    loading,
-    refreshing,
-    fetchTripStudents,
-    boardStudent,
-    alightStudent,
-    startTrip,
-    endTrip,
-    updateLocation,
-    getStudentScanStatus,
-    selectActiveTrip,
-    refreshTrips
-  } = useTrip();
   
   const [trip, setTrip] = useState(initialTrip);
   const [students, setStudents] = useState([]);
   const [location, setLocation] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({
     totalStudents: 0,
     boarded: 0,
@@ -53,6 +37,11 @@ export default function TripScreen({ route, navigation }) {
   const locationWatcher = useRef(null);
 
   useEffect(() => {
+    if (!trip || !trip._id) {
+      Alert.alert('Error', 'No trip data available');
+      navigation.goBack();
+      return;
+    }
     loadTripData();
     startLocationTracking();
 
@@ -63,45 +52,29 @@ export default function TripScreen({ route, navigation }) {
     };
   }, []);
 
-  // Update when tripStudents changes from context
-  useEffect(() => {
-    if (tripStudents.length > 0) {
-      setStudents(tripStudents);
-      calculateStats(tripStudents);
-    }
-  }, [tripStudents]);
-
   const loadTripData = async () => {
     try {
-      // Ensure we have a valid trip ID
-      if (!trip || !trip._id) {
-        throw new Error('No trip ID available');
-      }
-
-      // Select this trip as active
-      selectActiveTrip(trip);
+      setLoading(true);
       
       // Fetch students for this trip
-      await fetchTripStudents(trip._id);
+      const response = await api.get(`/driver/trips/${trip._id}/students`);
+      console.log('Students response:', response.data);
       
-      // Calculate stats based on students
-      if (tripStudents.length > 0) {
-        calculateStats(tripStudents);
-      }
+      const studentsData = response.data?.data || [];
+      setStudents(studentsData);
+      calculateStats(studentsData);
+      
     } catch (error) {
-      console.error('Error loading trip data:', error);
-      Alert.alert('Error', 'Failed to load trip data');
+      console.error('Error loading trip students:', error);
+      Alert.alert('Error', 'Failed to load students');
+    } finally {
+      setLoading(false);
     }
   };
 
   const calculateStats = (studentsList) => {
-    const boarded = studentsList.filter(s => 
-      s.status === 'boarded' || getStudentScanStatus(trip._id, s._id)?.type === 'boarding'
-    ).length;
-    
-    const alighted = studentsList.filter(s => 
-      s.status === 'alighted' || getStudentScanStatus(trip._id, s._id)?.type === 'alighting'
-    ).length;
+    const boarded = studentsList.filter(s => s.status === 'boarded' || s.boarded).length;
+    const alighted = studentsList.filter(s => s.status === 'alighted' || s.alighted).length;
     
     setStats({
       totalStudents: studentsList.length,
@@ -138,6 +111,20 @@ export default function TripScreen({ route, navigation }) {
     }
   };
 
+  const updateLocation = async (tripId, coords) => {
+    try {
+      await api.post('/driver/gps/update', {
+        tripId,
+        lat: coords.latitude,
+        lon: coords.longitude,
+        speed: coords.speed || 0,
+        heading: coords.heading || 0
+      });
+    } catch (error) {
+      console.error('Error updating location:', error);
+    }
+  };
+
   const handleBoardStudent = async (student) => {
     Alert.alert(
       'Board Student',
@@ -148,22 +135,28 @@ export default function TripScreen({ route, navigation }) {
           text: 'Confirm Boarding',
           onPress: async () => {
             try {
-              const result = await boardStudent(trip._id, student._id, 'manual');
+              const response = await api.post(`/driver/trips/${trip._id}/board/${student._id}`, {
+                method: 'manual',
+                location: location ? {
+                  lat: location.coords.latitude,
+                  lng: location.coords.longitude
+                } : null,
+                timestamp: new Date().toISOString()
+              });
               
-              if (result.success) {
+              if (response.data.success) {
                 const updatedStudents = students.map(s =>
-                  s._id === student._id ? { ...s, status: 'boarded' } : s
+                  s._id === student._id ? { ...s, status: 'boarded', boarded: true } : s
                 );
                 setStudents(updatedStudents);
                 calculateStats(updatedStudents);
-                
-                Alert.alert('✅ Success', `${student.firstName} boarded`);
+                Alert.alert('Success', `${student.firstName} boarded`);
               } else {
-                Alert.alert('Error', result.message || 'Failed to record boarding');
+                Alert.alert('Error', response.data.message || 'Failed to record boarding');
               }
             } catch (error) {
               console.error('Error boarding student:', error);
-              Alert.alert('Error', 'Failed to record boarding');
+              Alert.alert('Error', error.response?.data?.message || 'Failed to record boarding');
             }
           }
         },
@@ -181,22 +174,28 @@ export default function TripScreen({ route, navigation }) {
           text: 'Confirm Alighting',
           onPress: async () => {
             try {
-              const result = await alightStudent(trip._id, student._id, 'manual');
+              const response = await api.post(`/driver/trips/${trip._id}/alight/${student._id}`, {
+                method: 'manual',
+                location: location ? {
+                  lat: location.coords.latitude,
+                  lng: location.coords.longitude
+                } : null,
+                timestamp: new Date().toISOString()
+              });
               
-              if (result.success) {
+              if (response.data.success) {
                 const updatedStudents = students.map(s =>
-                  s._id === student._id ? { ...s, status: 'alighted' } : s
+                  s._id === student._id ? { ...s, status: 'alighted', alighted: true } : s
                 );
                 setStudents(updatedStudents);
                 calculateStats(updatedStudents);
-                
-                Alert.alert('✅ Success', `${student.firstName} alighted`);
+                Alert.alert('Success', `${student.firstName} alighted`);
               } else {
-                Alert.alert('Error', result.message || 'Failed to record alighting');
+                Alert.alert('Error', response.data.message || 'Failed to record alighting');
               }
             } catch (error) {
               console.error('Error alighting student:', error);
-              Alert.alert('Error', 'Failed to record alighting');
+              Alert.alert('Error', error.response?.data?.message || 'Failed to record alighting');
             }
           }
         },
@@ -204,7 +203,7 @@ export default function TripScreen({ route, navigation }) {
     );
   };
 
-  const handleStartTrip = () => {
+  const handleStartTrip = async () => {
     Alert.alert(
       'Start Trip',
       'Are you sure you want to start this trip?',
@@ -213,15 +212,17 @@ export default function TripScreen({ route, navigation }) {
         {
           text: 'Start Trip',
           onPress: async () => {
-            const result = await startTrip(trip._id);
-            if (result.success) {
-              if (result.offline) {
-                Alert.alert('Offline Mode', 'Trip will start when you\'re back online');
-              } else {
+            try {
+              const response = await api.post(`/driver/trips/${trip._id}/start`);
+              if (response.data.success) {
+                setTrip({ ...trip, status: 'in-progress' });
                 Alert.alert('Success', 'Trip started successfully');
-                // Update local trip status
-                setTrip({ ...trip, status: 'ongoing' });
+              } else {
+                Alert.alert('Error', response.data.message || 'Failed to start trip');
               }
+            } catch (error) {
+              console.error('Error starting trip:', error);
+              Alert.alert('Error', error.response?.data?.message || 'Failed to start trip');
             }
           }
         },
@@ -229,12 +230,7 @@ export default function TripScreen({ route, navigation }) {
     );
   };
 
-  const handleEndTrip = () => {
-    if (!trip || !trip._id) {
-      Alert.alert('Error', 'No active trip found');
-      return;
-    }
-
+  const handleEndTrip = async () => {
     Alert.alert(
       'End Trip',
       'Are you sure you want to end this trip?',
@@ -245,16 +241,16 @@ export default function TripScreen({ route, navigation }) {
           style: 'destructive',
           onPress: async () => {
             try {
-              const result = await endTrip(trip._id);
-              if (result.success) {
+              const response = await api.post(`/driver/trips/${trip._id}/end`);
+              if (response.data.success) {
                 Alert.alert('Success', 'Trip ended successfully');
                 navigation.goBack();
               } else {
-                Alert.alert('Error', result.message || 'Failed to end trip');
+                Alert.alert('Error', response.data.message || 'Failed to end trip');
               }
             } catch (error) {
               console.error('Error ending trip:', error);
-              Alert.alert('Error', 'Failed to end trip');
+              Alert.alert('Error', error.response?.data?.message || 'Failed to end trip');
             }
           }
         },
@@ -267,56 +263,55 @@ export default function TripScreen({ route, navigation }) {
   };
 
   const handleScanQR = () => {
-    if (!trip || !trip._id) {
-      Alert.alert('Error', 'No active trip found');
-      return;
-    }
-    
     navigation.navigate('QRScan', { tripId: trip._id });
   };
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadTripData();
+    setRefreshing(false);
+  };
+
   const getStudentStatus = (student) => {
-    const scanStatus = getStudentScanStatus(trip._id, student._id);
-    if (scanStatus) {
-      return scanStatus.type === 'boarding' ? 'boarded' : 'alighted';
-    }
-    return student.status || 'pending';
+    if (student.status === 'alighted') return 'alighted';
+    if (student.status === 'boarded') return 'boarded';
+    return 'pending';
   };
 
   const StudentItem = ({ student }) => {
     const status = getStudentStatus(student);
     
     return (
-      <View style={[styles.studentItem, { borderBottomColor: colors.border }]}>
+      <View style={[styles.studentItem, { borderBottomColor: colors.border || '#eee' }]}>
         <View style={styles.studentInfo}>
-          <Text style={[styles.studentName, { color: colors.text }]}>
+          <Text style={[styles.studentName, { color: colors.text || '#333' }]}>
             {student.firstName} {student.lastName}
           </Text>
-          <Text style={[styles.studentDetails, { color: colors.textSecondary }]}>
+          <Text style={[styles.studentDetails, { color: colors.textSecondary || '#666' }]}>
             Class: {student.classLevel} | ID: {student.admissionNumber}
           </Text>
-          {student.transportDetails?.pickupPoint?.name && (
-            <Text style={[styles.studentDetails, { color: colors.textSecondary }]}>
-              Pickup: {student.transportDetails.pickupPoint.name}
+          {student.pickupPoint && (
+            <Text style={[styles.studentDetails, { color: colors.textSecondary || '#666' }]}>
+              Pickup: {student.pickupPoint}
             </Text>
           )}
         </View>
         
         <View style={styles.studentActions}>
           {status === 'boarded' ? (
-            <View style={[styles.statusBadge, { backgroundColor: colors.success }]}>
+            <View style={[styles.statusBadge, { backgroundColor: colors.success || '#4CAF50' }]}>
               <Ionicons name="checkmark-circle" size={16} color="#fff" />
               <Text style={styles.statusBadgeText}>Boarded</Text>
             </View>
           ) : status === 'alighted' ? (
-            <View style={[styles.statusBadge, { backgroundColor: colors.warning }]}>
+            <View style={[styles.statusBadge, { backgroundColor: colors.warning || '#FF9800' }]}>
               <Ionicons name="flag" size={16} color="#fff" />
               <Text style={styles.statusBadgeText}>Alighted</Text>
             </View>
           ) : (
             <View style={styles.actionButtons}>
               <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: colors.primary }]}
+                style={[styles.actionButton, { backgroundColor: colors.primary || '#2196F3' }]}
                 onPress={() => handleBoardStudent(student)}
               >
                 <Ionicons name="log-in-outline" size={16} color="#fff" />
@@ -324,7 +319,7 @@ export default function TripScreen({ route, navigation }) {
               </TouchableOpacity>
               
               <TouchableOpacity
-                style={[styles.actionButton, { backgroundColor: colors.warning }]}
+                style={[styles.actionButton, { backgroundColor: colors.warning || '#FF9800' }]}
                 onPress={() => handleAlightStudent(student)}
               >
                 <Ionicons name="log-out-outline" size={16} color="#fff" />
@@ -339,82 +334,87 @@ export default function TripScreen({ route, navigation }) {
 
   if (loading) {
     return (
-      <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+      <View style={[styles.loadingContainer, { backgroundColor: colors.background || '#f5f5f5' }]}>
+        <ActivityIndicator size="large" color={colors.primary || '#2196F3'} />
+        <Text style={[styles.loadingText, { color: colors.textSecondary || '#666' }]}>
           Loading trip details...
         </Text>
       </View>
     );
   }
 
+  const busNumber = trip.busNumber || trip.vehicleId || 'N/A';
+  const isTripActive = trip.status === 'in-progress' || trip.status === 'running';
+  const isTripScheduled = trip.status === 'scheduled';
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.header}>
+    <View style={[styles.container, { backgroundColor: colors.background || '#f5f5f5' }]}>
+      <LinearGradient colors={[colors.primary || '#2196F3', colors.secondary || '#1976D2']} style={styles.header}>
         <View style={styles.headerTop}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>{trip?.route?.name || trip?.routeName || 'Trip'}</Text>
+          <Text style={styles.headerTitle}>{trip.routeName || 'Trip'}</Text>
           <TouchableOpacity onPress={handleEmergency} style={styles.emergencyButton}>
             <Ionicons name="alert-circle" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
         <View style={styles.tripMeta}>
           <Text style={styles.tripMetaText}>
-            {trip?.type === 'morning_pickup' ? '🌅 Morning' : '🌆 Evening'} Trip
+            {trip.tripType === 'morning' ? 'Morning' : 'Evening'} Trip
           </Text>
           <Text style={styles.tripMetaText}>
-            Bus: {trip?.bus?.busNumber || trip?.busNumber || 'N/A'}
+            Bus: {busNumber}
           </Text>
         </View>
       </LinearGradient>
 
       <ScrollView
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshTrips} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        contentContainerStyle={styles.scrollContent}
       >
         {/* Trip Progress */}
-        <View style={[styles.progressCard, { backgroundColor: colors.card }]}>
-          <Text style={[styles.progressTitle, { color: colors.text }]}>Trip Progress</Text>
+        <View style={[styles.progressCard, { backgroundColor: colors.card || '#fff' }]}>
+          <Text style={[styles.progressTitle, { color: colors.text || '#333' }]}>Trip Progress</Text>
           <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${stats.progress}%`, backgroundColor: colors.primary }]} />
+            <View style={[styles.progressFill, { width: `${stats.progress}%`, backgroundColor: colors.primary || '#2196F3' }]} />
           </View>
           <View style={styles.progressStats}>
-            <Text style={[styles.progressStat, { color: colors.textSecondary }]}>
-              📊 Boarded: {stats.boarded}/{stats.totalStudents}
+            <Text style={[styles.progressStat, { color: colors.textSecondary || '#666' }]}>
+              Boarded: {stats.boarded}/{stats.totalStudents}
             </Text>
-            <Text style={[styles.progressStat, { color: colors.textSecondary }]}>
-              🚩 Alighted: {stats.alighted}
+            <Text style={[styles.progressStat, { color: colors.textSecondary || '#666' }]}>
+              Alighted: {stats.alighted}
             </Text>
-            <Text style={[styles.progressStat, { color: colors.textSecondary }]}>
-              ⏱️ {format(new Date(), 'HH:mm')}
+            <Text style={[styles.progressStat, { color: colors.textSecondary || '#666' }]}>
+              Time: {format(new Date(), 'HH:mm')}
             </Text>
           </View>
         </View>
 
         {/* Trip Details */}
-        <View style={[styles.detailsCard, { backgroundColor: colors.card }]}>
-          <Text style={[styles.detailsTitle, { color: colors.text }]}>Trip Details</Text>
-          <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
-            <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Start Time:</Text>
-            <Text style={[styles.detailValue, { color: colors.text }]}>
-              {trip?.scheduledStartTime ? format(new Date(trip.scheduledStartTime), 'HH:mm') : 'N/A'}
+        <View style={[styles.detailsCard, { backgroundColor: colors.card || '#fff' }]}>
+          <Text style={[styles.detailsTitle, { color: colors.text || '#333' }]}>Trip Details</Text>
+          <View style={[styles.detailRow, { borderBottomColor: colors.border || '#eee' }]}>
+            <Text style={[styles.detailLabel, { color: colors.textSecondary || '#666' }]}>Start Time:</Text>
+            <Text style={[styles.detailValue, { color: colors.text || '#333' }]}>
+              {trip.scheduledStartTime ? format(new Date(trip.scheduledStartTime), 'HH:mm') : 'N/A'}
             </Text>
           </View>
-          <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
-            <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>End Time:</Text>
-            <Text style={[styles.detailValue, { color: colors.text }]}>
-              {trip?.scheduledEndTime ? format(new Date(trip.scheduledEndTime), 'HH:mm') : 'N/A'}
+          <View style={[styles.detailRow, { borderBottomColor: colors.border || '#eee' }]}>
+            <Text style={[styles.detailLabel, { color: colors.textSecondary || '#666' }]}>End Time:</Text>
+            <Text style={[styles.detailValue, { color: colors.text || '#333' }]}>
+              {trip.scheduledEndTime ? format(new Date(trip.scheduledEndTime), 'HH:mm') : 'N/A'}
             </Text>
           </View>
-          <View style={[styles.detailRow, { borderBottomColor: colors.border }]}>
-            <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>Status:</Text>
+          <View style={[styles.detailRow, { borderBottomColor: colors.border || '#eee' }]}>
+            <Text style={[styles.detailLabel, { color: colors.textSecondary || '#666' }]}>Status:</Text>
             <View style={[styles.statusChip, { 
-              backgroundColor: trip?.status === 'ongoing' ? colors.success : 
-                             trip?.status === 'scheduled' ? colors.warning : 
-                             colors.textSecondary 
+              backgroundColor: isTripActive ? colors.success || '#4CAF50' : 
+                             isTripScheduled ? colors.warning || '#FF9800' : 
+                             colors.textSecondary || '#999' 
             }]}>
-              <Text style={styles.statusChipText}>{trip?.status || 'scheduled'}</Text>
+              <Text style={styles.statusChipText}>{trip.status || 'scheduled'}</Text>
             </View>
           </View>
         </View>
@@ -422,16 +422,16 @@ export default function TripScreen({ route, navigation }) {
         {/* Action Buttons */}
         <View style={styles.actionRow}>
           <TouchableOpacity
-            style={[styles.mainActionButton, { backgroundColor: colors.primary }]}
+            style={[styles.mainActionButton, { backgroundColor: colors.primary || '#2196F3' }]}
             onPress={handleScanQR}
           >
             <Ionicons name="qr-code-outline" size={24} color="#fff" />
             <Text style={styles.mainActionText}>Scan QR</Text>
           </TouchableOpacity>
 
-          {trip?.status === 'scheduled' && (
+          {isTripScheduled && (
             <TouchableOpacity
-              style={[styles.mainActionButton, { backgroundColor: colors.success }]}
+              style={[styles.mainActionButton, { backgroundColor: colors.success || '#4CAF50' }]}
               onPress={handleStartTrip}
             >
               <Ionicons name="play" size={24} color="#fff" />
@@ -439,9 +439,9 @@ export default function TripScreen({ route, navigation }) {
             </TouchableOpacity>
           )}
 
-          {trip?.status === 'ongoing' && (
+          {isTripActive && (
             <TouchableOpacity
-              style={[styles.mainActionButton, { backgroundColor: colors.danger }]}
+              style={[styles.mainActionButton, { backgroundColor: colors.danger || '#f44336' }]}
               onPress={handleEndTrip}
             >
               <Ionicons name="stop" size={24} color="#fff" />
@@ -451,8 +451,8 @@ export default function TripScreen({ route, navigation }) {
         </View>
 
         {/* Students List */}
-        <View style={[styles.studentsCard, { backgroundColor: colors.card }]}>
-          <Text style={[styles.studentsTitle, { color: colors.text }]}>
+        <View style={[styles.studentsCard, { backgroundColor: colors.card || '#fff' }]}>
+          <Text style={[styles.studentsTitle, { color: colors.text || '#333' }]}>
             Students ({stats.totalStudents})
           </Text>
           
@@ -462,8 +462,8 @@ export default function TripScreen({ route, navigation }) {
             ))
           ) : (
             <View style={styles.emptyContainer}>
-              <Ionicons name="people-outline" size={50} color={colors.textSecondary} />
-              <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+              <Ionicons name="people-outline" size={50} color={colors.textSecondary || '#666'} />
+              <Text style={[styles.emptyText, { color: colors.textSecondary || '#666' }]}>
                 No students assigned to this trip
               </Text>
             </View>
@@ -485,6 +485,7 @@ const styles = StyleSheet.create({
   emergencyButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(244,67,54,0.3)', justifyContent: 'center', alignItems: 'center' },
   tripMeta: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 5 },
   tripMetaText: { color: 'rgba(255,255,255,0.9)', fontSize: 14 },
+  scrollContent: { paddingBottom: 20 },
   progressCard: { margin: 15, padding: 15, borderRadius: 10, elevation: 2 },
   progressTitle: { fontSize: 16, fontWeight: '600', marginBottom: 10 },
   progressBar: { height: 10, backgroundColor: '#f0f0f0', borderRadius: 5, overflow: 'hidden' },

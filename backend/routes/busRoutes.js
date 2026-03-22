@@ -18,21 +18,14 @@ router.get('/stats/summary', isAdmin, async (req, res) => {
   try {
     const total = await Bus.countDocuments();
     const active = await Bus.countDocuments({ status: 'active' });
-    const onTrip = await Bus.countDocuments({ status: 'on_trip' });
+    const onTrip = await Bus.countDocuments({ status: 'on-trip' });
     const maintenance = await Bus.countDocuments({ status: 'maintenance' });
     const inactive = await Bus.countDocuments({ status: 'inactive' });
     
-    // Get buses by campus
-    const byCampus = await Bus.aggregate([
-      { $match: { campus: { $exists: true, $ne: null } } },
-      { $group: { _id: '$campus', count: { $sum: 1 } } },
-      { $sort: { _id: 1 } }
-    ]);
-
     // Get buses by status for pie chart
     const byStatus = [
       { status: 'active', count: active },
-      { status: 'on_trip', count: onTrip },
+      { status: 'on-trip', count: onTrip },
       { status: 'maintenance', count: maintenance },
       { status: 'inactive', count: inactive }
     ];
@@ -60,7 +53,6 @@ router.get('/stats/summary', isAdmin, async (req, res) => {
         onTrip,
         maintenance,
         inactive,
-        byCampus,
         byStatus,
         recentlyActive,
         withLocation,
@@ -85,17 +77,17 @@ router.get('/stats/summary', isAdmin, async (req, res) => {
  */
 router.get('/', async (req, res) => {
   try {
-    const { status, campus, page = 1, limit = 50, search } = req.query;
+    const { status, page = 1, limit = 50, search } = req.query;
     
     // Build query
     const query = {};
     if (status) query.status = status;
-    if (campus) query.campus = campus;
     
-    // Search by bus number
+    // Search by bus number or registration number
     if (search) {
       query.$or = [
         { busNumber: { $regex: search, $options: 'i' } },
+        { registrationNumber: { $regex: search, $options: 'i' } },
         { route: { $regex: search, $options: 'i' } }
       ];
     }
@@ -105,10 +97,9 @@ router.get('/', async (req, res) => {
     
     const [buses, total] = await Promise.all([
       Bus.find(query)
-        // ✅ FIXED: Removed all populate calls (your model uses strings, not references)
         .limit(parseInt(limit))
         .skip(skip)
-        .sort('-createdAt'),
+        .sort({ createdAt: -1 }),
       Bus.countDocuments(query)
     ]);
 
@@ -131,13 +122,13 @@ router.get('/', async (req, res) => {
 
 /**
  * @route   GET /api/buses/active
- * @desc    Get active buses (status = active or on_trip)
+ * @desc    Get active buses (status = active or on-trip)
  * @access  Private
  */
 router.get('/active', async (req, res) => {
   try {
     const buses = await Bus.find({ 
-      status: { $in: ['active', 'on_trip'] } 
+      status: { $in: ['active', 'on-trip'] } 
     });
     
     res.json({
@@ -168,7 +159,7 @@ router.get('/online', async (req, res) => {
         { 'currentLocation.lastUpdated': { $gte: fifteenMinutesAgo } },
         { lastUpdate: { $gte: fifteenMinutesAgo } }
       ]
-    }).select('busNumber currentLocation status driverName');
+    }).select('busNumber registrationNumber currentLocation status driverName');
     
     res.json({
       success: true,
@@ -221,21 +212,37 @@ router.get('/:id', async (req, res) => {
 router.post('/', isAdmin, async (req, res) => {
   try {
     // Check if bus number already exists
-    const existingBus = await Bus.findOne({ 
-      busNumber: req.body.busNumber?.toUpperCase() 
-    });
-    
-    if (existingBus) {
-      return res.status(409).json({ 
-        success: false, 
-        message: 'Bus with this number already exists' 
+    if (req.body.busNumber) {
+      const existingBus = await Bus.findOne({ 
+        busNumber: req.body.busNumber.toUpperCase() 
       });
+      
+      if (existingBus) {
+        return res.status(409).json({ 
+          success: false, 
+          message: 'Bus with this number already exists' 
+        });
+      }
+    }
+    
+    // Check if registration number already exists
+    if (req.body.registrationNumber) {
+      const existingReg = await Bus.findOne({ 
+        registrationNumber: req.body.registrationNumber.toUpperCase() 
+      });
+      
+      if (existingReg) {
+        return res.status(409).json({ 
+          success: false, 
+          message: 'Bus with this registration number already exists' 
+        });
+      }
     }
 
     const bus = new Bus(req.body);
     const newBus = await bus.save();
     
-    console.log(`✅ New bus created: ${newBus.busNumber}`);
+    console.log(`New bus created: ${newBus.busNumber} (${newBus.registrationNumber})`);
     
     res.status(201).json({
       success: true,
@@ -271,13 +278,28 @@ router.put('/:id', isAdmin, async (req, res) => {
     if (req.body.busNumber && 
         req.body.busNumber.toUpperCase() !== existingBus.busNumber) {
       const duplicateBus = await Bus.findOne({ 
-        busNumber: req.body.busNumber?.toUpperCase() 
+        busNumber: req.body.busNumber.toUpperCase() 
       });
       
       if (duplicateBus) {
         return res.status(409).json({ 
           success: false, 
           message: 'Bus with this number already exists' 
+        });
+      }
+    }
+    
+    // If registration number is being changed, check for duplicates
+    if (req.body.registrationNumber && 
+        req.body.registrationNumber.toUpperCase() !== existingBus.registrationNumber) {
+      const duplicateReg = await Bus.findOne({ 
+        registrationNumber: req.body.registrationNumber.toUpperCase() 
+      });
+      
+      if (duplicateReg) {
+        return res.status(409).json({ 
+          success: false, 
+          message: 'Bus with this registration number already exists' 
         });
       }
     }
@@ -289,7 +311,7 @@ router.put('/:id', isAdmin, async (req, res) => {
       { new: true, runValidators: true }
     );
 
-    console.log(`✅ Bus updated: ${updatedBus.busNumber}`);
+    console.log(`Bus updated: ${updatedBus.busNumber}`);
     
     res.json({
       success: true,
@@ -343,7 +365,7 @@ router.post('/:id/location', async (req, res) => {
       req.params.id,
       { $set: updateData },
       { new: true }
-    ).select('busNumber currentLocation status');
+    ).select('busNumber registrationNumber currentLocation status');
     
     if (!bus) {
       return res.status(404).json({ 
@@ -358,12 +380,47 @@ router.post('/:id/location', async (req, res) => {
       data: {
         busId: bus._id,
         busNumber: bus.busNumber,
+        registrationNumber: bus.registrationNumber,
         location: bus.currentLocation
       }
     });
   } catch (error) {
     console.error('Error updating bus location:', error);
     res.status(400).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+/**
+ * @route   GET /api/buses/:id/location
+ * @desc    Get bus location
+ * @access  Private
+ */
+router.get('/:id/location', async (req, res) => {
+  try {
+    const bus = await Bus.findById(req.params.id).select('busNumber registrationNumber currentLocation');
+    
+    if (!bus) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Bus not found' 
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        busId: bus._id,
+        busNumber: bus.busNumber,
+        registrationNumber: bus.registrationNumber,
+        location: bus.currentLocation || null
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching bus location:', error);
+    res.status(500).json({ 
       success: false, 
       message: error.message 
     });
@@ -379,11 +436,11 @@ router.patch('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
     
-    const validStatuses = ['active', 'inactive', 'maintenance', 'on_trip'];
+    const validStatuses = ['active', 'inactive', 'maintenance', 'on-trip'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Invalid status value' 
+        message: 'Invalid status value. Must be one of: active, inactive, maintenance, on-trip' 
       });
     }
 
@@ -400,7 +457,7 @@ router.patch('/:id/status', async (req, res) => {
       });
     }
     
-    console.log(`✅ Bus ${bus.busNumber} status updated to: ${status}`);
+    console.log(`Bus ${bus.busNumber} status updated to: ${status}`);
     
     res.json({
       success: true,
@@ -408,6 +465,7 @@ router.patch('/:id/status', async (req, res) => {
       data: {
         id: bus._id,
         busNumber: bus.busNumber,
+        registrationNumber: bus.registrationNumber,
         status: bus.status
       }
     });
@@ -443,7 +501,7 @@ router.delete('/:id', isAdmin, async (req, res) => {
       });
     }
     
-    console.log(`✅ Bus ${bus.busNumber} deactivated`);
+    console.log(`Bus ${bus.busNumber} deactivated`);
     
     res.json({
       success: true,
@@ -458,11 +516,15 @@ router.delete('/:id', isAdmin, async (req, res) => {
   }
 });
 
-// Maintenance endpoints (keep if your model has these fields)
+/**
+ * @route   GET /api/buses/:id/maintenance
+ * @desc    Get maintenance schedule for a bus
+ * @access  Private (Admin only)
+ */
 router.get('/:id/maintenance', isAdmin, async (req, res) => {
   try {
     const bus = await Bus.findById(req.params.id)
-      .select('maintenanceSchedule nextMaintenanceDue lastMaintenance');
+      .select('busNumber registrationNumber maintenanceSchedule nextMaintenanceDue lastMaintenance');
     
     if (!bus) {
       return res.status(404).json({ 
@@ -474,6 +536,8 @@ router.get('/:id/maintenance', isAdmin, async (req, res) => {
     res.json({
       success: true,
       data: {
+        busNumber: bus.busNumber,
+        registrationNumber: bus.registrationNumber,
         maintenanceSchedule: bus.maintenanceSchedule || [],
         nextMaintenanceDue: bus.nextMaintenanceDue,
         lastMaintenance: bus.lastMaintenance
@@ -488,6 +552,11 @@ router.get('/:id/maintenance', isAdmin, async (req, res) => {
   }
 });
 
+/**
+ * @route   POST /api/buses/:id/maintenance
+ * @desc    Add maintenance record
+ * @access  Private (Admin only)
+ */
 router.post('/:id/maintenance', isAdmin, async (req, res) => {
   try {
     const bus = await Bus.findById(req.params.id);
@@ -500,17 +569,27 @@ router.post('/:id/maintenance', isAdmin, async (req, res) => {
     }
     
     const maintenanceRecord = {
-      ...req.body,
-      date: req.body.date || new Date()
+      date: req.body.date || new Date(),
+      type: req.body.type || 'routine',
+      description: req.body.description || '',
+      cost: req.body.cost || 0,
+      performedBy: req.body.performedBy || req.user.name || 'System',
+      notes: req.body.notes || ''
     };
     
-    if (!bus.maintenanceSchedule) bus.maintenanceSchedule = [];
+    if (!bus.maintenanceSchedule) {
+      bus.maintenanceSchedule = [];
+    }
     bus.maintenanceSchedule.push(maintenanceRecord);
     
+    // Update last maintenance date
+    bus.lastMaintenance = maintenanceRecord.date;
+    
+    // Update next maintenance due if provided
     if (req.body.nextDueDate) {
       bus.nextMaintenanceDue = {
         date: new Date(req.body.nextDueDate),
-        type: req.body.type || 'routine'
+        type: req.body.nextMaintenanceType || 'routine'
       };
     }
     

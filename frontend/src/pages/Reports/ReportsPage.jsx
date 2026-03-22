@@ -1,11 +1,10 @@
-/* eslint-disable no-unused-vars */
+ 
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import Sidebar from '../../components/Layout/Sidebar';
 import ReportGenerator from '../../components/Reports/ReportGenerator';
 import ReportViewer from '../../components/Reports/ReportViewer';
-import { reportService } from '../../services/report';
 import toast from 'react-hot-toast';
 
 export default function ReportsPage() {
@@ -29,11 +28,21 @@ export default function ReportsPage() {
   const fetchSavedReports = async () => {
     try {
       setLoading(true);
-      const reports = await reportService.getSavedReports();
-      setSavedReports(reports.data || []);
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:5000/api/reports', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        setSavedReports(data.data || []);
+      } else {
+        setSavedReports([]);
+      }
     } catch (error) {
       console.error('Error fetching saved reports:', error);
       toast.error('Failed to load saved reports');
+      setSavedReports([]);
     } finally {
       setLoading(false);
     }
@@ -52,11 +61,18 @@ export default function ReportsPage() {
 
   const handleDeleteReport = async (reportId) => {
     try {
-      await reportService.deleteReport(reportId);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:5000/api/reports/${reportId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to delete report');
       toast.success('Report deleted');
       fetchSavedReports();
     } catch (error) {
-      toast.error('Failed to delete report');
+      console.error('Error deleting report:', error);
+      toast.error(error.message || 'Failed to delete report');
     }
   };
 

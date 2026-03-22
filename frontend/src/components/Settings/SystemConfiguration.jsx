@@ -1,7 +1,6 @@
 /* eslint-disable no-unused-vars */
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { settingsService } from '../../services/settings';
 
 export default function SystemConfiguration({ config: initialConfig, onSave }) {
   const [activeTab, setActiveTab] = useState('general');
@@ -149,18 +148,24 @@ export default function SystemConfiguration({ config: initialConfig, onSave }) {
 
   const handleBackupNow = async () => {
     try {
-      await settingsService.createBackup();
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:5000/api/settings/backup', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Backup failed');
       toast.success('Manual backup started');
+      setBackupSettings(prev => ({ ...prev, lastBackup: new Date().toLocaleString() }));
     } catch (error) {
       console.error('Error creating backup:', error);
-      toast.error('Failed to create backup');
+      toast.error(error.message || 'Failed to create backup');
     }
   };
 
   const handleRestore = async () => {
     try {
-      // You might want to show a list of backups to choose from
-      toast.success('Restore process initiated');
+      toast.success('Restore process initiated - contact admin for backup files');
     } catch (error) {
       console.error('Error restoring backup:', error);
       toast.error('Failed to restore backup');

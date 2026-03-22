@@ -12,7 +12,8 @@ import {
   ScrollView,
   FlatList
 } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Camera } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import MapView, { Marker } from 'react-native-maps';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -30,7 +31,7 @@ const QRScanScreen = ({ navigation, route }) => {
   const { activeTrip, tripStudents, boardStudent, alightStudent, getStudentScanStatus } = useTrip();
   const { user } = useAuth();
   
-  const [permission, requestPermission] = useCameraPermissions();
+  const [hasPermission, setHasPermission] = useState(null);
   const [scanned, setScanned] = useState(false);
   const [scanning, setScanning] = useState(true);
   const [scanResult, setScanResult] = useState(null);
@@ -52,10 +53,11 @@ const QRScanScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     (async () => {
-      const cameraStatus = await CameraView.requestPermissionsAsync();
-      const locationStatus = await Location.requestForegroundPermissionsAsync();
+      // Request camera permission using the correct method
+      const { status } = await Camera.requestCameraPermissionsAsync();
+      setHasPermission(status === 'granted');
       
-      setHasPermission(cameraStatus.status === 'granted' && locationStatus.status === 'granted');
+      const locationStatus = await Location.requestForegroundPermissionsAsync();
       
       startLocationTracking();
       loadOfflineQueue();
@@ -165,10 +167,10 @@ const QRScanScreen = ({ navigation, route }) => {
               if (response.data.success) {
                 await AsyncStorage.removeItem('@offline_scans');
                 setOfflineQueue([]);
-                Alert.alert('✅ Success', `${offlineQueue.length} scans synced successfully`);
+                Alert.alert('Success', `${offlineQueue.length} scans synced successfully`);
               }
             } catch (error) {
-              Alert.alert('❌ Error', 'Failed to sync scans. Will retry automatically.');
+              Alert.alert('Error', 'Failed to sync scans. Will retry automatically.');
             }
           }
         }
@@ -337,7 +339,7 @@ const QRScanScreen = ({ navigation, route }) => {
     }
   };
 
-  if (!permission) {
+  if (hasPermission === null) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={COLORS.primary} />
@@ -346,14 +348,17 @@ const QRScanScreen = ({ navigation, route }) => {
     );
   }
 
-  if (!permission.granted) {
+  if (hasPermission === false) {
     return (
       <View style={styles.centered}>
         <Ionicons name="camera-off" size={50} color="#999" />
         <Text style={styles.errorText}>No access to camera</Text>
         <TouchableOpacity 
           style={styles.button}
-          onPress={requestPermission}
+          onPress={async () => {
+            const { status } = await Camera.requestCameraPermissionsAsync();
+            setHasPermission(status === 'granted');
+          }}
         >
           <Text style={styles.buttonText}>Grant Permission</Text>
         </TouchableOpacity>
@@ -396,12 +401,12 @@ const QRScanScreen = ({ navigation, route }) => {
       </LinearGradient>
 
       <View style={styles.cameraContainer}>
-        <CameraView
+        <Camera
           style={styles.camera}
-          facing="back"
-          onBarcodeScanned={handleBarCodeScanned}
-          barcodeScannerSettings={{
-            barcodeTypes: ['qr'],
+          type={Camera.Constants.Type.back}
+          onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
+          barCodeScannerSettings={{
+            barCodeTypes: ['qr'],
           }}
         />
         
@@ -509,7 +514,7 @@ const QRScanScreen = ({ navigation, route }) => {
                   {scanResult.type === 'boarding' ? 'Boarded' : 'Alighted'} successfully
                 </Text>
                 {scanResult.offline && (
-                  <View style={styles.offlineBadge}>
+                  <View style={styles.offlineBadgeSmall}>
                     <Ionicons name="cloud-offline-outline" size={16} color="#ff9800" />
                     <Text style={styles.offlineBadgeText}>Saved offline</Text>
                   </View>
@@ -536,7 +541,7 @@ const QRScanScreen = ({ navigation, route }) => {
         onRequestClose={() => setShowStudentModal(false)}
       >
         <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
+          <View style={styles.modalContentLarge}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Student Information</Text>
               <TouchableOpacity onPress={() => setShowStudentModal(false)}>
@@ -580,18 +585,6 @@ const QRScanScreen = ({ navigation, route }) => {
                     </Text>
                   </View>
                 )}
-                
-                {studentInfo.medicalInfo?.allergies?.length > 0 && (
-                  <>
-                    <Text style={styles.studentInfoSection}>Medical Info</Text>
-                    <View style={styles.studentInfoRow}>
-                      <Text style={styles.studentInfoLabel}>Allergies:</Text>
-                      <Text style={styles.studentInfoValue}>
-                        {studentInfo.medicalInfo.allergies.map(a => a.allergen).join(', ')}
-                      </Text>
-                    </View>
-                  </>
-                )}
               </ScrollView>
             )}
             
@@ -613,7 +606,7 @@ const QRScanScreen = ({ navigation, route }) => {
         onRequestClose={() => setShowMap(false)}
       >
         <View style={styles.modalContainer}>
-          <View style={styles.modalContent}>
+          <View style={styles.modalContentLarge}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Current Location</Text>
               <TouchableOpacity onPress={() => setShowMap(false)}>
@@ -660,6 +653,8 @@ const QRScanScreen = ({ navigation, route }) => {
           <FlatList
             data={scanHistory.slice(-5).reverse()}
             keyExtractor={(item, index) => index.toString()}
+            horizontal
+            showsHorizontalScrollIndicator={false}
             renderItem={({ item }) => (
               <TouchableOpacity
                 style={styles.historyItem}
@@ -681,8 +676,6 @@ const QRScanScreen = ({ navigation, route }) => {
                 )}
               </TouchableOpacity>
             )}
-            horizontal
-            showsHorizontalScrollIndicator={false}
           />
         </View>
       )}
@@ -914,6 +907,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     minWidth: 250,
   },
+  modalContentLarge: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    height: '80%'
+  },
   modalSuccess: {
     borderTopWidth: 5,
     borderTopColor: '#4CAF50',
@@ -937,7 +937,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
   },
-  offlineBadge: {
+  offlineBadgeSmall: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff3e0',
@@ -980,13 +980,6 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     backgroundColor: 'rgba(0,0,0,0.5)'
   },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    height: '80%'
-  },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1013,13 +1006,6 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 16,
     color: '#333'
-  },
-  studentInfoSection: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: COLORS.primary,
-    marginTop: 20,
-    marginBottom: 10
   },
   map: {
     flex: 1,

@@ -1,10 +1,9 @@
-/* eslint-disable no-unused-vars */
+ 
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import UserManagement from '../../components/Settings/UserManagement';
 import SystemConfiguration from '../../components/Settings/SystemConfiguration';
 import Preferences from '../../components/Settings/Preferences';
-import { settingsService } from '../../services/settings';
 import toast from 'react-hot-toast';
 
 export default function SettingsPage() {
@@ -31,11 +30,40 @@ export default function SettingsPage() {
   const fetchSystemConfig = async () => {
     try {
       setLoading(true);
-      const config = await settingsService.getSystemConfig();
-      setSystemConfig(config.data);
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:5000/api/settings', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setSystemConfig(data.data);
+      } else {
+        setSystemConfig({
+          schoolName: 'Smart School',
+          schoolAddress: '',
+          schoolPhone: '',
+          schoolEmail: '',
+          timezone: 'Africa/Nairobi',
+          dateFormat: 'DD/MM/YYYY',
+          timeFormat: '24h',
+          language: 'en',
+          currency: 'KES'
+        });
+      }
     } catch (error) {
       console.error('Error fetching system config:', error);
       toast.error('Failed to load system configuration');
+      setSystemConfig({
+        schoolName: 'Smart School',
+        schoolAddress: '',
+        schoolPhone: '',
+        schoolEmail: '',
+        timezone: 'Africa/Nairobi',
+        dateFormat: 'DD/MM/YYYY',
+        timeFormat: '24h',
+        language: 'en',
+        currency: 'KES'
+      });
     } finally {
       setLoading(false);
     }
@@ -44,11 +72,52 @@ export default function SettingsPage() {
   const fetchUserPreferences = async () => {
     try {
       setLoading(true);
-      const prefs = await settingsService.getUserPreferences();
-      setUserPreferences(prefs.data);
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:5000/api/user/preferences', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setUserPreferences(data.data);
+      } else {
+        setUserPreferences({
+          theme: 'light',
+          compactView: false,
+          animations: true,
+          fontSize: 'medium',
+          highContrast: false,
+          reduceMotion: false,
+          language: 'en',
+          dateFormat: 'DD/MM/YYYY',
+          timeFormat: '24h',
+          sidebarCollapsed: false,
+          notifications: true,
+          soundAlerts: true,
+          alertVolume: 70,
+          autoSave: true,
+          autoSaveInterval: 5
+        });
+      }
     } catch (error) {
       console.error('Error fetching preferences:', error);
       toast.error('Failed to load preferences');
+      setUserPreferences({
+        theme: 'light',
+        compactView: false,
+        animations: true,
+        fontSize: 'medium',
+        highContrast: false,
+        reduceMotion: false,
+        language: 'en',
+        dateFormat: 'DD/MM/YYYY',
+        timeFormat: '24h',
+        sidebarCollapsed: false,
+        notifications: true,
+        soundAlerts: true,
+        alertVolume: 70,
+        autoSave: true,
+        autoSaveInterval: 5
+      });
     } finally {
       setLoading(false);
     }
@@ -56,27 +125,48 @@ export default function SettingsPage() {
 
   const handleSaveSystemConfig = async (config) => {
     try {
-      await settingsService.updateSystemConfig(config);
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:5000/api/settings', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(config)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to save configuration');
       toast.success('System configuration saved');
       fetchSystemConfig();
     } catch (error) {
-      toast.error('Failed to save configuration');
+      console.error('Error saving config:', error);
+      toast.error(error.message || 'Failed to save configuration');
     }
   };
 
   const handleSavePreferences = async (prefs) => {
     try {
-      await settingsService.updateUserPreferences(prefs);
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:5000/api/user/preferences', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(prefs)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to save preferences');
       toast.success('Preferences saved');
       fetchUserPreferences();
     } catch (error) {
-      toast.error('Failed to save preferences');
+      console.error('Error saving preferences:', error);
+      toast.error(error.message || 'Failed to save preferences');
     }
   };
 
   return (
     <div className="dashboard">
-      {/* Sidebar */}
       <div className="sidebar">
         <div className="sidebar-header">
           <h3>Smart Transport</h3>
@@ -91,7 +181,6 @@ export default function SettingsPage() {
         </ul>
       </div>
 
-      {/* Main Content */}
       <div className="main-content">
         <div className="top-bar">
           <h2>Settings</h2>
@@ -106,7 +195,6 @@ export default function SettingsPage() {
         </div>
 
         <div className="content-area">
-          {/* Tab Navigation */}
           <div style={{
             display: 'flex',
             gap: '10px',
@@ -138,7 +226,6 @@ export default function SettingsPage() {
             ))}
           </div>
 
-          {/* Tab Content */}
           <div style={{
             background: 'white',
             borderRadius: '8px',

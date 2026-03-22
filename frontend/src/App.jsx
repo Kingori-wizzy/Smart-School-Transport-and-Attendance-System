@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react'; // Added useEffect import
+import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
@@ -8,7 +8,8 @@ import Login from './pages/Login/Login';
 import ProtectedRoute from './components/common/ProtectedRoute';
 import LoadingSpinner from './components/common/LoadingSpinner';
 import './assets/styles/index.css';
-import TransportStudents from './pages/Students/TransportStudents'; // ✅ Already added
+import TransportStudents from './pages/Students/TransportStudents';
+import SMSDashboard from './pages/Admin/SMSDashboard'; // ✅ ADDED SMS Dashboard import
 
 // Lazy load pages for better performance
 const Dashboard = lazy(() => import('./pages/Dashboard/Dashboard'));
@@ -22,7 +23,7 @@ function App() {
   // Listen for auth changes from AuthContext
   useEffect(() => {
     const handleAuthChange = (event) => {
-      console.log('🔑 Auth change detected in App:', event.detail);
+      console.log('Auth change detected in App:', event.detail);
     };
 
     window.addEventListener('auth-change', handleAuthChange);
@@ -71,7 +72,6 @@ function App() {
                       </ProtectedRoute>
                     } 
                   />
-                  {/* ✅ NEW ROUTE - Add this line */}
                   <Route 
                     path="/students/transport" 
                     element={
@@ -93,6 +93,15 @@ function App() {
                     element={
                       <ProtectedRoute>
                         <ReportsPage />
+                      </ProtectedRoute>
+                    } 
+                  />
+                  {/* ✅ ADDED SMS Dashboard Route */}
+                  <Route 
+                    path="/sms" 
+                    element={
+                      <ProtectedRoute>
+                        <SMSDashboard />
                       </ProtectedRoute>
                     } 
                   />

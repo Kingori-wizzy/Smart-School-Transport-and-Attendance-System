@@ -1,8 +1,6 @@
-/* eslint-disable no-unused-vars */
+ 
 import { useState, useEffect } from 'react';
 import { transportService } from '../../services/transport';
-import { userService } from '../../services/user'; // We'll create this
-import { attendanceService } from '../../services/attendance';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 
@@ -36,14 +34,17 @@ export default function DriverManagement() {
   const fetchDrivers = async () => {
     try {
       setLoading(true);
-      // Use the same API that worked in the console
       const response = await fetch('http://localhost:5000/api/users?role=driver', {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       const data = await response.json();
       
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to fetch drivers');
+      }
+      
       // Transform the data to match component format
-      const formattedDrivers = data.data.map(d => ({
+      const formattedDrivers = (data.data || []).map(d => ({
         id: d._id,
         _id: d._id,
         firstName: d.firstName || '',
@@ -52,44 +53,71 @@ export default function DriverManagement() {
         email: d.email || '',
         phone: d.phone || '',
         licenseNumber: d.driverDetails?.licenseNumber || '',
-        licenseExpiry: d.driverDetails?.licenseExpiry || new Date().toISOString().split('T')[0],
+        licenseExpiry: d.driverDetails?.licenseExpiry || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         experience: d.driverDetails?.experience || 0,
         assignedBus: d.driverDetails?.assignedBus || '',
-        status: d.isActive ? 'active' : 'inactive',
+        status: d.isActive !== false ? 'active' : 'inactive',
         emergencyContact: d.emergencyContact || '',
         address: d.address || '',
         joinDate: d.createdAt ? d.createdAt.split('T')[0] : new Date().toISOString().split('T')[0],
-        rating: 4.5, // Mock - you might want to calculate this from real data
-        totalTrips: 0, // Mock - calculate from trips data
-        incidents: 0 // Mock - calculate from incidents data
+        rating: d.driverDetails?.rating || 4.5,
+        totalTrips: d.driverDetails?.totalTrips || 0,
+        incidents: d.driverDetails?.incidents || 0
       }));
       
       setDrivers(formattedDrivers);
     } catch (error) {
       console.error('Error fetching drivers:', error);
-      toast.error('Failed to fetch drivers');
+      toast.error(error.message || 'Failed to fetch drivers');
     } finally {
       setLoading(false);
     }
   };
 
   const fetchBuses = async () => {
-    const data = await transportService.getBuses();
-    setBuses(Array.isArray(data) ? data : []);
+    try {
+      const data = await transportService.getBuses();
+      setBuses(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Error fetching buses:', error);
+    }
   };
 
-  const fetchDriverStats = (driver) => {
-    // Mock stats - replace with real API call to get driver performance
-    setDriverStats({
-      monthlyTrips: 45,
-      avgSpeed: 52,
-      onTimeRate: 94,
-      fuelEfficiency: 8.2,
-      studentCompliments: 12,
-      safetyScore: 98,
-      lastTrip: new Date().toISOString(),
-      nextTrip: new Date(Date.now() + 86400000).toISOString()
-    });
+  const fetchDriverStats = async (driver) => {
+    try {
+      const response = await fetch(`http://localhost:5000/api/driver/stats?driverId=${driver._id}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      if (data.success) {
+        setDriverStats(data.data);
+      } else {
+        // Fallback mock data
+        setDriverStats({
+          monthlyTrips: driver.totalTrips || 0,
+          avgSpeed: 45,
+          onTimeRate: 92,
+          fuelEfficiency: 8.5,
+          studentCompliments: 5,
+          safetyScore: 96,
+          lastTrip: new Date().toISOString(),
+          nextTrip: new Date(Date.now() + 86400000).toISOString()
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching driver stats:', error);
+      // Fallback mock data
+      setDriverStats({
+        monthlyTrips: driver.totalTrips || 0,
+        avgSpeed: 45,
+        onTimeRate: 92,
+        fuelEfficiency: 8.5,
+        studentCompliments: 5,
+        safetyScore: 96,
+        lastTrip: new Date().toISOString(),
+        nextTrip: new Date(Date.now() + 86400000).toISOString()
+      });
+    }
   };
 
   const handleInputChange = (e) => {
@@ -99,11 +127,30 @@ export default function DriverManagement() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    // Validate required fields
+    if (!formData.firstName || !formData.lastName) {
+      toast.error('First name and last name are required');
+      return;
+    }
+    if (!formData.phone) {
+      toast.error('Phone number is required');
+      return;
+    }
+    if (!formData.licenseNumber) {
+      toast.error('License number is required');
+      return;
+    }
+    if (!formData.licenseExpiry) {
+      toast.error('License expiry date is required');
+      return;
+    }
+
     try {
       const driverData = {
         firstName: formData.firstName,
         lastName: formData.lastName,
-        email: formData.email,
+        email: formData.email || `${formData.firstName.toLowerCase()}.${formData.lastName.toLowerCase()}@driver.com`,
         phone: formData.phone,
         role: 'driver',
         isActive: formData.status === 'active',
@@ -115,24 +162,44 @@ export default function DriverManagement() {
         }
       };
 
+      let response;
       if (editingDriver) {
         // Update existing driver
-        await userService.updateUser(editingDriver._id, driverData);
-        toast.success('Driver updated successfully');
+        response = await fetch(`http://localhost:5000/api/users/${editingDriver._id}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(driverData)
+        });
       } else {
-        // Create new driver with password
-        driverData.password = 'password123'; // Default password - you might want to generate this
-        await userService.createUser(driverData);
-        toast.success('Driver added successfully');
+        // Create new driver
+        driverData.password = 'password123';
+        response = await fetch('http://localhost:5000/api/users', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(driverData)
+        });
+      }
+
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to save driver');
       }
       
+      toast.success(editingDriver ? 'Driver updated successfully' : 'Driver added successfully');
       setShowForm(false);
       setEditingDriver(null);
       resetForm();
       fetchDrivers();
     } catch (error) {
       console.error('Error saving driver:', error);
-      toast.error('Failed to save driver');
+      toast.error(error.message || 'Failed to save driver');
     }
   };
 
@@ -170,27 +237,54 @@ export default function DriverManagement() {
     setShowForm(true);
   };
 
+  const handleViewStats = async (driver) => {
+    setSelectedDriver(driver);
+    await fetchDriverStats(driver);
+  };
+
   const handleDelete = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this driver?')) return;
+    if (!window.confirm('Are you sure you want to delete this driver? This action cannot be undone.')) return;
     try {
-      await userService.deleteUser(id);
+      const response = await fetch(`http://localhost:5000/api/users/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to delete driver');
+      }
+      
       toast.success('Driver deleted successfully');
       fetchDrivers();
     } catch (error) {
       console.error('Error deleting driver:', error);
-      toast.error('Failed to delete driver');
+      toast.error(error.message || 'Failed to delete driver');
     }
   };
 
   const handleStatusToggle = async (driver) => {
     const newStatus = driver.status === 'active' ? 'inactive' : 'active';
     try {
-      await userService.updateUser(driver._id, { isActive: newStatus === 'active' });
+      const response = await fetch(`http://localhost:5000/api/users/${driver._id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ isActive: newStatus === 'active' })
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to update status');
+      }
+      
       toast.success(`Driver ${newStatus === 'active' ? 'activated' : 'deactivated'}`);
       fetchDrivers();
     } catch (error) {
       console.error('Error toggling status:', error);
-      toast.error('Failed to update status');
+      toast.error(error.message || 'Failed to update status');
     }
   };
 
@@ -207,6 +301,7 @@ export default function DriverManagement() {
     return (
       <div style={{ textAlign: 'center', padding: '40px' }}>
         <div className="loading-spinner" style={{ margin: '0 auto' }} />
+        <p style={{ marginTop: '10px', color: '#666' }}>Loading drivers...</p>
       </div>
     );
   }
@@ -218,7 +313,9 @@ export default function DriverManagement() {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: '20px'
+        marginBottom: '20px',
+        flexWrap: 'wrap',
+        gap: '10px'
       }}>
         <h3 style={{ margin: 0 }}>Driver Management</h3>
         <button
@@ -374,6 +471,7 @@ export default function DriverManagement() {
                     name="email"
                     value={formData.email}
                     onChange={handleInputChange}
+                    placeholder="Optional - auto-generated if empty"
                     style={{
                       width: '100%',
                       padding: '8px',
@@ -450,6 +548,7 @@ export default function DriverManagement() {
                     value={formData.experience}
                     onChange={handleInputChange}
                     min="0"
+                    max="50"
                     style={{
                       width: '100%',
                       padding: '8px',
@@ -477,7 +576,7 @@ export default function DriverManagement() {
                     <option value="">Unassigned</option>
                     {buses.map(bus => (
                       <option key={bus._id} value={bus._id}>
-                        {bus.busNumber} - {bus.route || 'No route'}
+                        {bus.busNumber} - {bus.route || 'No route'} (Cap: {bus.capacity})
                       </option>
                     ))}
                   </select>
@@ -512,6 +611,7 @@ export default function DriverManagement() {
                     name="emergencyContact"
                     value={formData.emergencyContact}
                     onChange={handleInputChange}
+                    placeholder="Emergency phone number"
                     style={{
                       width: '100%',
                       padding: '8px',
@@ -530,6 +630,7 @@ export default function DriverManagement() {
                     value={formData.address}
                     onChange={handleInputChange}
                     rows="3"
+                    placeholder="Driver's residential address"
                     style={{
                       width: '100%',
                       padding: '8px',
@@ -545,12 +646,14 @@ export default function DriverManagement() {
                   type="submit"
                   style={{
                     flex: 1,
-                    padding: '10px',
+                    padding: '12px',
                     background: '#4CAF50',
                     color: 'white',
                     border: 'none',
                     borderRadius: '4px',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500'
                   }}
                 >
                   {editingDriver ? 'Update Driver' : 'Add Driver'}
@@ -563,18 +666,83 @@ export default function DriverManagement() {
                   }}
                   style={{
                     flex: 1,
-                    padding: '10px',
+                    padding: '12px',
                     background: '#f44336',
                     color: 'white',
                     border: 'none',
                     borderRadius: '4px',
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '500'
                   }}
                 >
                   Cancel
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Driver Stats Modal */}
+      {selectedDriver && driverStats && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            background: 'white',
+            padding: '30px',
+            borderRadius: '8px',
+            width: '450px',
+            maxWidth: '90%'
+          }}>
+            <h3 style={{ margin: '0 0 15px 0' }}>
+              {selectedDriver.name} - Performance Stats
+            </h3>
+            <div style={{ marginBottom: '10px' }}>
+              <strong>Monthly Trips:</strong> {driverStats.monthlyTrips}
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <strong>On-Time Rate:</strong> {driverStats.onTimeRate}%
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <strong>Fuel Efficiency:</strong> {driverStats.fuelEfficiency} km/L
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <strong>Safety Score:</strong> {driverStats.safetyScore}/100
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <strong>Student Compliments:</strong> {driverStats.studentCompliments}
+            </div>
+            <div style={{ marginBottom: '10px' }}>
+              <strong>Last Trip:</strong> {format(new Date(driverStats.lastTrip), 'MMM dd, yyyy')}
+            </div>
+            <div style={{ marginBottom: '20px' }}>
+              <strong>Next Trip:</strong> {format(new Date(driverStats.nextTrip), 'MMM dd, yyyy')}
+            </div>
+            <button
+              onClick={() => setSelectedDriver(null)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                background: '#2196F3',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Close
+            </button>
           </div>
         </div>
       )}
@@ -593,8 +761,15 @@ export default function DriverManagement() {
               padding: '20px',
               borderRadius: '8px',
               boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-              borderLeft: `4px solid ${getStatusColor(driver.status)}`
+              borderLeft: `4px solid ${getStatusColor(driver.status)}`,
+              transition: 'transform 0.2s, box-shadow 0.2s',
+              cursor: 'pointer',
+              ':hover': {
+                transform: 'translateY(-2px)',
+                boxShadow: '0 4px 8px rgba(0,0,0,0.15)'
+              }
             }}
+            onClick={() => handleViewStats(driver)}
           >
             <div style={{
               display: 'flex',
@@ -619,7 +794,7 @@ export default function DriverManagement() {
                 </div>
                 <div>
                   <h4 style={{ margin: 0 }}>{driver.name || `${driver.firstName} ${driver.lastName}`}</h4>
-                  <div style={{ fontSize: '12px', color: '#666' }}>{driver.email}</div>
+                  <div style={{ fontSize: '12px', color: '#666' }}>{driver.email || 'No email'}</div>
                 </div>
               </div>
               <span style={{
@@ -642,18 +817,18 @@ export default function DriverManagement() {
             }}>
               <div>
                 <div style={{ color: '#666' }}>📞 Phone</div>
-                <div>{driver.phone}</div>
+                <div>{driver.phone || 'N/A'}</div>
               </div>
               <div>
                 <div style={{ color: '#666' }}>🪪 License</div>
-                <div>{driver.licenseNumber}</div>
+                <div>{driver.licenseNumber || 'N/A'}</div>
               </div>
               <div>
                 <div style={{ color: '#666' }}>📅 Expiry</div>
                 <div style={{
-                  color: new Date(driver.licenseExpiry) < new Date() ? '#f44336' : 'inherit'
+                  color: driver.licenseExpiry && new Date(driver.licenseExpiry) < new Date() ? '#f44336' : 'inherit'
                 }}>
-                  {format(new Date(driver.licenseExpiry), 'MMM dd, yyyy')}
+                  {driver.licenseExpiry ? format(new Date(driver.licenseExpiry), 'MMM dd, yyyy') : 'N/A'}
                 </div>
               </div>
               <div>
@@ -706,7 +881,10 @@ export default function DriverManagement() {
               paddingTop: '15px'
             }}>
               <button
-                onClick={() => handleStatusToggle(driver)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleStatusToggle(driver);
+                }}
                 style={{
                   flex: 1,
                   padding: '8px',
@@ -714,13 +892,17 @@ export default function DriverManagement() {
                   color: 'white',
                   border: 'none',
                   borderRadius: '4px',
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  fontSize: '12px'
                 }}
               >
                 {driver.status === 'active' ? '🔴 Deactivate' : '🟢 Activate'}
               </button>
               <button
-                onClick={() => handleEdit(driver)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEdit(driver);
+                }}
                 style={{
                   flex: 1,
                   padding: '8px',
@@ -728,13 +910,17 @@ export default function DriverManagement() {
                   color: 'white',
                   border: 'none',
                   borderRadius: '4px',
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  fontSize: '12px'
                 }}
               >
                 ✏️ Edit
               </button>
               <button
-                onClick={() => handleDelete(driver.id)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDelete(driver.id);
+                }}
                 style={{
                   flex: 0.5,
                   padding: '8px',
@@ -742,7 +928,8 @@ export default function DriverManagement() {
                   color: 'white',
                   border: 'none',
                   borderRadius: '4px',
-                  cursor: 'pointer'
+                  cursor: 'pointer',
+                  fontSize: '12px'
                 }}
               >
                 🗑️
@@ -755,11 +942,34 @@ export default function DriverManagement() {
       {drivers.length === 0 && !loading && (
         <div style={{
           textAlign: 'center',
-          padding: '40px',
+          padding: '60px',
           background: 'white',
-          borderRadius: '8px'
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
         }}>
-          <p style={{ color: '#666' }}>No drivers found. Click "Add New Driver" to get started.</p>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>👤</div>
+          <h3 style={{ marginBottom: '8px' }}>No drivers found</h3>
+          <p style={{ color: '#666', marginBottom: '20px' }}>
+            Get started by adding your first driver to the system.
+          </p>
+          <button
+            onClick={() => {
+              setEditingDriver(null);
+              resetForm();
+              setShowForm(true);
+            }}
+            style={{
+              padding: '10px 24px',
+              background: '#4CAF50',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '14px'
+            }}
+          >
+            ➕ Add New Driver
+          </button>
         </div>
       )}
     </div>

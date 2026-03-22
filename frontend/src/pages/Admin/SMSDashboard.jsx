@@ -53,7 +53,7 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { format, subDays } from 'date-fns';
-import { smsAPI } from '../../services/api'; // 👈 Updated import
+import { smsAPI } from '../../services/api';
 
 const COLORS = ['#4CAF50', '#2196F3', '#FF9800', '#F44336', '#9C27B0'];
 
@@ -81,7 +81,6 @@ const SMSDashboard = () => {
 
   useEffect(() => {
     fetchSMSStats();
-    // Refresh every 30 seconds
     const interval = setInterval(fetchSMSStats, 30000);
     return () => clearInterval(interval);
   }, []);
@@ -89,15 +88,23 @@ const SMSDashboard = () => {
   const fetchSMSStats = async () => {
     try {
       setLoading(true);
-      // 👇 Using smsAPI instead of generic api
       const response = await smsAPI.getStats();
-      setStats(response.data.summary);
-      setUsage(response.data.usage);
-      setProviderHealth(response.data.providers);
+      const data = response.data;
+      
+      // Parse stats safely
+      const summary = data.summary || {};
+      setStats({
+        totalSMS: typeof summary.totalSMS === 'number' ? summary.totalSMS : 0,
+        totalCost: typeof summary.totalCost === 'number' ? summary.totalCost : 
+                   typeof summary.totalCost === 'string' ? parseFloat(summary.totalCost) : 0,
+        byProvider: summary.byProvider || {}
+      });
+      setUsage(data.usage || []);
+      setProviderHealth(data.providers || {});
       setError(null);
     } catch (err) {
+      console.error('Error fetching SMS stats:', err);
       setError('Failed to load SMS statistics');
-      console.error(err);
     } finally {
       setLoading(false);
     }
@@ -107,7 +114,6 @@ const SMSDashboard = () => {
     setTestLoading(true);
     setTestResult(null);
     try {
-      // 👇 Using smsAPI instead of generic api
       const response = await smsAPI.testSMS(testForm);
       setTestResult(response.data.result);
     } catch (err) {
@@ -117,7 +123,6 @@ const SMSDashboard = () => {
     }
   };
 
-  // Prepare chart data
   const prepareDailyData = () => {
     const last30Days = [];
     for (let i = 29; i >= 0; i--) {
@@ -126,7 +131,7 @@ const SMSDashboard = () => {
       last30Days.push({
         date: format(subDays(new Date(), i), 'MMM dd'),
         sms: dayData.count || 0,
-        cost: dayData.totalCost || 0,
+        cost: typeof dayData.totalCost === 'number' ? dayData.totalCost : 0,
         smsLeopard: dayData._id?.provider === 'smsLeopard' ? dayData.count : 0,
         textBee: dayData._id?.provider === 'textBee' ? dayData.count : 0
       });
@@ -158,6 +163,21 @@ const SMSDashboard = () => {
       count
     }));
   };
+
+  // Helper function to safely format cost
+  const formatCost = (value) => {
+    const num = typeof value === 'number' ? value : parseFloat(value);
+    return isNaN(num) ? '0.00' : num.toFixed(2);
+  };
+
+  // Calculate provider totals safely
+  const smsLeopardTotal = usage.filter(u => u._id?.provider === 'smsLeopard')
+    .reduce((acc, u) => acc + (u.count || 0), 0);
+  const textBeeTotal = usage.filter(u => u._id?.provider === 'textBee')
+    .reduce((acc, u) => acc + (u.count || 0), 0);
+  const smsLeopardCost = usage.filter(u => u._id?.provider === 'smsLeopard')
+    .reduce((acc, u) => acc + (u.totalCost || 0), 0);
+  const savingsEstimate = textBeeTotal * 0.5;
 
   if (loading && !stats) {
     return (
@@ -217,7 +237,7 @@ const SMSDashboard = () => {
                 <Box>
                   <Typography color="textSecondary" gutterBottom>SMSLeopard (Primary)</Typography>
                   <Typography variant="h5">
-                    {providerHealth.smsLeopard?.health ? '🟢 Online' : '🔴 Offline'}
+                    {providerHealth.smsLeopard?.health ? 'Online' : 'Offline'}
                   </Typography>
                   {providerHealth.smsLeopard?.balance && (
                     <Typography variant="body2" color="textSecondary">
@@ -248,7 +268,7 @@ const SMSDashboard = () => {
                 <Box>
                   <Typography color="textSecondary" gutterBottom>TextBee (Free - Fallback)</Typography>
                   <Typography variant="h5">
-                    {providerHealth.textBee?.health ? '🟢 Online' : '🟡 Check Device'}
+                    {providerHealth.textBee?.health ? 'Online' : 'Check Device'}
                   </Typography>
                   <Typography variant="body2" color="textSecondary">
                     Free SMS - No cost
@@ -286,9 +306,9 @@ const SMSDashboard = () => {
           <Card>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>Total Cost</Typography>
-              <Typography variant="h4">KES {stats?.totalCost?.toFixed(2) || '0.00'}</Typography>
+              <Typography variant="h4">KES {formatCost(stats?.totalCost)}</Typography>
               <Typography variant="body2" color="textSecondary">
-                Avg: KES {(stats?.totalCost / 30 || 0).toFixed(2)}/day
+                Avg: KES {formatCost((stats?.totalCost || 0) / 30)}/day
               </Typography>
             </CardContent>
           </Card>
@@ -298,13 +318,9 @@ const SMSDashboard = () => {
           <Card>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>SMSLeopard Usage</Typography>
-              <Typography variant="h4">
-                {usage.filter(u => u._id?.provider === 'smsLeopard')
-                  .reduce((acc, u) => acc + u.count, 0)}
-              </Typography>
+              <Typography variant="h4">{smsLeopardTotal}</Typography>
               <Typography variant="body2" color="textSecondary">
-                Cost: KES {usage.filter(u => u._id?.provider === 'smsLeopard')
-                  .reduce((acc, u) => acc + (u.totalCost || 0), 0).toFixed(2)}
+                Cost: KES {formatCost(smsLeopardCost)}
               </Typography>
             </CardContent>
           </Card>
@@ -314,13 +330,9 @@ const SMSDashboard = () => {
           <Card>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>TextBee Usage (Free)</Typography>
-              <Typography variant="h4">
-                {usage.filter(u => u._id?.provider === 'textBee')
-                  .reduce((acc, u) => acc + u.count, 0)}
-              </Typography>
+              <Typography variant="h4">{textBeeTotal}</Typography>
               <Typography variant="body2" color="textSecondary">
-                Saved: KES {(usage.filter(u => u._id?.provider === 'textBee')
-                  .reduce((acc, u) => acc + u.count, 0) * 0.5).toFixed(2)}
+                Saved: KES {formatCost(savingsEstimate)}
               </Typography>
             </CardContent>
           </Card>
@@ -455,8 +467,8 @@ const SMSDashboard = () => {
                         }
                       />
                     </TableCell>
-                    <TableCell align="right">{row.count}</TableCell>
-                    <TableCell align="right">{(row.totalCost || 0).toFixed(2)}</TableCell>
+                    <TableCell align="right">{row.count || 0}</TableCell>
+                    <TableCell align="right">{formatCost(row.totalCost)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -516,8 +528,7 @@ const SMSDashboard = () => {
                       <Divider sx={{ my: 2 }} />
                       <Typography variant="body2" color="textSecondary">Savings</Typography>
                       <Typography variant="h6" color="success.main">
-                        KES {(usage.filter(u => u._id?.provider === 'textBee')
-                          .reduce((acc, u) => acc + u.count, 0) * 0.5).toFixed(2)}
+                        KES {formatCost(savingsEstimate)}
                       </Typography>
                     </Grid>
                   </Grid>

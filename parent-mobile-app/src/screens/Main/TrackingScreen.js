@@ -87,12 +87,7 @@ const InfoPanel = ({ busLocation, eta, isConnected, onCenter, onAlert, colors })
 );
 
 export default function TrackingScreen({ route, navigation }) {
-  if (!route?.params?.child) {
-    navigation.goBack();
-    return null;
-  }
-
-  const { child } = route.params;
+  const { child } = route?.params || {};
   const { liveLocations, isConnected, socket } = useSocket();
   const { colors, isDarkMode } = useTheme();
   const mapRef = useRef(null);
@@ -108,12 +103,21 @@ export default function TrackingScreen({ route, navigation }) {
   });
   const [mapZoom, setMapZoom] = useState(13);
 
+  // ✅ FIX: Handle missing child in useEffect, not during render
   useEffect(() => {
-    initializeTracking();
-  }, []);
+    if (!child) {
+      navigation.goBack();
+    }
+  }, [child, navigation]);
 
   useEffect(() => {
-    const childId = child._id || child.id;
+    if (child) {
+      initializeTracking();
+    }
+  }, [child]);
+
+  useEffect(() => {
+    const childId = child?._id || child?.id;
     if (childId && liveLocations[childId]) {
       const location = liveLocations[childId];
       setBusLocation(location);
@@ -144,7 +148,7 @@ export default function TrackingScreen({ route, navigation }) {
 
   const fetchRouteData = async () => {
     try {
-      const childId = child._id || child.id;
+      const childId = child?._id || child?.id;
       const response = await api.parent.getChildLocation(childId);
       
       if (response?.route?.coordinates) {
@@ -194,7 +198,7 @@ export default function TrackingScreen({ route, navigation }) {
 
   const sendAlert = async (type) => {
     try {
-      const childId = child._id || child.id;
+      const childId = child?._id || child?.id;
       await api.transport.reportProblem({
         type,
         childId,
@@ -211,9 +215,24 @@ export default function TrackingScreen({ route, navigation }) {
       
       Alert.alert('Success', 'Alert sent to driver');
     } catch (error) {
+      console.error('Error sending alert:', error);
       Alert.alert('Error', 'Failed to send alert');
     }
   };
+
+  // Show loading if no child or still loading
+  if (!child && loading) {
+    return (
+      <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>Loading...</Text>
+      </View>
+    );
+  }
+
+  if (!child) {
+    return null;
+  }
 
   if (loading) {
     return (

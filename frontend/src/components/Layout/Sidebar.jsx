@@ -7,21 +7,21 @@ export default function Sidebar() {
   const { theme, toggleTheme, sidebarCollapsed } = useTheme();
 
   const menuItems = [
-    { path: '/', icon: '🏠', label: 'Dashboard' },
-    { path: '/attendance', icon: '📝', label: 'Attendance' },
-    { path: '/transport', icon: '🚌', label: 'Transport' },
-    // ✅ NEW MENU ITEM - Transport Students
-    { path: '/students/transport', icon: '🎓', label: 'Transport Students' },
-    { path: '/analytics', icon: '📊', label: 'Analytics' },
-    { path: '/reports', icon: '📑', label: 'Reports' },
-    { path: '/settings', icon: '⚙️', label: 'Settings' }
+    { path: '/', icon: 'D', label: 'Dashboard' },
+    { path: '/attendance', icon: 'A', label: 'Attendance' },
+    { path: '/transport', icon: 'B', label: 'Transport' },
+    { path: '/students/transport', icon: 'S', label: 'Transport Students' },
+    { path: '/analytics', icon: 'G', label: 'Analytics' },
+    { path: '/reports', icon: 'R', label: 'Reports' },
+    { path: '/sms', icon: 'M', label: 'SMS Dashboard' },
+    { path: '/settings', icon: 'S', label: 'Settings' }
   ];
 
   if (sidebarCollapsed) {
     return (
       <div className="sidebar" style={{ width: '80px' }}>
         <div className="sidebar-header" style={{ textAlign: 'center' }}>
-          <h3 style={{ fontSize: '14px' }}>🚌</h3>
+          <h3 style={{ fontSize: '14px' }}>ST</h3>
         </div>
         <ul className="sidebar-nav">
           {menuItems.map(item => (
@@ -40,7 +40,7 @@ export default function Sidebar() {
         
         <div className="sidebar-footer" style={{ textAlign: 'center' }}>
           <p title={isConnected ? 'Live' : 'Offline'}>
-            {isConnected ? '🟢' : '🔴'}
+            {isConnected ? '●' : '○'}
           </p>
           <button
             onClick={toggleTheme}
@@ -81,10 +81,10 @@ export default function Sidebar() {
       
       <div className="sidebar-footer">
         <p>
-          <span>📡</span> {isConnected ? 'Live' : 'Offline'}
+          <span>Network</span> {isConnected ? 'Live' : 'Offline'}
         </p>
         <p>
-          <span>🕐</span> {new Date().toLocaleTimeString()}
+          <span>Time</span> {new Date().toLocaleTimeString()}
         </p>
         <button
           onClick={toggleTheme}
@@ -103,7 +103,7 @@ export default function Sidebar() {
             gap: '8px'
           }}
         >
-          {theme === 'light' ? '🌙 Dark Mode' : '☀️ Light Mode'}
+          {theme === 'light' ? 'Dark Mode' : 'Light Mode'}
         </button>
       </div>
     </div>

@@ -1,10 +1,9 @@
+/* eslint-disable no-unused-vars */
 import { useState, useEffect } from 'react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
-import { reportService } from '../../services/report';
-import exportService from '../../services/exportService';
 
-export default function ReportViewer() {
+export default function ReportViewer({ reports: externalReports, loading: externalLoading, onDelete, onRefresh }) {
   const [selectedReport, setSelectedReport] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
@@ -12,18 +11,36 @@ export default function ReportViewer() {
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Use external props if provided, otherwise fetch internally
+  const useExternalData = externalReports !== undefined;
+
   useEffect(() => {
-    fetchReports();
-  }, []);
+    if (!useExternalData) {
+      fetchReports();
+    } else {
+      setReports(externalReports || []);
+      setLoading(externalLoading || false);
+    }
+  }, [useExternalData, externalReports, externalLoading]);
 
   const fetchReports = async () => {
     try {
       setLoading(true);
-      const response = await reportService.getSavedReports();
-      setReports(response.data || []);
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:5000/api/reports', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        setReports(data.data || []);
+      } else {
+        setReports([]);
+      }
     } catch (error) {
       console.error('Error fetching reports:', error);
       toast.error('Failed to load reports');
+      setReports([]);
     } finally {
       setLoading(false);
     }
@@ -66,11 +83,31 @@ export default function ReportViewer() {
 
   const handleDownload = async (report) => {
     try {
-      await exportService.exportToPDF(report.data || report, report.name, {
-        title: report.name,
-        headers: report.headers,
-        columns: report.columns
-      });
+      // Create a simple text/CSV download as fallback since exportService is removed
+      const data = report.data || report;
+      let content = '';
+      let filename = `${report.name || 'report'}.${report.format || 'pdf'}`;
+      
+      if (report.format === 'csv') {
+        if (Array.isArray(data) && data.length > 0) {
+          const headers = Object.keys(data[0]).join(',');
+          const rows = data.map(row => Object.values(row).join(',')).join('\n');
+          content = `${headers}\n${rows}`;
+        } else {
+          content = JSON.stringify(data, null, 2);
+        }
+      } else {
+        content = JSON.stringify(data, null, 2);
+        filename = `${report.name || 'report'}.json`;
+      }
+      
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      window.URL.revokeObjectURL(url);
       toast.success(`Downloading ${report.name}`);
     } catch (error) {
       console.error('Error downloading report:', error);
@@ -82,17 +119,31 @@ export default function ReportViewer() {
     if (!window.confirm('Are you sure you want to delete this report?')) return;
     
     try {
-      await reportService.deleteReport(id);
-      setReports(reports.filter(r => r.id !== id));
+      if (onDelete) {
+        await onDelete(id);
+        if (!useExternalData) {
+          setReports(reports.filter(r => r.id !== id));
+        }
+      } else {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`http://localhost:5000/api/reports/${id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Failed to delete report');
+        setReports(reports.filter(r => r.id !== id));
+      }
       toast.success('Report deleted successfully');
     } catch (error) {
       console.error('Error deleting report:', error);
-      toast.error('Failed to delete report');
+      toast.error(error.message || 'Failed to delete report');
     }
   };
 
   const handleShare = (report) => {
-    navigator.clipboard.writeText(`https://smarttransport.com/reports/${report.id}`);
+    const shareUrl = `${window.location.origin}/reports/${report.id}`;
+    navigator.clipboard.writeText(shareUrl);
     toast.success(`Share link copied for ${report.name}`);
   };
 
@@ -126,6 +177,9 @@ export default function ReportViewer() {
       printWindow.focus();
       printWindow.print();
       toast.success(`Printing ${report.name}`);
+    } else {
+      // Fallback if element not found
+      toast.info(`Preview ${report.name} for printing`);
     }
   };
 

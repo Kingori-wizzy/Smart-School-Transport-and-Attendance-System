@@ -1,9 +1,7 @@
 /* eslint-disable no-unused-vars */
- 
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
-import { userService } from '../../services/user';
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
@@ -36,16 +34,15 @@ export default function UserManagement() {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      // Fetch real users from API
+      const token = localStorage.getItem('token');
       const response = await fetch('http://localhost:5000/api/users', {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await response.json();
       
       if (data.success) {
         setUsers(data.data || []);
       } else {
-        // Fallback to mock data if API fails
         setUsers([]);
       }
     } catch (error) {
@@ -108,7 +105,7 @@ export default function UserManagement() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (formData.password !== formData.confirmPassword) {
+    if (!editingUser && formData.password !== formData.confirmPassword) {
       toast.error('Passwords do not match');
       return;
     }
@@ -118,11 +115,15 @@ export default function UserManagement() {
         firstName: formData.firstName,
         lastName: formData.lastName,
         email: formData.email,
-        password: formData.password,
         phone: formData.phone,
         role: formData.role,
         isActive: formData.status === 'active'
       };
+
+      // Add password only for new users
+      if (!editingUser) {
+        userData.password = formData.password || 'password123';
+      }
 
       // Add role-specific details
       if (formData.role === 'driver') {
@@ -133,23 +134,35 @@ export default function UserManagement() {
         };
       }
 
-      if (editingUser) {
-        // Update existing user
-        await userService.updateUser(editingUser._id, userData);
-        toast.success('User updated successfully');
-      } else {
-        // Create new user
-        await userService.createUser(userData);
-        toast.success('User created successfully');
+      const token = localStorage.getItem('token');
+      const url = editingUser 
+        ? `http://localhost:5000/api/users/${editingUser._id}`
+        : 'http://localhost:5000/api/users';
+      const method = editingUser ? 'PUT' : 'POST';
+      
+      const response = await fetch(url, {
+        method,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(userData)
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to save user');
       }
       
+      toast.success(editingUser ? 'User updated successfully' : 'User created successfully');
       setShowForm(false);
       setEditingUser(null);
       resetForm();
       fetchUsers();
     } catch (error) {
       console.error('Error saving user:', error);
-      toast.error(error.response?.data?.message || 'Failed to save user');
+      toast.error(error.message || 'Failed to save user');
     }
   };
 
@@ -196,30 +209,45 @@ export default function UserManagement() {
     if (!window.confirm('Are you sure you want to delete this user?')) return;
     
     try {
-      await userService.deleteUser(id);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:5000/api/users/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Failed to delete user');
       toast.success('User deleted successfully');
       fetchUsers();
     } catch (error) {
       console.error('Error deleting user:', error);
-      toast.error('Failed to delete user');
+      toast.error(error.message || 'Failed to delete user');
     }
   };
 
   const handleStatusToggle = async (user) => {
     try {
-      const newStatus = user.isActive ? 'inactive' : 'active';
-      await userService.updateUser(user._id, { isActive: !user.isActive });
-      toast.success(`User ${newStatus === 'active' ? 'activated' : 'deactivated'}`);
+      const newStatus = !user.isActive;
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:5000/api/users/${user._id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ isActive: newStatus })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Failed to update status');
+      toast.success(`User ${newStatus ? 'activated' : 'deactivated'}`);
       fetchUsers();
     } catch (error) {
       console.error('Error toggling user status:', error);
-      toast.error('Failed to update user status');
+      toast.error(error.message || 'Failed to update user status');
     }
   };
 
   const handleResetPassword = async (user) => {
     try {
-      // You might want to implement a password reset email functionality
       toast.success(`Password reset email sent to ${user.email}`);
     } catch (error) {
       console.error('Error resetting password:', error);
@@ -347,7 +375,7 @@ export default function UserManagement() {
               <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
               <th style={{ padding: '15px', textAlign: 'left' }}>Last Login</th>
               <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-            </tr>
+             </tr>
           </thead>
           <tbody>
             {users.length > 0 ? users.map(user => (

@@ -2,11 +2,6 @@
 /* eslint-disable react-hooks/exhaustive-deps */
 /* eslint-disable no-unused-vars */
 import { useState, useEffect } from 'react';
-import { transportService } from '../../services/transport';
-import { studentService } from '../../services/student';
-import { userService } from '../../services/user';
-import { routeService } from '../../services/route';
-import { tripService } from '../../services/trip';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 
@@ -24,11 +19,20 @@ export default function EnhancedTransportManagement() {
   const [editingItem, setEditingItem] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
-
+  
+  // Assignment Modal State
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [selectedBusForAssignment, setSelectedBusForAssignment] = useState(null);
+  const [availableStudents, setAvailableStudents] = useState([]);
+  const [selectedStudents, setSelectedStudents] = useState([]);
+  const [assignLoading, setAssignLoading] = useState(false);
+  
   const [formData, setFormData] = useState({
     // Bus fields
     busNumber: '',
+    registrationNumber: '',
     busId: '',
+    driverId: '',
     driverName: '',
     driverPhone: '',
     capacity: 40,
@@ -69,10 +73,11 @@ export default function EnhancedTransportManagement() {
     startTime: '',
     endTime: '',
     tripDate: '',
+    tripType: 'morning',
     
     // Assignment fields
     studentId: '',
-    busId: ''
+    busAssignmentId: ''
   });
 
   useEffect(() => {
@@ -83,16 +88,14 @@ export default function EnhancedTransportManagement() {
     try {
       setLoading(true);
       
-      // Fetch all data in parallel
       const [busesData, studentsData, driversData, routesData, tripsData] = await Promise.allSettled([
-        transportService.getBuses(),
-        studentService.getStudents(),
+        fetchBusesFromAPI(),
+        fetchStudentsFromAPI(),
         fetchDriversFromAPI(),
         fetchRoutesFromAPI(),
         fetchTripsFromAPI()
       ]);
       
-      // Process buses
       if (busesData.status === 'fulfilled') {
         setBuses(Array.isArray(busesData.value) ? busesData.value : []);
       } else {
@@ -100,16 +103,14 @@ export default function EnhancedTransportManagement() {
         setBuses([]);
       }
 
-      // Process students
       if (studentsData.status === 'fulfilled') {
-        const studentsArray = studentsData.value?.data || [];
+        const studentsArray = studentsData.value?.data || studentsData.value || [];
         setStudents(Array.isArray(studentsArray) ? studentsArray : []);
       } else {
         console.error('Error fetching students:', studentsData.reason);
         setStudents([]);
       }
 
-      // Process drivers
       if (driversData.status === 'fulfilled') {
         setDrivers(driversData.value);
       } else {
@@ -117,7 +118,6 @@ export default function EnhancedTransportManagement() {
         setDrivers([]);
       }
 
-      // Process routes
       if (routesData.status === 'fulfilled') {
         setRoutes(routesData.value);
       } else {
@@ -125,7 +125,6 @@ export default function EnhancedTransportManagement() {
         setRoutes([]);
       }
 
-      // Process trips
       if (tripsData.status === 'fulfilled') {
         setTrips(tripsData.value);
       } else {
@@ -133,10 +132,9 @@ export default function EnhancedTransportManagement() {
         setTrips([]);
       }
 
-      // Calculate assignments (students with buses)
-      const studentsWithBuses = studentsData.status === 'fulfilled' 
-        ? (studentsData.value?.data || []).filter(s => s.busId)
-        : [];
+      const studentsWithBuses = (studentsData.status === 'fulfilled' 
+        ? (studentsData.value?.data || studentsData.value || [])
+        : []).filter(s => s.busId || s.transportDetails?.busId);
       setAssignments(studentsWithBuses);
 
     } catch (error) {
@@ -147,19 +145,43 @@ export default function EnhancedTransportManagement() {
     }
   };
 
+  const fetchBusesFromAPI = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/buses', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      if (!data.success) return [];
+      return data.data || [];
+    } catch (error) {
+      console.error('Error fetching buses:', error);
+      return [];
+    }
+  };
+
+  const fetchStudentsFromAPI = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/api/students', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      if (!data.success) return { data: [] };
+      return data;
+    } catch (error) {
+      console.error('Error fetching students:', error);
+      return { data: [] };
+    }
+  };
+
   const fetchDriversFromAPI = async () => {
     try {
       const response = await fetch('http://localhost:5000/api/users?role=driver', {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       const data = await response.json();
+      if (!data.success) return [];
       
-      if (!data.success) {
-        console.error('API returned error:', data.message);
-        return [];
-      }
-      
-      return data.data.map(d => ({
+      return (data.data || []).map(d => ({
         id: d._id,
         _id: d._id,
         firstName: d.firstName || '',
@@ -171,9 +193,9 @@ export default function EnhancedTransportManagement() {
         licenseExpiry: d.driverDetails?.licenseExpiry || new Date().toISOString().split('T')[0],
         experience: d.driverDetails?.experience || 0,
         assignedBus: d.driverDetails?.assignedBus || '',
-        status: d.isActive ? 'active' : 'inactive',
-        rating: 4.5,
-        totalTrips: 0
+        status: d.isActive !== false ? 'active' : 'inactive',
+        rating: d.driverDetails?.rating || 4.5,
+        totalTrips: d.driverDetails?.totalTrips || 0
       }));
     } catch (error) {
       console.error('Error fetching drivers:', error);
@@ -187,14 +209,9 @@ export default function EnhancedTransportManagement() {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       const data = await response.json();
-      
-      if (!data.success) {
-        console.error('API returned error:', data.message);
-        return [];
-      }
+      if (!data.success) return [];
       
       return (data.data || []).map(route => {
-        // Extract start and end points from stops if available
         let startPoint = '';
         let endPoint = '';
         if (route.stops && route.stops.length > 0) {
@@ -212,7 +229,7 @@ export default function EnhancedTransportManagement() {
           distance: route.distance || 0,
           duration: route.estimatedDuration || 0,
           stops: route.stops?.length || 0,
-          status: route.active ? 'active' : 'inactive',
+          status: route.active !== false ? 'active' : 'inactive',
           assignedBuses: route.busId ? [route.busId] : []
         };
       });
@@ -228,16 +245,12 @@ export default function EnhancedTransportManagement() {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
       const data = await response.json();
-      
-      if (!data.success) {
-        console.error('API returned error:', data.message);
-        return [];
-      }
+      if (!data.success) return [];
       
       return (data.data || []).map(trip => ({
         id: trip._id,
         _id: trip._id,
-        tripName: `${trip.routeName || 'Trip'} - ${trip.tripType || ''}`,
+        tripName: `${trip.routeName || 'Trip'}${trip.tripType ? ` - ${trip.tripType}` : ''}`,
         route: trip.routeName || 'Unknown Route',
         bus: trip.vehicleId || 'Unknown Bus',
         driver: typeof trip.driverId === 'object' ? trip.driverId?.name || 'Unknown Driver' : 'Unknown Driver',
@@ -254,6 +267,20 @@ export default function EnhancedTransportManagement() {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
+    
+    if (name === 'driverId') {
+      const selectedDriver = drivers.find(d => d._id === value);
+      if (selectedDriver) {
+        setFormData(prev => ({
+          ...prev,
+          driverId: value,
+          driverName: selectedDriver.name,
+          driverPhone: selectedDriver.phone
+        }));
+        return;
+      }
+    }
+    
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -261,39 +288,110 @@ export default function EnhancedTransportManagement() {
     e.preventDefault();
     try {
       if (activeTab === 'buses') {
-        if (editingItem) {
-          await transportService.updateBus(editingItem._id, formData);
-          toast.success('Bus updated successfully');
-        } else {
-          await transportService.createBus(formData);
-          toast.success('Bus added successfully');
-        }
-      } else if (activeTab === 'drivers') {
-        const driverData = {
-          firstName: formData.firstName,
-          lastName: formData.lastName,
-          email: formData.email,
-          phone: formData.phone,
-          role: 'driver',
-          isActive: formData.status === 'active',
-          driverDetails: {
-            licenseNumber: formData.licenseNumber,
-            licenseExpiry: formData.licenseExpiry,
-            experience: parseInt(formData.experience) || 0,
-            assignedBus: formData.assignedBus || null
-          }
+        const busData = {
+          busNumber: formData.busNumber,
+          registrationNumber: formData.registrationNumber,
+          busId: formData.busId,
+          driverId: formData.driverId || null,
+          driverName: formData.driverName,
+          driverPhone: formData.driverPhone,
+          capacity: parseInt(formData.capacity),
+          route: formData.route,
+          status: formData.status,
+          fuelLevel: parseInt(formData.fuelLevel),
+          lastMaintenance: formData.lastMaintenance || null,
+          nextMaintenance: formData.nextMaintenance || null,
+          insuranceExpiry: formData.insuranceExpiry || null
         };
 
-        if (editingItem) {
-          await userService.updateUser(editingItem._id, driverData);
-          toast.success('Driver updated successfully');
-        } else {
-          driverData.password = 'password123';
-          await userService.createUser(driverData);
-          toast.success('Driver added successfully');
+        const url = editingItem 
+          ? `http://localhost:5000/api/buses/${editingItem._id}`
+          : 'http://localhost:5000/api/buses';
+        const method = editingItem ? 'PUT' : 'POST';
+        
+        const response = await fetch(url, {
+          method,
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(busData)
+        });
+        
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || 'Failed to save bus');
+        
+        toast.success(editingItem ? 'Bus updated successfully' : 'Bus added successfully');
+      } 
+      else if (activeTab === 'drivers') {
+        if (!formData.firstName || !formData.lastName) {
+          toast.error('First name and last name are required');
+          return;
         }
-      } else if (activeTab === 'routes') {
-        // Format route data to match backend model
+        if (!formData.phone) {
+          toast.error('Phone number is required');
+          return;
+        }
+
+        const fullName = `${formData.firstName} ${formData.lastName}`.trim();
+        let email = formData.email;
+        if (!email) {
+          email = `${formData.firstName.toLowerCase()}.${formData.lastName.toLowerCase()}.${Date.now()}@driver.com`;
+        }
+
+        let formattedPhone = formData.phone;
+        const phoneDigits = formData.phone.replace(/\D/g, '');
+        if (phoneDigits.length >= 10) {
+          formattedPhone = phoneDigits.slice(0, 10);
+        }
+
+        const driverData = {
+          name: fullName,
+          email: email,
+          password: 'password123',
+          phone: formattedPhone,
+          role: 'driver',
+          isActive: formData.status === 'active',
+          firstName: formData.firstName,
+          lastName: formData.lastName
+        };
+
+        if (formData.licenseNumber) {
+          driverData.driverDetails = {
+            licenseNumber: formData.licenseNumber,
+            licenseExpiry: formData.licenseExpiry || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            experience: parseInt(formData.experience) || 0,
+            assignedBus: formData.assignedBus || null
+          };
+        }
+
+        const url = editingItem 
+          ? `http://localhost:5000/api/users/${editingItem._id}`
+          : 'http://localhost:5000/api/users';
+        const method = editingItem ? 'PUT' : 'POST';
+        
+        const response = await fetch(url, {
+          method,
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(driverData)
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) {
+          if (result.errors) {
+            const errorMessages = result.errors.map(e => e.msg).join(', ');
+            throw new Error(errorMessages);
+          }
+          throw new Error(result.message || 'Failed to save driver');
+        }
+        
+        toast.success(editingItem ? 'Driver updated successfully' : 'Driver added successfully');
+      }
+      else if (activeTab === 'routes') {
         const routeData = {
           name: formData.routeName,
           description: formData.description,
@@ -303,51 +401,78 @@ export default function EnhancedTransportManagement() {
           stops: []
         };
         
-        // Add start point as first stop if provided
         if (formData.startPoint) {
-          routeData.stops.push({
-            name: formData.startPoint,
-            order: 0
-          });
+          routeData.stops.push({ name: formData.startPoint, order: 0 });
         }
-        
-        // Add end point as last stop if provided and different from start
         if (formData.endPoint && formData.endPoint !== formData.startPoint) {
-          routeData.stops.push({
-            name: formData.endPoint,
-            order: 1
-          });
+          routeData.stops.push({ name: formData.endPoint, order: 1 });
         }
 
-        if (editingItem) {
-          await routeService.updateRoute(editingItem._id, routeData);
-          toast.success('Route updated successfully');
-        } else {
-          await routeService.createRoute(routeData);
-          toast.success('Route created successfully');
+        const url = editingItem 
+          ? `http://localhost:5000/api/routes/${editingItem._id}`
+          : 'http://localhost:5000/api/routes';
+        const method = editingItem ? 'PUT' : 'POST';
+        
+        const response = await fetch(url, {
+          method,
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(routeData)
+        });
+        
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || 'Failed to save route');
+        
+        toast.success(editingItem ? 'Route updated successfully' : 'Route created successfully');
+      }
+      else if (activeTab === 'trips') {
+        if (!formData.routeId) {
+          toast.error('Please select a route');
+          return;
         }
-      } else if (activeTab === 'trips') {
+        if (!formData.driverId) {
+          toast.error('Please select a driver');
+          return;
+        }
+        if (!formData.tripDate || !formData.startTime) {
+          toast.error('Please select trip date and time');
+          return;
+        }
+
+        const selectedRoute = routes.find(r => r._id === formData.routeId);
+        const selectedBus = buses.find(b => b._id === formData.busId);
+        
         const tripData = {
-          routeName: formData.routeName,
-          vehicleId: formData.busId,
+          routeName: selectedRoute?.routeName || '',
+          vehicleId: selectedBus?.busNumber || '',
           driverId: formData.driverId,
-          tripType: 'morning',
-          scheduledStartTime: formData.tripDate && formData.startTime 
-            ? new Date(`${formData.tripDate}T${formData.startTime}:00`).toISOString()
-            : new Date().toISOString(),
-          scheduledEndTime: formData.tripDate && formData.endTime
-            ? new Date(`${formData.tripDate}T${formData.endTime}:00`).toISOString()
-            : new Date().toISOString(),
-          status: 'scheduled'
+          tripType: formData.tripType || 'morning',
+          scheduledStartTime: new Date(`${formData.tripDate}T${formData.startTime}:00`).toISOString(),
+          scheduledEndTime: formData.endTime ? new Date(`${formData.tripDate}T${formData.endTime}:00`).toISOString() : null,
+          status: formData.status || 'scheduled'
         };
 
-        if (editingItem) {
-          await tripService.updateTrip(editingItem._id, tripData);
-          toast.success('Trip updated successfully');
-        } else {
-          await tripService.createTrip(tripData);
-          toast.success('Trip created successfully');
-        }
+        const url = editingItem 
+          ? `http://localhost:5000/api/trips/${editingItem._id}`
+          : 'http://localhost:5000/api/trips';
+        const method = editingItem ? 'PUT' : 'POST';
+        
+        const response = await fetch(url, {
+          method,
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(tripData)
+        });
+        
+        const result = await response.json();
+        
+        if (!response.ok) throw new Error(result.message || 'Failed to save trip');
+        
+        toast.success(editingItem ? 'Trip updated successfully' : 'Trip created successfully');
       }
       
       setShowForm(false);
@@ -356,20 +481,20 @@ export default function EnhancedTransportManagement() {
       fetchAllData();
     } catch (error) {
       console.error('Error saving:', error);
-      toast.error('Failed to save');
+      toast.error(error.message || 'Failed to save');
     }
   };
 
   const resetForm = () => {
     setFormData({
-      busNumber: '', busId: '', driverName: '', driverPhone: '', capacity: 40,
-      route: '', status: 'active', fuelLevel: 100, lastMaintenance: '',
+      busNumber: '', registrationNumber: '', busId: '', driverId: '', driverName: '', driverPhone: '',
+      capacity: 40, route: '', status: 'active', fuelLevel: 100, lastMaintenance: '',
       nextMaintenance: '', insuranceExpiry: '', firstName: '', lastName: '',
       email: '', phone: '', licenseNumber: '', licenseExpiry: '', experience: 0,
       assignedBus: '', emergencyContact: '', address: '', routeName: '',
       description: '', startPoint: '', endPoint: '', distance: 0, duration: 0,
       stops: 0, waypoints: [], tripName: '', routeId: '', busId: '', driverId: '',
-      startTime: '', endTime: '', tripDate: '', studentId: ''
+      startTime: '', endTime: '', tripDate: '', tripType: 'morning', studentId: '', busAssignmentId: ''
     });
   };
 
@@ -379,16 +504,18 @@ export default function EnhancedTransportManagement() {
       setFormData({
         ...formData,
         busNumber: item.busNumber || '',
+        registrationNumber: item.registrationNumber || '',
         busId: item.busId || '',
+        driverId: item.driverId?._id || item.driverId || '',
         driverName: item.driverName || '',
         driverPhone: item.driverPhone || '',
         capacity: item.capacity || 40,
         route: item.route || '',
         status: item.status || 'active',
         fuelLevel: item.fuelLevel || 100,
-        lastMaintenance: item.lastMaintenance || '',
-        nextMaintenance: item.nextMaintenance || '',
-        insuranceExpiry: item.insuranceExpiry || ''
+        lastMaintenance: item.lastMaintenance ? item.lastMaintenance.split('T')[0] : '',
+        nextMaintenance: item.nextMaintenance ? item.nextMaintenance.split('T')[0] : '',
+        insuranceExpiry: item.insuranceExpiry ? item.insuranceExpiry.split('T')[0] : ''
       });
     } else if (activeTab === 'drivers') {
       setFormData({
@@ -417,6 +544,18 @@ export default function EnhancedTransportManagement() {
         stops: item.stops || 0,
         status: item.status || 'active'
       });
+    } else if (activeTab === 'trips') {
+      setFormData({
+        ...formData,
+        routeId: item.routeId || item.route?._id || '',
+        busId: item.vehicleId ? buses.find(b => b.busNumber === item.vehicleId)?._id : '',
+        driverId: item.driverId || item.driver?._id || '',
+        startTime: item.scheduledStartTime ? format(new Date(item.scheduledStartTime), 'HH:mm') : '',
+        endTime: item.scheduledEndTime ? format(new Date(item.scheduledEndTime), 'HH:mm') : '',
+        tripDate: item.scheduledStartTime ? format(new Date(item.scheduledStartTime), 'yyyy-MM-dd') : '',
+        tripType: item.tripType || 'morning',
+        status: item.status || 'scheduled'
+      });
     }
     setShowForm(true);
   };
@@ -424,23 +563,28 @@ export default function EnhancedTransportManagement() {
   const handleDelete = async (id) => {
     if (!window.confirm('Are you sure you want to delete this item?')) return;
     try {
-      if (activeTab === 'buses') {
-        await transportService.deleteBus(id);
-        toast.success('Bus deleted successfully');
-      } else if (activeTab === 'drivers') {
-        await userService.deleteUser(id);
-        toast.success('Driver deleted successfully');
-      } else if (activeTab === 'routes') {
-        await routeService.deleteRoute(id);
-        toast.success('Route deleted successfully');
-      } else if (activeTab === 'trips') {
-        await tripService.deleteTrip(id);
-        toast.success('Trip deleted successfully');
+      let url = '';
+      if (activeTab === 'buses') url = `http://localhost:5000/api/buses/${id}`;
+      else if (activeTab === 'drivers') url = `http://localhost:5000/api/users/${id}`;
+      else if (activeTab === 'routes') url = `http://localhost:5000/api/routes/${id}`;
+      else if (activeTab === 'trips') url = `http://localhost:5000/api/trips/${id}`;
+      else return;
+
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to delete');
       }
+      
+      toast.success(`${activeTab.slice(0, -1)} deleted successfully`);
       fetchAllData();
     } catch (error) {
       console.error('Error deleting:', error);
-      toast.error('Failed to delete');
+      toast.error(error.message || 'Failed to delete');
     }
   };
 
@@ -448,38 +592,62 @@ export default function EnhancedTransportManagement() {
     const newStatus = item.status === 'active' ? 'inactive' : 'active';
     try {
       if (activeTab === 'buses') {
-        await transportService.updateBusStatus(item._id, newStatus);
+        const response = await fetch(`http://localhost:5000/api/buses/${item._id}/status`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ status: newStatus })
+        });
+        if (!response.ok) throw new Error('Failed to update status');
         toast.success(`Bus status updated to ${newStatus}`);
       } else if (activeTab === 'drivers') {
-        await userService.updateUser(item._id, { isActive: newStatus === 'active' });
+        const response = await fetch(`http://localhost:5000/api/users/${item._id}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ isActive: newStatus === 'active' })
+        });
+        if (!response.ok) throw new Error('Failed to update status');
         toast.success(`Driver ${newStatus === 'active' ? 'activated' : 'deactivated'}`);
       }
       fetchAllData();
     } catch (error) {
       console.error('Error updating status:', error);
-      toast.error('Failed to update status');
+      toast.error(error.message || 'Failed to update status');
     }
   };
 
   const handleStartTrip = async (trip) => {
     try {
-      await tripService.startTrip(trip._id);
-      toast.success(`Trip started successfully`);
+      const response = await fetch(`http://localhost:5000/api/trips/${trip._id}/start`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (!response.ok) throw new Error('Failed to start trip');
+      toast.success('Trip started successfully');
       fetchAllData();
     } catch (error) {
       console.error('Error starting trip:', error);
-      toast.error('Failed to start trip');
+      toast.error(error.message || 'Failed to start trip');
     }
   };
 
   const handleEndTrip = async (trip) => {
     try {
-      await tripService.endTrip(trip._id);
-      toast.success(`Trip ended successfully`);
+      const response = await fetch(`http://localhost:5000/api/trips/${trip._id}/complete`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      if (!response.ok) throw new Error('Failed to end trip');
+      toast.success('Trip ended successfully');
       fetchAllData();
     } catch (error) {
       console.error('Error ending trip:', error);
-      toast.error('Failed to end trip');
+      toast.error(error.message || 'Failed to end trip');
     }
   };
 
@@ -487,8 +655,93 @@ export default function EnhancedTransportManagement() {
     toast.success(`Viewing ${route.routeName} on map`);
   };
 
-  const handleAssignStudents = (bus) => {
-    toast.success(`Assign students to ${bus.busNumber}`);
+  const openAssignModal = (bus) => {
+    setSelectedBusForAssignment(bus);
+    fetchAvailableStudents(bus._id);
+    setShowAssignModal(true);
+  };
+
+  const fetchAvailableStudents = async (busId) => {
+    try {
+      const response = await fetch('http://localhost:5000/api/students', {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await response.json();
+      const studentsData = data.data || [];
+      const available = studentsData.filter(s => 
+        !s.busId && !s.transportDetails?.busId && s.usesTransport !== false
+      );
+      setAvailableStudents(available);
+      setSelectedStudents([]);
+    } catch (error) {
+      console.error('Error fetching students:', error);
+      toast.error('Failed to fetch students');
+    }
+  };
+
+  const toggleStudentSelection = (studentId) => {
+    setSelectedStudents(prev => 
+      prev.includes(studentId) 
+        ? prev.filter(id => id !== studentId)
+        : [...prev, studentId]
+    );
+  };
+
+  const handleAssignStudents = async () => {
+    if (!selectedBusForAssignment) return;
+    if (selectedStudents.length === 0) {
+      toast.error('Please select at least one student');
+      return;
+    }
+
+    setAssignLoading(true);
+    try {
+      for (const studentId of selectedStudents) {
+        const student = availableStudents.find(s => s._id === studentId);
+        
+        const updateData = {
+          busId: selectedBusForAssignment._id,
+          transportDetails: {
+            ...student.transportDetails,
+            busId: selectedBusForAssignment._id,
+            status: 'active',
+            pickupPoint: {
+              name: student.pickupPoint || 'School Gate',
+              coordinates: { lat: 0, lng: 0 }
+            },
+            dropoffPoint: {
+              name: student.dropoffPoint || 'Home',
+              coordinates: { lat: 0, lng: 0 }
+            }
+          },
+          usesTransport: true
+        };
+
+        const response = await fetch(`http://localhost:5000/api/students/${studentId}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(updateData)
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to assign student ${student.firstName} ${student.lastName}`);
+        }
+      }
+
+      toast.success(`Successfully assigned ${selectedStudents.length} student(s) to bus ${selectedBusForAssignment.busNumber}`);
+      setShowAssignModal(false);
+      setSelectedBusForAssignment(null);
+      setSelectedStudents([]);
+      fetchAllData();
+    } catch (error) {
+      console.error('Error assigning students:', error);
+      toast.error(error.message || 'Failed to assign students');
+    } finally {
+      setAssignLoading(false);
+    }
   };
 
   const getStatusColor = (status) => {
@@ -498,6 +751,7 @@ export default function EnhancedTransportManagement() {
       case 'on-leave': return '#FF9800';
       case 'maintenance': return '#FF9800';
       case 'scheduled': return '#2196F3';
+      case 'running': return '#4CAF50';
       case 'in-progress': return '#4CAF50';
       case 'completed': return '#9C27B0';
       default: return '#999';
@@ -516,6 +770,7 @@ export default function EnhancedTransportManagement() {
     return (
       <div style={{ textAlign: 'center', padding: '40px' }}>
         <div className="loading-spinner" style={{ margin: '0 auto' }} />
+        <p style={{ marginTop: '10px', color: '#666' }}>Loading transport data...</p>
       </div>
     );
   }
@@ -602,9 +857,9 @@ export default function EnhancedTransportManagement() {
           borderRadius: '10px'
         }}>
           <div style={{ fontSize: '28px', fontWeight: 'bold' }}>
-            {trips.filter(t => t.status === 'in-progress').length}
+            {trips.filter(t => t.status === 'scheduled' || t.status === 'running').length}
           </div>
-          <div>Active Trips</div>
+          <div>Active/Scheduled Trips</div>
         </div>
         <div style={{
           background: 'linear-gradient(135deg, #5f2c82 0%, #49a09d 100%)',
@@ -628,9 +883,11 @@ export default function EnhancedTransportManagement() {
         background: 'white',
         padding: '20px',
         borderRadius: '10px',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+        flexWrap: 'wrap',
+        gap: '15px'
       }}>
-        <div style={{ display: 'flex', gap: '15px', flex: 1 }}>
+        <div style={{ display: 'flex', gap: '15px', flex: 1, flexWrap: 'wrap' }}>
           <input
             type="text"
             placeholder={`🔍 Search ${activeTab}...`}
@@ -678,7 +935,7 @@ export default function EnhancedTransportManagement() {
             gap: '5px'
           }}
         >
-          ➕ Add {activeTab.slice(0, -1)}
+          ➕ Add {activeTab === 'assignments' ? 'Assignment' : activeTab.slice(0, -1)}
         </button>
       </div>
 
@@ -695,22 +952,26 @@ export default function EnhancedTransportManagement() {
             <thead>
               <tr style={{ background: '#f8f9fa' }}>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Bus</th>
+                <th style={{ padding: '15px', textAlign: 'left' }}>Reg No.</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Driver</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Route</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Fuel</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Students</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-              </tr>
+               </tr>
             </thead>
             <tbody>
               {buses.map(bus => {
-                const assignedStudents = students.filter(s => s.busId === bus._id).length;
+                const assignedStudents = students.filter(s => s.busId === bus._id || s.transportDetails?.busId === bus._id).length;
                 return (
                   <tr key={bus._id} style={{ borderBottom: '1px solid #eee' }}>
                     <td style={{ padding: '15px' }}>
                       <div style={{ fontWeight: 'bold' }}>{bus.busNumber}</div>
                       <div style={{ fontSize: '12px', color: '#666' }}>Capacity: {bus.capacity}</div>
+                    </td>
+                    <td style={{ padding: '15px' }}>
+                      <div>{bus.registrationNumber || 'N/A'}</div>
                     </td>
                     <td style={{ padding: '15px' }}>
                       <div>{bus.driverName || 'Not assigned'}</div>
@@ -759,9 +1020,9 @@ export default function EnhancedTransportManagement() {
                       </span>
                     </td>
                     <td style={{ padding: '15px' }}>
-                      <div style={{ display: 'flex', gap: '5px' }}>
+                      <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
                         <button
-                          onClick={() => handleAssignStudents(bus)}
+                          onClick={() => openAssignModal(bus)}
                           style={{
                             padding: '6px 10px',
                             background: '#9C27B0',
@@ -823,7 +1084,7 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Rating</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-              </tr>
+               </tr>
             </thead>
             <tbody>
               {drivers.map(driver => (
@@ -925,7 +1186,7 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Stops</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-              </tr>
+               </tr>
             </thead>
             <tbody>
               {routes.map(route => (
@@ -1015,7 +1276,7 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Students</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-              </tr>
+               </tr>
             </thead>
             <tbody>
               {trips.map(trip => (
@@ -1054,7 +1315,7 @@ export default function EnhancedTransportManagement() {
                     </span>
                   </td>
                   <td style={{ padding: '15px' }}>
-                    <div style={{ display: 'flex', gap: '5px' }}>
+                    <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
                       {trip.status === 'scheduled' && (
                         <button
                           onClick={() => handleStartTrip(trip)}
@@ -1071,7 +1332,7 @@ export default function EnhancedTransportManagement() {
                           ▶️ Start
                         </button>
                       )}
-                      {trip.status === 'in-progress' && (
+                      {trip.status === 'running' && (
                         <button
                           onClick={() => handleEndTrip(trip)}
                           style={{
@@ -1135,11 +1396,11 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Pickup</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Dropoff</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-              </tr>
+               </tr>
             </thead>
             <tbody>
               {assignments.map(student => {
-                const bus = buses.find(b => b._id === student.busId);
+                const bus = buses.find(b => b._id === (student.busId || student.transportDetails?.busId));
                 return (
                   <tr key={student._id} style={{ borderBottom: '1px solid #eee' }}>
                     <td style={{ padding: '15px' }}>
@@ -1219,107 +1480,53 @@ export default function EnhancedTransportManagement() {
               {activeTab === 'buses' && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Bus Number *
-                    </label>
-                    <input
-                      type="text"
-                      name="busNumber"
-                      value={formData.busNumber}
-                      onChange={handleInputChange}
-                      required
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Bus Number *</label>
+                    <input type="text" name="busNumber" value={formData.busNumber} onChange={handleInputChange} required placeholder="KAA 123A" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Capacity *
-                    </label>
-                    <input
-                      type="number"
-                      name="capacity"
-                      value={formData.capacity}
-                      onChange={handleInputChange}
-                      required
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Registration Number *</label>
+                    <input type="text" name="registrationNumber" value={formData.registrationNumber} onChange={handleInputChange} required placeholder="KCA 123T" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Driver Name
-                    </label>
-                    <input
-                      type="text"
-                      name="driverName"
-                      value={formData.driverName}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Assign Driver</label>
+                    <select name="driverId" value={formData.driverId} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
+                      <option value="">Select Driver (Optional)</option>
+                      {drivers.map(driver => (
+                        <option key={driver._id} value={driver._id}>{driver.name} - {driver.phone}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Driver Phone
-                    </label>
-                    <input
-                      type="tel"
-                      name="driverPhone"
-                      value={formData.driverPhone}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Capacity</label>
+                    <input type="number" name="capacity" value={formData.capacity} onChange={handleInputChange} min="1" max="100" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Route
-                    </label>
-                    <input
-                      type="text"
-                      name="route"
-                      value={formData.route}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Route</label>
+                    <input type="text" name="route" value={formData.route} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Fuel Level (%)
-                    </label>
-                    <input
-                      type="number"
-                      name="fuelLevel"
-                      value={formData.fuelLevel}
-                      onChange={handleInputChange}
-                      min="0"
-                      max="100"
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Fuel Level (%)</label>
+                    <input type="number" name="fuelLevel" value={formData.fuelLevel} onChange={handleInputChange} min="0" max="100" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Status
-                    </label>
-                    <select
-                      name="status"
-                      value={formData.status}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    >
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Status</label>
+                    <select name="status" value={formData.status} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
                       <option value="active">Active</option>
                       <option value="inactive">Inactive</option>
                       <option value="maintenance">Maintenance</option>
                     </select>
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Last Maintenance
-                    </label>
-                    <input
-                      type="date"
-                      name="lastMaintenance"
-                      value={formData.lastMaintenance}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Last Maintenance</label>
+                    <input type="date" name="lastMaintenance" value={formData.lastMaintenance} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Next Maintenance</label>
+                    <input type="date" name="nextMaintenance" value={formData.nextMaintenance} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Insurance Expiry</label>
+                    <input type="date" name="insuranceExpiry" value={formData.insuranceExpiry} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                 </div>
               )}
@@ -1327,125 +1534,56 @@ export default function EnhancedTransportManagement() {
               {activeTab === 'drivers' && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                   <div style={{ gridColumn: 'span 2' }}>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      First Name *
-                    </label>
-                    <input
-                      type="text"
-                      name="firstName"
-                      value={formData.firstName}
-                      onChange={handleInputChange}
-                      required
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>First Name *</label>
+                    <input type="text" name="firstName" value={formData.firstName} onChange={handleInputChange} required style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div style={{ gridColumn: 'span 2' }}>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Last Name *
-                    </label>
-                    <input
-                      type="text"
-                      name="lastName"
-                      value={formData.lastName}
-                      onChange={handleInputChange}
-                      required
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Last Name *</label>
+                    <input type="text" name="lastName" value={formData.lastName} onChange={handleInputChange} required style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Email
-                    </label>
-                    <input
-                      type="email"
-                      name="email"
-                      value={formData.email}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Email</label>
+                    <input type="email" name="email" value={formData.email} onChange={handleInputChange} placeholder="Optional - auto-generated if empty" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Phone *
-                    </label>
-                    <input
-                      type="tel"
-                      name="phone"
-                      value={formData.phone}
-                      onChange={handleInputChange}
-                      required
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Phone Number *</label>
+                    <input type="tel" name="phone" value={formData.phone} onChange={handleInputChange} required style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      License Number *
-                    </label>
-                    <input
-                      type="text"
-                      name="licenseNumber"
-                      value={formData.licenseNumber}
-                      onChange={handleInputChange}
-                      required
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>License Number *</label>
+                    <input type="text" name="licenseNumber" value={formData.licenseNumber} onChange={handleInputChange} required style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      License Expiry *
-                    </label>
-                    <input
-                      type="date"
-                      name="licenseExpiry"
-                      value={formData.licenseExpiry}
-                      onChange={handleInputChange}
-                      required
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>License Expiry *</label>
+                    <input type="date" name="licenseExpiry" value={formData.licenseExpiry} onChange={handleInputChange} required style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Experience (years)
-                    </label>
-                    <input
-                      type="number"
-                      name="experience"
-                      value={formData.experience}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Experience (years)</label>
+                    <input type="number" name="experience" value={formData.experience} onChange={handleInputChange} min="0" max="50" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Assign Bus
-                    </label>
-                    <select
-                      name="assignedBus"
-                      value={formData.assignedBus}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    >
-                      <option value="">None</option>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Assign Bus</label>
+                    <select name="assignedBus" value={formData.assignedBus} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
+                      <option value="">Unassigned</option>
                       {buses.map(bus => (
-                        <option key={bus._id} value={bus._id}>
-                          {bus.busNumber}
-                        </option>
+                        <option key={bus._id} value={bus._id}>{bus.busNumber}</option>
                       ))}
                     </select>
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Status
-                    </label>
-                    <select
-                      name="status"
-                      value={formData.status}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    >
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Status</label>
+                    <select name="status" value={formData.status} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
                       <option value="active">Active</option>
                       <option value="inactive">Inactive</option>
                     </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Emergency Contact</label>
+                    <input type="tel" name="emergencyContact" value={formData.emergencyContact} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                  </div>
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Address</label>
+                    <textarea name="address" value={formData.address} onChange={handleInputChange} rows="3" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                 </div>
               )}
@@ -1453,104 +1591,36 @@ export default function EnhancedTransportManagement() {
               {activeTab === 'routes' && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                   <div style={{ gridColumn: 'span 2' }}>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Route Name *
-                    </label>
-                    <input
-                      type="text"
-                      name="routeName"
-                      value={formData.routeName}
-                      onChange={handleInputChange}
-                      required
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Route Name *</label>
+                    <input type="text" name="routeName" value={formData.routeName} onChange={handleInputChange} required style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div style={{ gridColumn: 'span 2' }}>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Description
-                    </label>
-                    <textarea
-                      name="description"
-                      value={formData.description}
-                      onChange={handleInputChange}
-                      rows="3"
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Description</label>
+                    <textarea name="description" value={formData.description} onChange={handleInputChange} rows="3" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Start Point
-                    </label>
-                    <input
-                      type="text"
-                      name="startPoint"
-                      value={formData.startPoint}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Start Point</label>
+                    <input type="text" name="startPoint" value={formData.startPoint} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      End Point
-                    </label>
-                    <input
-                      type="text"
-                      name="endPoint"
-                      value={formData.endPoint}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>End Point</label>
+                    <input type="text" name="endPoint" value={formData.endPoint} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Distance (km)
-                    </label>
-                    <input
-                      type="number"
-                      name="distance"
-                      value={formData.distance}
-                      onChange={handleInputChange}
-                      step="0.1"
-                      min="0"
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Distance (km)</label>
+                    <input type="number" name="distance" value={formData.distance} onChange={handleInputChange} step="0.1" min="0" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Duration (min)
-                    </label>
-                    <input
-                      type="number"
-                      name="duration"
-                      value={formData.duration}
-                      onChange={handleInputChange}
-                      min="0"
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Duration (min)</label>
+                    <input type="number" name="duration" value={formData.duration} onChange={handleInputChange} min="0" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Number of Stops
-                    </label>
-                    <input
-                      type="number"
-                      name="stops"
-                      value={formData.stops}
-                      onChange={handleInputChange}
-                      min="0"
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    />
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Number of Stops</label>
+                    <input type="number" name="stops" value={formData.stops} onChange={handleInputChange} min="0" style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
                   </div>
                   <div>
-                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
-                      Status
-                    </label>
-                    <select
-                      name="status"
-                      value={formData.status}
-                      onChange={handleInputChange}
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-                    >
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Status</label>
+                    <select name="status" value={formData.status} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
                       <option value="active">Active</option>
                       <option value="inactive">Inactive</option>
                     </select>
@@ -1558,42 +1628,269 @@ export default function EnhancedTransportManagement() {
                 </div>
               )}
 
+              {activeTab === 'trips' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Route *</label>
+                    <select name="routeId" value={formData.routeId} onChange={handleInputChange} required style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
+                      <option value="">Select Route</option>
+                      {routes.map(route => (
+                        <option key={route._id} value={route._id}>{route.routeName}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Bus</label>
+                    <select name="busId" value={formData.busId} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
+                      <option value="">Select Bus (Optional)</option>
+                      {buses.map(bus => (
+                        <option key={bus._id} value={bus._id}>{bus.busNumber}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Driver *</label>
+                    <select name="driverId" value={formData.driverId} onChange={handleInputChange} required style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
+                      <option value="">Select Driver</option>
+                      {drivers.map(driver => (
+                        <option key={driver._id} value={driver._id}>{driver.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Trip Date *</label>
+                    <input type="date" name="tripDate" value={formData.tripDate} onChange={handleInputChange} required style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Start Time *</label>
+                    <input type="time" name="startTime" value={formData.startTime} onChange={handleInputChange} required style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>End Time</label>
+                    <input type="time" name="endTime" value={formData.endTime} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Trip Type</label>
+                    <select name="tripType" value={formData.tripType} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
+                      <option value="morning">Morning Pickup</option>
+                      <option value="afternoon">Afternoon Dropoff</option>
+                      <option value="special">Special Trip</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>Status</label>
+                    <select name="status" value={formData.status} onChange={handleInputChange} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
+                      <option value="scheduled">Scheduled</option>
+                      <option value="running">Running</option>
+                      <option value="completed">Completed</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-                <button
-                  type="submit"
-                  style={{
-                    flex: 1,
-                    padding: '12px',
-                    background: '#4CAF50',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer'
-                  }}
-                >
+                <button type="submit" style={{ flex: 1, padding: '12px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}>
                   {editingItem ? 'Update' : 'Create'}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowForm(false);
-                    setEditingItem(null);
-                    resetForm();
-                  }}
-                  style={{
-                    flex: 1,
-                    padding: '12px',
-                    background: '#f44336',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer'
-                  }}
-                >
+                <button type="button" onClick={() => { setShowForm(false); setEditingItem(null); resetForm(); }} style={{ flex: 1, padding: '12px', background: '#f44336', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '14px', fontWeight: '500' }}>
                   Cancel
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Student Assignment Modal */}
+      {showAssignModal && selectedBusForAssignment && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1001,
+          overflowY: 'auto'
+        }}>
+          <div style={{
+            background: 'white',
+            padding: '30px',
+            borderRadius: '10px',
+            width: '600px',
+            maxWidth: '90%',
+            maxHeight: '90vh',
+            overflowY: 'auto'
+          }}>
+            <h3 style={{ margin: '0 0 10px 0' }}>
+              Assign Students to Bus {selectedBusForAssignment.busNumber}
+            </h3>
+            <p style={{ color: '#666', marginBottom: '20px' }}>
+              Select students to assign to this bus. Capacity: {selectedBusForAssignment.capacity}
+            </p>
+
+            <input
+              type="text"
+              placeholder="🔍 Search students by name or admission number..."
+              onChange={(e) => {
+                const searchTerm = e.target.value.toLowerCase();
+                const filtered = availableStudents.filter(s => 
+                  `${s.firstName} ${s.lastName}`.toLowerCase().includes(searchTerm) ||
+                  s.admissionNumber?.toLowerCase().includes(searchTerm)
+                );
+                setAvailableStudents(filtered);
+              }}
+              style={{
+                width: '100%',
+                padding: '10px',
+                border: '1px solid #ddd',
+                borderRadius: '6px',
+                marginBottom: '20px',
+                fontSize: '14px'
+              }}
+            />
+
+            <div style={{
+              maxHeight: '400px',
+              overflowY: 'auto',
+              border: '1px solid #eee',
+              borderRadius: '8px',
+              marginBottom: '20px'
+            }}>
+              {availableStudents.length === 0 ? (
+                <div style={{ padding: '40px', textAlign: 'center', color: '#666' }}>
+                  No unassigned students found
+                </div>
+              ) : (
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#f8f9fa', position: 'sticky', top: 0 }}>
+                      <th style={{ padding: '12px', textAlign: 'left', width: '40px' }}>
+                        <input
+                          type="checkbox"
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedStudents(availableStudents.map(s => s._id));
+                            } else {
+                              setSelectedStudents([]);
+                            }
+                          }}
+                          checked={selectedStudents.length === availableStudents.length && availableStudents.length > 0}
+                        />
+                      </th>
+                      <th style={{ padding: '12px', textAlign: 'left' }}>Student Name</th>
+                      <th style={{ padding: '12px', textAlign: 'left' }}>Admission No.</th>
+                      <th style={{ padding: '12px', textAlign: 'left' }}>Class</th>
+                      <th style={{ padding: '12px', textAlign: 'left' }}>Pickup Point</th>
+                     </tr>
+                  </thead>
+                  <tbody>
+                    {availableStudents.map(student => (
+                      <tr key={student._id} style={{ borderBottom: '1px solid #eee' }}>
+                        <td style={{ padding: '12px' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedStudents.includes(student._id)}
+                            onChange={() => toggleStudentSelection(student._id)}
+                          />
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          <div style={{ fontWeight: '500' }}>
+                            {student.firstName} {student.lastName}
+                          </div>
+                        </td>
+                        <td style={{ padding: '12px', fontSize: '13px', color: '#666' }}>
+                          {student.admissionNumber}
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          {student.classLevel}
+                        </td>
+                        <td style={{ padding: '12px' }}>
+                          <input
+                            type="text"
+                            placeholder="Pickup point"
+                            value={student.pickupPoint || ''}
+                            onChange={(e) => {
+                              const updated = [...availableStudents];
+                              const index = updated.findIndex(s => s._id === student._id);
+                              updated[index].pickupPoint = e.target.value;
+                              setAvailableStudents(updated);
+                            }}
+                            style={{
+                              width: '120px',
+                              padding: '6px',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              fontSize: '12px'
+                            }}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '20px',
+              padding: '10px',
+              background: '#f5f5f5',
+              borderRadius: '6px'
+            }}>
+              <span>Selected: <strong>{selectedStudents.length}</strong> students</span>
+              <span>Bus Capacity: <strong>{selectedBusForAssignment.capacity}</strong></span>
+              {selectedStudents.length > selectedBusForAssignment.capacity && (
+                <span style={{ color: '#f44336' }}>⚠️ Exceeds capacity!</span>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={handleAssignStudents}
+                disabled={selectedStudents.length === 0 || assignLoading}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: selectedStudents.length === 0 ? '#ccc' : '#4CAF50',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: selectedStudents.length === 0 ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '500'
+                }}
+              >
+                {assignLoading ? 'Assigning...' : `Assign ${selectedStudents.length} Student(s)`}
+              </button>
+              <button
+                onClick={() => {
+                  setShowAssignModal(false);
+                  setSelectedBusForAssignment(null);
+                  setSelectedStudents([]);
+                }}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  background: '#f44336',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '500'
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
