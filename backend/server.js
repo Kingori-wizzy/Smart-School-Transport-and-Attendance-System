@@ -8,6 +8,7 @@ const jwt = require('jsonwebtoken');
 const path = require('path');
 
 // Load environment variables
+require('dotenv').config();
 dotenv.config();
 
 // Import routes

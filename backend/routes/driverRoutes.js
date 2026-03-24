@@ -11,6 +11,8 @@ const Attendance = require('../models/AttendanceRecord');
 const GPSLog = require('../models/GPSLog');
 const IncidentReport = require('../models/IncidentReport');
 const Notification = require('../models/Notification');
+const NotificationSetting = require('../models/NotificationSetting');
+const emailService = require('../services/emailService');
 
 // Helper function to calculate distance between two points (Haversine formula)
 function getDistance(point1, point2) {
@@ -41,41 +43,115 @@ async function sendPushNotification(fcmToken, notification) {
   }
 }
 
-// Helper function to notify parent about student event
+// Helper function to check if user wants to receive notifications
+async function shouldSendNotification(userId, alertType, channel = 'email') {
+  try {
+    const settings = await NotificationSetting.findOne({ userId });
+    if (!settings) return true; // Default to enabled if no settings
+    
+    // Check channel preferences
+    if (channel === 'email' && !settings.emailEnabled) return false;
+    if (channel === 'sms' && !settings.smsEnabled) return false;
+    if (channel === 'push' && !settings.pushEnabled) return false;
+    
+    // Check alert type preferences
+    switch(alertType) {
+      case 'attendance':
+      case 'board':
+      case 'alight':
+        return settings.attendanceAlerts;
+      case 'speed':
+        return settings.speedAlerts;
+      case 'geofence':
+        return settings.geofenceAlerts;
+      case 'fuel':
+        return settings.fuelAlerts;
+      default:
+        return true;
+    }
+  } catch (error) {
+    console.error('Error checking notification settings:', error);
+    return true; // Default to sending on error
+  }
+}
+
+// Helper function to check quiet hours
+function isQuietHour(settings) {
+  if (!settings || !settings.quietHoursEnabled) return false;
+  
+  const now = new Date();
+  const currentTime = now.getHours() * 60 + now.getMinutes();
+  
+  const [startHour, startMinute] = settings.quietHoursStart.split(':').map(Number);
+  const [endHour, endMinute] = settings.quietHoursEnd.split(':').map(Number);
+  
+  const startTime = startHour * 60 + startMinute;
+  const endTime = endHour * 60 + endMinute;
+  
+  if (startTime < endTime) {
+    return currentTime >= startTime && currentTime < endTime;
+  } else {
+    return currentTime >= startTime || currentTime < endTime;
+  }
+}
+
+// Helper function to notify parent about student event (EMAIL + PUSH)
 async function notifyParent(studentId, tripId, eventType, additionalData = {}) {
   try {
-    const student = await Student.findById(studentId).populate('parentId', 'fcmToken firstName lastName email');
+    const student = await Student.findById(studentId).populate('parentId', 'fcmToken firstName lastName email phone');
     if (!student || !student.parentId) return false;
     
     const parent = student.parentId;
     const trip = await Trip.findById(tripId);
+    const timeStr = new Date().toLocaleTimeString();
+    const busNumber = student.busNumber || trip?.vehicleId || 'N/A';
     
-    let title, message, notificationType;
+    let title, message, notificationType, emailTemplate;
+    let emailParams = [];
     
     if (eventType === 'board') {
       title = `🚌 ${student.firstName} has boarded the bus`;
-      message = `${student.firstName} ${student.lastName} has boarded the bus at ${new Date().toLocaleTimeString()}`;
-      notificationType = 'board';
+      message = `${student.firstName} ${student.lastName} has boarded the bus at ${timeStr}`;
+      notificationType = 'student_boarded';
+      emailTemplate = 'boarding';
+      emailParams = [student.firstName, timeStr, busNumber];
     } else if (eventType === 'alight') {
       title = `🏠 ${student.firstName} has alighted`;
-      message = `${student.firstName} ${student.lastName} has alighted from the bus at ${new Date().toLocaleTimeString()}`;
-      notificationType = 'alight';
+      message = `${student.firstName} ${student.lastName} has alighted from the bus at ${timeStr}`;
+      notificationType = 'student_alighted';
+      emailTemplate = 'alighting';
+      emailParams = [student.firstName, timeStr, busNumber];
     } else if (eventType === 'trip_start') {
       title = `🚍 Trip Started: ${trip?.routeName || 'School Bus'}`;
-      message = `Your child's bus has started its journey. Estimated arrival time will be shared shortly.`;
+      message = `Your child's bus has started its journey.`;
       notificationType = 'trip_started';
+      emailTemplate = 'tripStart';
+      emailParams = [trip?.routeName || 'School Bus', busNumber, 'Track in app'];
     } else if (eventType === 'trip_end') {
       title = `✅ Trip Completed: ${trip?.routeName || 'School Bus'}`;
-      message = `Your child's bus trip has been completed. Thank you!`;
+      message = `Your child's bus trip has been completed.`;
       notificationType = 'trip_completed';
+      emailTemplate = 'tripComplete';
+      emailParams = [trip?.routeName || 'School Bus', busNumber];
     } else if (eventType === 'delay') {
       title = `⏰ Delay Update: ${trip?.routeName || 'School Bus'}`;
-      message = additionalData.message || `The bus is delayed by approximately ${additionalData.minutes} minutes due to ${additionalData.reason || 'unforeseen circumstances'}.`;
+      message = additionalData.message || `The bus is delayed by approximately ${additionalData.minutes} minutes.`;
       notificationType = 'trip_delayed';
+      emailTemplate = 'delay';
+      emailParams = [student.firstName, additionalData.minutes || 'some', additionalData.reason || 'unforeseen circumstances'];
     } else {
       return false;
     }
     
+    // Check user notification settings
+    const emailEnabled = await shouldSendNotification(parent._id, eventType, 'email');
+    const pushEnabled = await shouldSendNotification(parent._id, eventType, 'push');
+    
+    // Get quiet hours settings
+    const settings = await NotificationSetting.findOne({ userId: parent._id });
+    const isQuiet = isQuietHour(settings);
+    
+    // Save to database regardless of preferences
     const notification = new Notification({
       userId: parent._id,
       userType: 'parent',
@@ -90,12 +166,31 @@ async function notifyParent(studentId, tripId, eventType, additionalData = {}) {
       metadata: {
         eventType,
         timestamp: new Date(),
+        busNumber,
+        time: timeStr,
+        isQuiet,
         ...additionalData
       }
     });
     await notification.save();
     
-    if (parent.fcmToken) {
+    // Send EMAIL if enabled and not quiet hour
+    if (emailEnabled && !isQuiet && parent.email) {
+      const emailResult = await emailService.sendParentNotification(parent, emailTemplate, {
+        studentName: student.firstName,
+        time: timeStr,
+        busNumber: busNumber,
+        routeName: trip?.routeName,
+        minutes: additionalData.minutes,
+        reason: additionalData.reason
+      });
+      console.log(`📧 Email to ${parent.email}: ${emailResult.success ? '✅' : '❌'}`);
+    } else if (isQuiet) {
+      console.log(`🔇 Quiet hours - email suppressed for ${parent.email}`);
+    }
+    
+    // Send Push Notification if enabled and not quiet hour
+    if (pushEnabled && !isQuiet && parent.fcmToken) {
       await sendPushNotification(parent.fcmToken, {
         title,
         body: message,
@@ -106,9 +201,11 @@ async function notifyParent(studentId, tripId, eventType, additionalData = {}) {
           ...additionalData
         }
       });
+    } else if (isQuiet) {
+      console.log(`🔇 Quiet hours - push suppressed for ${parent.email}`);
     }
     
-    console.log(`📧 Notification sent to parent of ${student.firstName}: ${title}`);
+    console.log(`📧 Notification sent to parent of ${student.firstName}: ${title} (Email: ${emailEnabled}, Push: ${pushEnabled}, Quiet: ${isQuiet})`);
     return true;
   } catch (error) {
     console.error('Error notifying parent:', error);
@@ -116,7 +213,7 @@ async function notifyParent(studentId, tripId, eventType, additionalData = {}) {
   }
 }
 
-// Helper function to notify all parents on a trip
+// Helper function to notify all parents on a trip (EMAIL + PUSH)
 async function notifyAllParents(tripId, eventType, additionalData = {}) {
   try {
     const trip = await Trip.findById(tripId).populate('students', 'parentId firstName lastName');
@@ -125,30 +222,48 @@ async function notifyAllParents(tripId, eventType, additionalData = {}) {
     const parentIds = [...new Set(trip.students.map(s => s.parentId).filter(Boolean))];
     const parents = await User.find({ _id: { $in: parentIds } });
     
-    let title, message, notificationType;
+    let title, message, notificationType, emailTemplate;
+    let emailParams = [];
     
     if (eventType === 'trip_start') {
       title = `🚍 Trip Started: ${trip.routeName}`;
-      message = `The bus has started its journey. Students will be notified as they board.`;
+      message = `The bus has started its journey.`;
       notificationType = 'trip_started';
+      emailTemplate = 'tripStart';
+      emailParams = [trip.routeName, trip.vehicleId, 'Track in app'];
     } else if (eventType === 'trip_end') {
       title = `✅ Trip Completed: ${trip.routeName}`;
       message = `The bus trip has been completed. All students have arrived safely.`;
       notificationType = 'trip_completed';
+      emailTemplate = 'tripComplete';
+      emailParams = [trip.routeName, trip.vehicleId];
     } else if (eventType === 'delay') {
       title = `⏰ Delay Update: ${trip.routeName}`;
-      message = additionalData.message || `The bus is delayed by approximately ${additionalData.minutes} minutes due to ${additionalData.reason || 'unforeseen circumstances'}.`;
+      message = additionalData.message || `The bus is delayed by approximately ${additionalData.minutes} minutes.`;
       notificationType = 'trip_delayed';
+      emailTemplate = 'delay';
+      emailParams = ['Your child', additionalData.minutes || 'some', additionalData.reason || 'unforeseen circumstances'];
     } else if (eventType === 'driver_message') {
       title = `📢 Message from Driver: ${trip.routeName}`;
       message = additionalData.message;
       notificationType = 'driver_broadcast';
+      emailTemplate = 'driverMessage';
+      emailParams = [additionalData.driverName || 'Driver', message];
     } else {
       return false;
     }
     
-    const notifications = [];
+    let successCount = 0;
     for (const parent of parents) {
+      // Check user notification settings
+      const emailEnabled = await shouldSendNotification(parent._id, eventType, 'email');
+      const pushEnabled = await shouldSendNotification(parent._id, eventType, 'push');
+      
+      // Get quiet hours settings
+      const settings = await NotificationSetting.findOne({ userId: parent._id });
+      const isQuiet = isQuietHour(settings);
+      
+      // Save to database
       const notification = new Notification({
         userId: parent._id,
         userType: 'parent',
@@ -162,13 +277,28 @@ async function notifyAllParents(tripId, eventType, additionalData = {}) {
         metadata: {
           eventType,
           timestamp: new Date(),
+          isQuiet,
           ...additionalData
         }
       });
       await notification.save();
-      notifications.push(notification);
       
-      if (parent.fcmToken) {
+      // Send EMAIL if enabled and not quiet hour
+      if (emailEnabled && !isQuiet && parent.email) {
+        const emailResult = await emailService.sendParentNotification(parent, emailTemplate, {
+          studentName: '',
+          routeName: trip.routeName,
+          busNumber: trip.vehicleId,
+          minutes: additionalData.minutes,
+          reason: additionalData.reason,
+          driverName: additionalData.driverName,
+          message: message
+        });
+        if (emailResult.success) successCount++;
+      }
+      
+      // Send Push Notification if enabled and not quiet hour
+      if (pushEnabled && !isQuiet && parent.fcmToken) {
         await sendPushNotification(parent.fcmToken, {
           title,
           body: message,
@@ -177,7 +307,7 @@ async function notifyAllParents(tripId, eventType, additionalData = {}) {
       }
     }
     
-    console.log(`📧 Broadcast notification sent to ${notifications.length} parents`);
+    console.log(`📧 Broadcast sent to ${successCount}/${parents.length} parents via email`);
     return true;
   } catch (error) {
     console.error('Error notifying all parents:', error);
@@ -522,7 +652,22 @@ router.post('/message/parent/:studentId', async (req, res) => {
     });
     await notification.save();
     
-    if (parent.fcmToken) {
+    // Check user notification settings
+    const emailEnabled = await shouldSendNotification(parent._id, 'driver_message', 'email');
+    const pushEnabled = await shouldSendNotification(parent._id, 'driver_message', 'push');
+    const settings = await NotificationSetting.findOne({ userId: parent._id });
+    const isQuiet = isQuietHour(settings);
+    
+    // Send EMAIL if enabled and not quiet hour
+    if (emailEnabled && !isQuiet && parent.email) {
+      await emailService.sendParentNotification(parent, 'driver_message', {
+        driverName: `${req.user.firstName} ${req.user.lastName}`,
+        message: message
+      });
+    }
+    
+    // Send Push if enabled and not quiet hour
+    if (pushEnabled && !isQuiet && parent.fcmToken) {
       await sendPushNotification(parent.fcmToken, {
         title: `Message from Driver (${student.firstName})`,
         body: message,
@@ -548,11 +693,10 @@ router.post('/message/broadcast/:tripId', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Trip not found' });
     }
     
-    // Get all unique parent IDs from students on this trip
     const parentIds = [...new Set(trip.students.map(s => s.parentId).filter(Boolean))];
     const parents = await User.find({ _id: { $in: parentIds } });
     
-    let notifications = 0;
+    let successCount = 0;
     for (const parent of parents) {
       const notification = new Notification({
         userId: parent._id,
@@ -571,20 +715,25 @@ router.post('/message/broadcast/:tripId', async (req, res) => {
         }
       });
       await notification.save();
-      notifications++;
       
-      if (parent.fcmToken) {
-        await sendPushNotification(parent.fcmToken, {
-          title: `📢 Message from Driver: ${trip.routeName}`,
-          body: message,
-          data: { type: 'driver_broadcast', tripId }
+      // Check user notification settings
+      const emailEnabled = await shouldSendNotification(parent._id, 'driver_message', 'email');
+      const settings = await NotificationSetting.findOne({ userId: parent._id });
+      const isQuiet = isQuietHour(settings);
+      
+      // Send EMAIL if enabled and not quiet hour
+      if (emailEnabled && !isQuiet && parent.email) {
+        const result = await emailService.sendParentNotification(parent, 'driver_message', {
+          driverName: `${req.user.firstName} ${req.user.lastName}`,
+          message: message
         });
+        if (result.success) successCount++;
       }
     }
     
     res.json({
       success: true,
-      message: `Broadcast message sent to ${notifications} parents`
+      message: `Broadcast sent to ${successCount} parents via email`
     });
   } catch (error) {
     console.error('Error sending broadcast:', error);
@@ -630,6 +779,12 @@ router.post('/trips/:tripId/delay', async (req, res) => {
       });
       await notification.save();
       adminNotifications++;
+      
+      // Send EMAIL to admins if enabled
+      const emailEnabled = await shouldSendNotification(admin._id, 'delay', 'email');
+      if (emailEnabled && admin.email) {
+        await emailService.sendEmail(admin.email, `Delay Alert: ${trip.routeName}`, `<h2>Delay Report</h2><p>${notification.message}</p>`);
+      }
     }
     
     // Notify all parents about the delay
@@ -654,6 +809,20 @@ router.post('/trips/:tripId/delay', async (req, res) => {
         }
       });
       await notification.save();
+      
+      // Check user notification settings
+      const emailEnabled = await shouldSendNotification(parent._id, 'delay', 'email');
+      const settings = await NotificationSetting.findOne({ userId: parent._id });
+      const isQuiet = isQuietHour(settings);
+      
+      // Send EMAIL to parents if enabled and not quiet hour
+      if (emailEnabled && !isQuiet && parent.email) {
+        await emailService.sendParentNotification(parent, 'delay', {
+          studentName: 'Your child',
+          minutes: estimatedDelayMinutes,
+          reason: reason
+        });
+      }
     }
     
     // Update trip with delay info
@@ -999,6 +1168,16 @@ router.post('/incident/report', async (req, res) => {
         });
         await notification.save();
         
+        // Emergency always sends email (bypass quiet hours)
+        if (parent.email) {
+          await emailService.sendParentNotification(parent, 'emergency', {
+            busNumber: trip.vehicleId,
+            location: location || (lastGPS ? `${lastGPS.lat}, ${lastGPS.lon}` : 'Unknown'),
+            description: description || 'Emergency situation'
+          });
+        }
+        
+        // Send Push
         if (parent.fcmToken) {
           await sendPushNotification(parent.fcmToken, {
             title: `🚨 EMERGENCY - ${trip.routeName}`,
@@ -1033,7 +1212,7 @@ router.post('/emergency', async (req, res) => {
     });
     await report.save();
     
-    // Notify all parents of emergency
+    // Notify all parents of emergency (bypass quiet hours)
     const parentIds = [...new Set(trip.students.map(s => s.parentId).filter(Boolean))];
     const parents = await User.find({ _id: { $in: parentIds } });
     for (const parent of parents) {
@@ -1054,6 +1233,16 @@ router.post('/emergency', async (req, res) => {
       });
       await notification.save();
       
+      // Send EMAIL (bypass quiet hours for emergency)
+      if (parent.email) {
+        await emailService.sendParentNotification(parent, 'emergency', {
+          busNumber: trip.vehicleId,
+          location: location || 'Unknown',
+          description: 'SOS EMERGENCY activated'
+        });
+      }
+      
+      // Send Push
       if (parent.fcmToken) {
         await sendPushNotification(parent.fcmToken, {
           title: `🚨 EMERGENCY - ${trip.routeName}`,

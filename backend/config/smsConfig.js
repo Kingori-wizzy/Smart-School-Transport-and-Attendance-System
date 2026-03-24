@@ -2,17 +2,17 @@
 module.exports = {
   // Primary Provider: SMSLeopard (Kenyan provider - affordable)
   smsLeopard: {
-    apiKey: process.env.SMSLEOPARD_API_KEY,
+    apiKey: '63bs0AbP6SZ34Glk4FlH', // Your SMSLeopard API Key
     baseUrl: 'https://api.smsleopard.com/v1',
-    senderId: process.env.SMS_SENDER_ID || 'SmartSchool', // Your registered sender ID
+    senderId: 'SmartSch', // Your registered sender ID (max 11 chars)
     enabled: true,
     priority: 1 // Highest priority
   },
 
   // Fallback Provider: TextBee (Free - uses Android phone)
   textBee: {
-    apiKey: process.env.TEXTBEE_API_KEY,
-    deviceId: process.env.TEXTBEE_DEVICE_ID,
+    apiKey: 'd933d148-0264-44bd-addf-1590919c4ee8', // Your TextBee API Key
+    deviceId: null, // Not needed for SMSLeopard
     baseUrl: 'https://api.textbee.dev/api/v1',
     enabled: true,
     priority: 2 // Fallback
@@ -28,19 +28,31 @@ module.exports = {
 
   // SMS Templates for different notification types
   templates: {
-    boarding: (studentName, time) => 
-      `${studentName} has boarded the school bus at ${time}. Track live in the app.`,
+    boarding: (studentName, time, busNumber) => 
+      `SmartSchool: ${studentName} boarded bus ${busNumber} at ${time}. Track live in the app.`,
     
-    alighting: (studentName, time) => 
-      `${studentName} has alighted from the bus at ${time}.`,
+    alighting: (studentName, time, busNumber) => 
+      `SmartSchool: ${studentName} alighted from bus ${busNumber} at ${time}.`,
     
     routeDeviation: (busNumber, eta) => 
-      `Alert: Bus ${busNumber} has deviated from route. New ETA: ${eta}. Track live in app.`,
+      `SmartSchool Alert: Bus ${busNumber} has deviated. New ETA: ${eta}. Track live.`,
     
-    delay: (studentName, minutes) => 
-      `${studentName}'s bus is delayed by approximately ${minutes} minutes.`,
+    delay: (studentName, minutes, reason) => 
+      `SmartSchool: ${studentName}'s bus delayed by ${minutes} mins. Reason: ${reason}`,
     
-    emergency: (busNumber, location) => 
-      `🚨 EMERGENCY ALERT: Bus ${busNumber} has reported an emergency at ${location}.`
+    tripStart: (routeName, busNumber) => 
+      `SmartSchool: Trip started on ${routeName} (Bus ${busNumber}). Students will be picked up shortly.`,
+    
+    tripComplete: (routeName, busNumber) => 
+      `SmartSchool: Trip completed on ${routeName} (Bus ${busNumber}). All students arrived safely.`,
+    
+    emergency: (busNumber, location, description) => 
+      `🚨 SmartSchool EMERGENCY: Bus ${busNumber} at ${location}. ${description}. Please check app.`,
+    
+    driverMessage: (driverName, message) => 
+      `SmartSchool: Message from driver ${driverName}: ${message}`,
+    
+    attendanceReminder: (studentName) => 
+      `SmartSchool: Reminder to mark attendance for ${studentName} today.`
   }
 };

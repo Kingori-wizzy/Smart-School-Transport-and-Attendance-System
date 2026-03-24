@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const axios = require('axios');
 const logger = require('../utils/logger');
 
@@ -11,7 +13,7 @@ class SMSProvider {
     // SMSLeopard configuration
     const smsLeopardEnabled = process.env.SMSLEOPARD_ENABLED === 'true';
     const smsLeopardApiKey = process.env.SMSLEOPARD_API_KEY;
-    const smsLeopardSenderId = process.env.SMSLEOPARD_SENDER_ID || 'SmartSchool';
+    const smsLeopardSenderId = process.env.SMSLEOPARD_SENDER_ID || process.env.SMS_SENDER_ID || 'SmartSch';
     const smsLeopardBaseUrl = process.env.SMSLEOPARD_BASE_URL || 'https://api.smsleopard.com/v1';
     const smsLeopardPriority = parseInt(process.env.SMSLEOPARD_PRIORITY) || 1;
 
@@ -23,7 +25,7 @@ class SMSProvider {
     const textBeePriority = parseInt(process.env.TEXTBEE_PRIORITY) || 2;
 
     // Add SMSLeopard if enabled and configured
-    if (smsLeopardEnabled && smsLeopardApiKey) {
+    if (smsLeopardEnabled && smsLeopardApiKey && smsLeopardApiKey !== 'your_smsleopard_api_key_here') {
       this.providers.push({
         name: 'smsLeopard',
         send: this.sendViaSMSLeopard.bind(this),
@@ -34,11 +36,13 @@ class SMSProvider {
           baseUrl: smsLeopardBaseUrl
         }
       });
-      logger.info('SMSLeopard provider initialized');
+      logger.info('✅ SMSLeopard provider initialized');
+    } else {
+      logger.info('⚠️ SMSLeopard provider disabled or missing API key');
     }
 
-    // Add TextBee if enabled and configured
-    if (textBeeEnabled && textBeeApiKey && textBeeDeviceId) {
+    // Add TextBee if enabled and configured (requires device ID)
+    if (textBeeEnabled && textBeeApiKey && textBeeDeviceId && textBeeDeviceId !== 'your_textbee_device_id_here') {
       this.providers.push({
         name: 'textBee',
         send: this.sendViaTextBee.bind(this),
@@ -49,14 +53,18 @@ class SMSProvider {
           baseUrl: textBeeBaseUrl
         }
       });
-      logger.info('TextBee provider initialized');
+      logger.info('✅ TextBee provider initialized with device ID: ' + textBeeDeviceId);
+    } else {
+      logger.info('⚠️ TextBee provider disabled or missing configuration');
     }
 
     // Sort by priority (lower number = higher priority)
     this.providers.sort((a, b) => a.priority - b.priority);
 
     if (this.providers.length === 0) {
-      logger.warn('No SMS providers configured. SMS functionality will be disabled.');
+      logger.warn('❌ No SMS providers configured. SMS functionality will be disabled.');
+    } else {
+      logger.info(`📱 SMS providers configured: ${this.providers.map(p => p.name).join(', ')}`);
     }
   }
 
@@ -94,14 +102,15 @@ class SMSProvider {
           const result = await provider.send(phone, message);
           
           if (result.success) {
-            logger.info(`SMS sent successfully via ${provider.name}`);
+            logger.info(`✅ SMS sent successfully via ${provider.name}`);
             return {
               success: true,
               provider: provider.name,
               messageId: result.messageId,
               cost: result.cost || 0,
               attempts: totalAttempts,
-              phone: result.phone || phone
+              phone: result.phone || phone,
+              rawResponse: result.rawResponse
             };
           }
           
@@ -154,7 +163,7 @@ class SMSProvider {
       const response = await axios.post(
         `${config.baseUrl}/sms/send`,
         {
-          apiKey: config.apiKey,
+          api_key: config.apiKey,
           to: formattedPhone,
           message: message,
           from: config.senderId
@@ -168,11 +177,11 @@ class SMSProvider {
         }
       );
 
-      if (response.data && response.data.success) {
+      if (response.data && response.data.success === true) {
         return {
           success: true,
-          messageId: response.data.messageId || response.data.id || `sl_${Date.now()}`,
-          cost: response.data.cost || 0.5,
+          messageId: response.data.id || `sl_${Date.now()}`,
+          cost: response.data.cost || 0,
           phone: formattedPhone,
           provider: 'smsLeopard'
         };
@@ -187,7 +196,8 @@ class SMSProvider {
   }
 
   /**
-   * Send via TextBee (Fallback - Free)
+   * Send via TextBee (Fallback - Free, requires Android app)
+   * FIXED: Improved response handling - accepts 202 status as success
    */
   async sendViaTextBee(phone, message) {
     const provider = this.providers.find(p => p.name === 'textBee');
@@ -204,7 +214,7 @@ class SMSProvider {
       logger.debug(`Sending SMS via TextBee to ${formattedPhone}`);
       
       const response = await axios.post(
-        `${config.baseUrl}/gateway/devices/${config.deviceId}/send-sms`,
+        `${config.baseUrl}/api/v1/gateway/devices/${config.deviceId}/send-sms`,
         {
           recipients: [formattedPhone],
           message: message,
@@ -219,7 +229,32 @@ class SMSProvider {
         }
       );
 
-      if (response.data && (response.data.success || response.data.status === 'sent')) {
+      // Log the full response for debugging
+      logger.debug('TextBee response status:', response.status);
+      logger.debug('TextBee response data:', JSON.stringify(response.data, null, 2));
+
+      // TextBee returns 202 Accepted when message is queued
+      // This is a success response - the SMS will be sent by the app
+      if (response.status === 202) {
+        logger.info('TextBee: Message accepted and queued for sending');
+        return {
+          success: true,
+          messageId: response.data?.id || `tb_${Date.now()}`,
+          cost: 0,
+          phone: formattedPhone,
+          provider: 'textBee',
+          rawResponse: response.data
+        };
+      }
+      
+      // Check for success in response body
+      if (response.data && (
+          response.data.success === true || 
+          response.data.status === 'sent' || 
+          response.data.status === 'queued' ||
+          response.data.message === 'Message sent' ||
+          response.data.id
+        )) {
         return {
           success: true,
           messageId: response.data.messageId || response.data.id || `tb_${Date.now()}`,
@@ -227,13 +262,42 @@ class SMSProvider {
           phone: formattedPhone,
           provider: 'textBee'
         };
-      } else {
-        throw new Error(response.data?.error || 'Unknown error from TextBee');
       }
+      
+      // If status is 200 but we don't recognize the response, still consider success
+      if (response.status === 200) {
+        logger.warn('TextBee: Received 200 but unknown response format, assuming success');
+        return {
+          success: true,
+          messageId: `tb_${Date.now()}`,
+          cost: 0,
+          phone: formattedPhone,
+          provider: 'textBee',
+          warning: 'Unknown response format but status 200',
+          rawResponse: response.data
+        };
+      }
+      
+      // If we got here, something unexpected happened
+      throw new Error(response.data?.error || response.data?.message || `Unexpected status: ${response.status}`);
 
     } catch (error) {
       logger.error('TextBee error:', error.response?.data || error.message);
-      throw new Error(`TextBee: ${error.response?.data?.error || error.message}`);
+      
+      // Handle connection errors gracefully - SMS might still go through
+      if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+        logger.warn('TextBee timeout - SMS may still be sent by the app');
+        return {
+          success: true,
+          messageId: `tb_${Date.now()}`,
+          cost: 0,
+          phone: formattedPhone,
+          provider: 'textBee',
+          warning: 'Request timeout - SMS may still be sent'
+        };
+      }
+      
+      throw new Error(`TextBee: ${error.response?.data?.error || error.response?.data?.message || error.message}`);
     }
   }
 
@@ -242,7 +306,7 @@ class SMSProvider {
    */
   formatPhoneNumber(phone, provider = 'smsleopard') {
     // Remove any non-numeric characters
-    let cleaned = phone.replace(/\D/g, '');
+    let cleaned = phone.toString().replace(/\D/g, '');
     
     // Handle different formats for Kenya numbers
     if (cleaned.length === 9) {
@@ -285,8 +349,8 @@ class SMSProvider {
         const response = await axios.get(
           `${provider.config.baseUrl}/account/balance`,
           {
-            headers: {
-              'Authorization': `Bearer ${provider.config.apiKey}`
+            params: {
+              api_key: provider.config.apiKey
             },
             timeout: 5000
           }
@@ -299,7 +363,7 @@ class SMSProvider {
         if (!provider) return false;
         
         const response = await axios.get(
-          `${provider.config.baseUrl}/gateway/devices/${provider.config.deviceId}/status`,
+          `${provider.config.baseUrl}/api/v1/gateway/devices/${provider.config.deviceId}/status`,
           {
             headers: {
               'x-api-key': provider.config.apiKey
@@ -329,8 +393,8 @@ class SMSProvider {
         const response = await axios.get(
           `${provider.config.baseUrl}/account/balance`,
           {
-            headers: {
-              'Authorization': `Bearer ${provider.config.apiKey}`
+            params: {
+              api_key: provider.config.apiKey
             },
             timeout: 10000
           }

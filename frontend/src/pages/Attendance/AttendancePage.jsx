@@ -5,7 +5,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import Sidebar from '../../components/Layout/Sidebar';
 import AttendanceScanner from '../../components/Attendance/AttendanceScanner';
-import StudentManagement from '../../components/Students/StudentManagement';
+// Change this import - use TransportStudents instead
+import TransportStudents from '../../pages/Students/TransportStudents';
 import { attendanceService } from '../../services/attendance';
 import { format, subDays, subMonths, startOfWeek, endOfWeek } from 'date-fns';
 import {
@@ -89,7 +90,6 @@ export default function AttendancePage() {
         start = subMonths(today, 1);
         break;
       case 'custom':
-        // Keep existing custom dates
         return;
       default:
         start = subDays(today, 7);
@@ -139,7 +139,6 @@ export default function AttendancePage() {
 
   const exportToPDF = async () => {
     toast.success('PDF export feature coming soon');
-    // You can implement PDF export using jsPDF or similar library
   };
 
   const handleLogout = () => {
@@ -230,7 +229,7 @@ export default function AttendancePage() {
           {/* Tab Content */}
           {activeTab === 'scanner' && <AttendanceScanner />}
           
-          {activeTab === 'students' && <StudentManagement />}
+          {activeTab === 'students' && <TransportStudents />}
           
           {activeTab === 'records' && (
             <div style={{
@@ -335,7 +334,7 @@ export default function AttendancePage() {
                         <th style={{ padding: '12px', textAlign: 'left' }}>Bus/Route</th>
                         <th style={{ padding: '12px', textAlign: 'left' }}>Driver</th>
                         <th style={{ padding: '12px', textAlign: 'left' }}>Location</th>
-                      </tr>
+                       </tr>
                     </thead>
                     <tbody>
                       {attendanceData.map((record, index) => (
