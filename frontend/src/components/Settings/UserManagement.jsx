@@ -105,31 +105,56 @@ export default function UserManagement() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (!editingUser && formData.password !== formData.confirmPassword) {
-      toast.error('Passwords do not match');
+    // Validate required fields
+    if (!formData.firstName || !formData.lastName || !formData.email) {
+      toast.error('First name, last name, and email are required');
+      return;
+    }
+
+    // Validate password only for new users
+    if (!editingUser) {
+      if (!formData.password) {
+        toast.error('Password is required for new users');
+        return;
+      }
+      if (formData.password !== formData.confirmPassword) {
+        toast.error('Passwords do not match');
+        return;
+      }
+      if (formData.password.length < 6) {
+        toast.error('Password must be at least 6 characters');
+        return;
+      }
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(formData.email)) {
+      toast.error('Please enter a valid email address');
       return;
     }
 
     try {
+      // Prepare user data - include ALL required fields
       const userData = {
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        email: formData.email,
-        phone: formData.phone,
+        firstName: formData.firstName.trim(),
+        lastName: formData.lastName.trim(),
+        email: formData.email.trim().toLowerCase(),
         role: formData.role,
-        isActive: formData.status === 'active'
+        isActive: formData.status === 'active',
+        phone: formData.phone || ''
       };
 
-      // Add password only for new users
+      // Add password ONLY for new users (REQUIRED by backend)
       if (!editingUser) {
-        userData.password = formData.password || 'password123';
+        userData.password = formData.password;
       }
 
-      // Add role-specific details
+      // Add driver-specific details if role is driver
       if (formData.role === 'driver') {
         userData.driverDetails = {
-          licenseNumber: formData.driverDetails.licenseNumber,
-          licenseExpiry: formData.driverDetails.licenseExpiry,
+          licenseNumber: formData.driverDetails.licenseNumber || '',
+          licenseExpiry: formData.driverDetails.licenseExpiry || null,
           experience: parseInt(formData.driverDetails.experience) || 0
         };
       }
@@ -139,6 +164,8 @@ export default function UserManagement() {
         ? `http://localhost:5000/api/users/${editingUser._id}`
         : 'http://localhost:5000/api/users';
       const method = editingUser ? 'PUT' : 'POST';
+      
+      console.log('Sending user data:', userData); // Debug log
       
       const response = await fetch(url, {
         method,
@@ -152,7 +179,10 @@ export default function UserManagement() {
       const result = await response.json();
       
       if (!response.ok) {
-        throw new Error(result.message || 'Failed to save user');
+        // Extract detailed error message
+        const errorMessage = result.message || result.error || 'Failed to save user';
+        console.error('API Error:', result);
+        throw new Error(errorMessage);
       }
       
       toast.success(editingUser ? 'User updated successfully' : 'User created successfully');
@@ -248,10 +278,21 @@ export default function UserManagement() {
 
   const handleResetPassword = async (user) => {
     try {
+      // Send password reset request
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:5000/api/users/${user._id}/reset-password`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Failed to reset password');
       toast.success(`Password reset email sent to ${user.email}`);
     } catch (error) {
       console.error('Error resetting password:', error);
-      toast.error('Failed to reset password');
+      toast.error(error.message || 'Failed to reset password');
     }
   };
 
@@ -375,7 +416,7 @@ export default function UserManagement() {
               <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
               <th style={{ padding: '15px', textAlign: 'left' }}>Last Login</th>
               <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-             </tr>
+            </tr>
           </thead>
           <tbody>
             {users.length > 0 ? users.map(user => (
@@ -430,7 +471,7 @@ export default function UserManagement() {
                   {user.lastLogin ? format(new Date(user.lastLogin), 'MMM dd, yyyy HH:mm') : 'Never'}
                 </td>
                 <td style={{ padding: '15px' }}>
-                  <div style={{ display: 'flex', gap: '5px' }}>
+                  <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
                     <button
                       onClick={() => handleEdit(user)}
                       style={{
@@ -485,7 +526,7 @@ export default function UserManagement() {
                         fontSize: '12px'
                       }}
                     >
-                      🗑️
+                      🗑️ Delete
                     </button>
                   </div>
                 </td>
@@ -529,6 +570,7 @@ export default function UserManagement() {
               {editingUser ? 'Edit User' : 'Add New User'}
             </h3>
             <form onSubmit={handleSubmit}>
+              {/* Name Fields */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
                 <div>
                   <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
@@ -569,6 +611,7 @@ export default function UserManagement() {
                 </div>
               </div>
 
+              {/* Email Field */}
               <div style={{ marginBottom: '15px', marginTop: '15px' }}>
                 <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
                   Email *
@@ -588,6 +631,7 @@ export default function UserManagement() {
                 />
               </div>
 
+              {/* Phone Field */}
               <div style={{ marginBottom: '15px' }}>
                 <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
                   Phone
@@ -606,6 +650,7 @@ export default function UserManagement() {
                 />
               </div>
 
+              {/* Role Selection */}
               <div style={{ marginBottom: '15px' }}>
                 <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
                   Role *
@@ -623,12 +668,12 @@ export default function UserManagement() {
                   }}
                 >
                   <option value="admin">Administrator</option>
-                  <option value="school_admin">School Admin</option>
                   <option value="driver">Driver</option>
                   <option value="parent">Parent</option>
                 </select>
               </div>
 
+              {/* Driver Details - Only for driver role */}
               {formData.role === 'driver' && (
                 <div style={{
                   padding: '15px',
@@ -692,6 +737,7 @@ export default function UserManagement() {
                 </div>
               )}
 
+              {/* Password Fields - Only for new users */}
               {!editingUser && (
                 <>
                   <div style={{ marginBottom: '15px' }}>
@@ -703,7 +749,8 @@ export default function UserManagement() {
                       name="password"
                       value={formData.password}
                       onChange={handleInputChange}
-                      required={!editingUser}
+                      required
+                      minLength="6"
                       style={{
                         width: '100%',
                         padding: '10px',
@@ -711,6 +758,7 @@ export default function UserManagement() {
                         borderRadius: '4px'
                       }}
                     />
+                    <small style={{ color: '#666', fontSize: '11px' }}>Minimum 6 characters</small>
                   </div>
 
                   <div style={{ marginBottom: '15px' }}>
@@ -722,7 +770,7 @@ export default function UserManagement() {
                       name="confirmPassword"
                       value={formData.confirmPassword}
                       onChange={handleInputChange}
-                      required={!editingUser}
+                      required
                       style={{
                         width: '100%',
                         padding: '10px',
@@ -734,6 +782,7 @@ export default function UserManagement() {
                 </>
               )}
 
+              {/* Status Field */}
               <div style={{ marginBottom: '15px' }}>
                 <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
                   Status
@@ -754,6 +803,7 @@ export default function UserManagement() {
                 </select>
               </div>
 
+              {/* Form Buttons */}
               <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
                 <button
                   type="submit"

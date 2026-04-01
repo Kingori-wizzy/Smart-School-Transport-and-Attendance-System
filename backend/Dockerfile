@@ -2,7 +2,7 @@ FROM node:20-bullseye
 
 WORKDIR /app
 
-# Install build dependencies for TensorFlow
+# Install system dependencies (only essential build tools)
 RUN apt-get update && apt-get install -y \
     build-essential \
     python3 \
@@ -13,11 +13,8 @@ RUN apt-get update && apt-get install -y \
 # Copy package files
 COPY package*.json ./
 
-# Install ALL dependencies (including dev dependencies)
+# Install dependencies (TensorFlow will use pure JS version)
 RUN npm install
-
-# If TensorFlow fails to install, try this specific command
-RUN npm install @tensorflow/tfjs-node --force
 
 # Copy source code
 COPY . .
@@ -25,7 +22,8 @@ COPY . .
 # Create uploads directory
 RUN mkdir -p uploads
 
+# Expose port
 EXPOSE 5000
 
-# Use nodemon for development
+# Start the server with nodemon for development
 CMD ["npm", "run", "dev"]

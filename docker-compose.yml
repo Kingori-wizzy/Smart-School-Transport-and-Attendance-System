@@ -1,42 +1,69 @@
 version: '3.8'
 
 services:
+  mongodb:
+    image: mongo:7
+    container_name: smart-school-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - smart-school-network
+
   redis:
     image: redis:7-alpine
     container_name: smart-school-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
       - redis-data:/data
     networks:
       - smart-school-network
-    restart: unless-stopped
 
   backend:
     build: ./backend
+    container_name: smart-school-backend
+    restart: unless-stopped
     ports:
       - "5000:5000"
     environment:
       - NODE_ENV=development
       - PORT=5000
-      - MONGODB_URI=mongodb+srv://smartschool_system:364VTPjose@cluster0.4u783we.mongodb.net/smartSchoolDB?retryWrites=true&w=majority
-      - REDIS_URL=redis://redis:6379
+      - "MONGODB_URI=mongodb://mongodb:27017/smartSchoolDB"
+      - "REDIS_URL=redis://redis:6379"
+      - "JWT_SECRET=supersecretkey12345"
+      - "EMAIL_USER=kingorijoseph898@gmail.com"
+      - "EMAIL_PASSWORD=bncv muqt kqqm lrtd"
+      - "EMAIL_SERVICE=gmail"
+      - "SMS_ENABLED=true"
+      - "TEXTBEE_ENABLED=true"
+      - "TEXTBEE_API_KEY=d933d148-0264-44bd-addf-1590919c4ee8"
+      - "TEXTBEE_DEVICE_ID=69c0b4a8f12ec7955e32ad28"
+      - "TEXTBEE_BASE_URL=https://api.textbee.dev"
+      - "CACHE_ENABLED=true"
+      - "CACHE_PREFIX=smart_school:"
+      - "CACHE_DEFAULT_TTL=300"
     volumes:
       - ./backend:/app
       - /app/node_modules
       - backend-uploads:/app/uploads
     depends_on:
+      - mongodb
       - redis
     networks:
       - smart-school-network
-    restart: unless-stopped
 
   frontend:
     build: ./frontend
+    container_name: smart-school-frontend
+    restart: unless-stopped
     ports:
       - "5173:5173"
     environment:
-      - VITE_API_URL=http://localhost:5000/api
+      - "VITE_API_URL=http://localhost:5000/api"
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -44,12 +71,12 @@ services:
       - backend
     networks:
       - smart-school-network
-    restart: unless-stopped
 
 networks:
   smart-school-network:
     driver: bridge
 
 volumes:
+  mongodb-data:
   redis-data:
   backend-uploads:
