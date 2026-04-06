@@ -28,6 +28,7 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const transportRoutes = require('./routes/transportRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
+const messagingRoutes = require('./routes/messagingRoutes');
 
 // Import AI services (optional - for initialization)
 const analyticsService = require('./ai/services/analyticsService');
@@ -109,6 +110,7 @@ app.use('/api/settings', settingsRoutes);
 // Additional routes
 app.use('/api/assignments', require('./routes/assignmentRoutes'));
 app.use('/api/routes', require('./routes/routeRoutes'));
+app.use('/api/messaging', messagingRoutes);
 
 // ==================== HEALTH & INFO ROUTES ====================
 

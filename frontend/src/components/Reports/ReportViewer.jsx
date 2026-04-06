@@ -83,7 +83,6 @@ export default function ReportViewer({ reports: externalReports, loading: extern
 
   const handleDownload = async (report) => {
     try {
-      // Create a simple text/CSV download as fallback since exportService is removed
       const data = report.data || report;
       let content = '';
       let filename = `${report.name || 'report'}.${report.format || 'pdf'}`;
@@ -115,6 +114,7 @@ export default function ReportViewer({ reports: externalReports, loading: extern
     }
   };
 
+  // FIXED: Use _id instead of id for MongoDB documents
   const handleDelete = async (id) => {
     if (!window.confirm('Are you sure you want to delete this report?')) return;
     
@@ -122,7 +122,7 @@ export default function ReportViewer({ reports: externalReports, loading: extern
       if (onDelete) {
         await onDelete(id);
         if (!useExternalData) {
-          setReports(reports.filter(r => r.id !== id));
+          setReports(reports.filter(r => r._id !== id));
         }
       } else {
         const token = localStorage.getItem('token');
@@ -132,7 +132,7 @@ export default function ReportViewer({ reports: externalReports, loading: extern
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.message || 'Failed to delete report');
-        setReports(reports.filter(r => r.id !== id));
+        setReports(reports.filter(r => r._id !== id));
       }
       toast.success('Report deleted successfully');
     } catch (error) {
@@ -142,13 +142,13 @@ export default function ReportViewer({ reports: externalReports, loading: extern
   };
 
   const handleShare = (report) => {
-    const shareUrl = `${window.location.origin}/reports/${report.id}`;
+    const shareUrl = `${window.location.origin}/reports/${report._id}`;
     navigator.clipboard.writeText(shareUrl);
     toast.success(`Share link copied for ${report.name}`);
   };
 
   const handlePrint = (report) => {
-    const printContent = document.getElementById(`report-${report.id}`);
+    const printContent = document.getElementById(`report-${report._id}`);
     if (printContent) {
       const printWindow = window.open('', '_blank');
       printWindow.document.write(`
@@ -178,7 +178,6 @@ export default function ReportViewer({ reports: externalReports, loading: extern
       printWindow.print();
       toast.success(`Printing ${report.name}`);
     } else {
-      // Fallback if element not found
       toast.info(`Preview ${report.name} for printing`);
     }
   };
@@ -283,10 +282,11 @@ export default function ReportViewer({ reports: externalReports, loading: extern
         gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))',
         gap: '20px'
       }}>
+        {/* FIXED: Use _id as key */}
         {filteredReports.map(report => (
           <div
-            key={report.id}
-            id={`report-${report.id}`}
+            key={report._id}
+            id={`report-${report._id}`}
             style={{
               background: 'white',
               borderRadius: '12px',
@@ -294,7 +294,7 @@ export default function ReportViewer({ reports: externalReports, loading: extern
               overflow: 'hidden',
               transition: 'transform 0.3s ease, boxShadow 0.3s ease',
               cursor: 'pointer',
-              border: selectedReport?.id === report.id ? '2px solid #2196F3' : 'none'
+              border: selectedReport?._id === report._id ? '2px solid #2196F3' : 'none'
             }}
             onClick={() => handleView(report)}
             onMouseEnter={(e) => {
@@ -440,7 +440,7 @@ export default function ReportViewer({ reports: externalReports, loading: extern
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleDelete(report.id);
+                    handleDelete(report._id);
                   }}
                   style={{
                     padding: '8px 12px',

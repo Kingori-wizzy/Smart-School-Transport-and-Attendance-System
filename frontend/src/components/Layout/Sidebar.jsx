@@ -7,15 +7,21 @@ export default function Sidebar() {
   const { theme, toggleTheme, sidebarCollapsed } = useTheme();
 
   const menuItems = [
-    { path: '/', icon: 'D', label: 'Dashboard' },
-    { path: '/attendance', icon: 'A', label: 'Attendance' },
-    { path: '/transport', icon: 'B', label: 'Transport' },
-    { path: '/students/transport', icon: 'S', label: 'Transport Students' },
-    { path: '/analytics', icon: 'G', label: 'Analytics' },
-    { path: '/reports', icon: 'R', label: 'Reports' },
-    { path: '/sms', icon: 'M', label: 'SMS Dashboard' },
-    { path: '/settings', icon: 'S', label: 'Settings' }
+    { path: '/', label: 'Dashboard' },
+    { path: '/attendance', label: 'Attendance' },
+    { path: '/transport', label: 'Transport' },
+    { path: '/students/transport', label: 'Transport Students' },
+    { path: '/analytics', label: 'Analytics' },
+    { path: '/reports', label: 'Reports' },
+    { path: '/messaging', label: 'Messaging' },
+    { path: '/sms', label: 'SMS Dashboard' },
+    { path: '/settings', label: 'Settings' }
   ];
+
+  // Helper function to get current time
+  const getCurrentTime = () => {
+    return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
 
   if (sidebarCollapsed) {
     return (
@@ -32,29 +38,39 @@ export default function Sidebar() {
                 title={item.label}
                 style={{ justifyContent: 'center', padding: '12px 0' }}
               >
-                <span style={{ fontSize: '20px' }}>{item.icon}</span>
+                <span style={{ fontSize: '12px', fontWeight: '500' }}>
+                  {item.label.charAt(0)}
+                  {item.label.charAt(1) === 't' && item.label.charAt(2) === 'u' ? '' : ''}
+                </span>
               </NavLink>
             </li>
           ))}
         </ul>
         
         <div className="sidebar-footer" style={{ textAlign: 'center' }}>
-          <p title={isConnected ? 'Live' : 'Offline'}>
-            {isConnected ? '●' : '○'}
+          <p title={isConnected ? 'Live Connection' : 'Disconnected'}>
+            <span style={{ 
+              display: 'inline-block',
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              backgroundColor: isConnected ? '#4CAF50' : '#f44336',
+              boxShadow: isConnected ? '0 0 5px #4CAF50' : 'none'
+            }}></span>
           </p>
           <button
             onClick={toggleTheme}
             style={{
               background: 'none',
               border: 'none',
-              fontSize: '20px',
+              fontSize: '16px',
               cursor: 'pointer',
               color: 'white',
               marginTop: '10px'
             }}
-            title={theme === 'light' ? 'Switch to Dark' : 'Switch to Light'}
+            title={theme === 'light' ? 'Switch to Dark Mode' : 'Switch to Light Mode'}
           >
-            {theme === 'light' ? '🌙' : '☀️'}
+            {theme === 'light' ? 'Dark' : 'Light'}
           </button>
         </div>
       </div>
@@ -65,7 +81,11 @@ export default function Sidebar() {
     <div className="sidebar">
       <div className="sidebar-header">
         <h3>Smart Transport</h3>
+        <p style={{ fontSize: '12px', marginTop: '5px', opacity: 0.8 }}>
+          School Management System
+        </p>
       </div>
+      
       <ul className="sidebar-nav">
         {menuItems.map(item => (
           <li key={item.path}>
@@ -73,19 +93,34 @@ export default function Sidebar() {
               to={item.path}
               className={({ isActive }) => isActive ? 'active' : ''}
             >
-              <span>{item.icon}</span> {item.label}
+              {item.label}
             </NavLink>
           </li>
         ))}
       </ul>
       
       <div className="sidebar-footer">
-        <p>
-          <span>Network</span> {isConnected ? 'Live' : 'Offline'}
-        </p>
-        <p>
-          <span>Time</span> {new Date().toLocaleTimeString()}
-        </p>
+        <div style={{ 
+          padding: '10px', 
+          backgroundColor: 'rgba(255,255,255,0.05)', 
+          borderRadius: '8px',
+          marginBottom: '10px'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+            <span style={{ fontSize: '12px', opacity: 0.7 }}>Network</span>
+            <span style={{ 
+              fontSize: '12px',
+              color: isConnected ? '#4CAF50' : '#f44336'
+            }}>
+              {isConnected ? 'Online' : 'Offline'}
+            </span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '12px', opacity: 0.7 }}>Time</span>
+            <span style={{ fontSize: '12px' }}>{getCurrentTime()}</span>
+          </div>
+        </div>
+        
         <button
           onClick={toggleTheme}
           style={{
@@ -96,12 +131,15 @@ export default function Sidebar() {
             borderRadius: '20px',
             cursor: 'pointer',
             width: '100%',
-            marginTop: '10px',
+            marginTop: '5px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '8px'
+            gap: '8px',
+            transition: 'all 0.3s ease'
           }}
+          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.2)'}
+          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.1)'}
         >
           {theme === 'light' ? 'Dark Mode' : 'Light Mode'}
         </button>

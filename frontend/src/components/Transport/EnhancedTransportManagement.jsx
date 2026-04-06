@@ -27,7 +27,7 @@ export default function EnhancedTransportManagement() {
   const [selectedStudents, setSelectedStudents] = useState([]);
   const [assignLoading, setAssignLoading] = useState(false);
   
-  // NEW: Trip Student Assignment Modal State
+  // Trip Student Assignment Modal State
   const [showTripAssignModal, setShowTripAssignModal] = useState(false);
   const [selectedTripForAssignment, setSelectedTripForAssignment] = useState(null);
   const [availableStudentsForTrip, setAvailableStudentsForTrip] = useState([]);
@@ -81,6 +81,7 @@ export default function EnhancedTransportManagement() {
     endTime: '',
     tripDate: '',
     tripType: 'morning',
+    status: 'scheduled',
     
     // Assignment fields
     studentId: '',
@@ -278,7 +279,6 @@ export default function EnhancedTransportManagement() {
     }
   };
 
-  // NEW: Fetch students not assigned to a specific trip
   const fetchStudentsNotInTrip = async (tripId) => {
     try {
       const response = await fetch(`http://localhost:5000/api/students/unassigned-trips/list?tripId=${tripId}`, {
@@ -293,7 +293,6 @@ export default function EnhancedTransportManagement() {
     }
   };
 
-  // NEW: Assign student to trip
   const assignStudentToTrip = async (studentId, tripId, tripType) => {
     try {
       const response = await fetch(`http://localhost:5000/api/students/${studentId}/assign-trip`, {
@@ -313,7 +312,6 @@ export default function EnhancedTransportManagement() {
     }
   };
 
-  // NEW: Remove student from trip
   const removeStudentFromTrip = async (studentId, tripId) => {
     try {
       const response = await fetch(`http://localhost:5000/api/students/${studentId}/remove-trip/${tripId}`, {
@@ -558,7 +556,8 @@ export default function EnhancedTransportManagement() {
       assignedBus: '', emergencyContact: '', address: '', routeName: '',
       description: '', startPoint: '', endPoint: '', distance: 0, duration: 0,
       stops: 0, waypoints: [], tripName: '', routeId: '', busId: '', driverId: '',
-      startTime: '', endTime: '', tripDate: '', tripType: 'morning', studentId: '', busAssignmentId: ''
+      startTime: '', endTime: '', tripDate: '', tripType: 'morning', status: 'scheduled', 
+      studentId: '', busAssignmentId: ''
     });
   };
 
@@ -715,7 +714,6 @@ export default function EnhancedTransportManagement() {
     }
   };
 
-  // NEW: Open Trip Assignment Modal
   const openTripAssignModal = async (trip) => {
     setSelectedTripForAssignment(trip);
     setTripAssignLoading(true);
@@ -732,7 +730,6 @@ export default function EnhancedTransportManagement() {
     }
   };
 
-  // NEW: Handle Assign Students to Trip
   const handleAssignStudentsToTrip = async () => {
     if (!selectedTripForAssignment) return;
     if (selectedStudentsForTrip.length === 0) {
@@ -765,7 +762,7 @@ export default function EnhancedTransportManagement() {
       setShowTripAssignModal(false);
       setSelectedTripForAssignment(null);
       setSelectedStudentsForTrip([]);
-      fetchAllData(); // Refresh data
+      fetchAllData();
     } catch (error) {
       console.error('Error assigning students to trip:', error);
       toast.error(error.message || 'Failed to assign students');
@@ -774,14 +771,13 @@ export default function EnhancedTransportManagement() {
     }
   };
 
-  // NEW: Handle Remove Student from Trip
   const handleRemoveStudentFromTrip = async (tripId, studentId, studentName) => {
     if (!window.confirm(`Remove ${studentName} from this trip?`)) return;
     
     try {
       await removeStudentFromTrip(studentId, tripId);
       toast.success(`${studentName} removed from trip`);
-      fetchAllData(); // Refresh data
+      fetchAllData();
     } catch (error) {
       console.error('Error removing student:', error);
       toast.error(error.message || 'Failed to remove student');
@@ -899,16 +895,17 @@ export default function EnhancedTransportManagement() {
       case 'running': return '#4CAF50';
       case 'in-progress': return '#4CAF50';
       case 'completed': return '#9C27B0';
+      case 'cancelled': return '#f44336';
       default: return '#999';
     }
   };
 
   const tabs = [
-    { id: 'buses', name: 'Buses', icon: '🚌', count: buses.length },
-    { id: 'drivers', name: 'Drivers', icon: '👤', count: drivers.length },
-    { id: 'routes', name: 'Routes', icon: '🗺️', count: routes.length },
-    { id: 'trips', name: 'Trips', icon: '📅', count: trips.length },
-    { id: 'assignments', name: 'Assignments', icon: '📋', count: assignments.length }
+    { id: 'buses', name: 'Buses', count: buses.length },
+    { id: 'drivers', name: 'Drivers', count: drivers.length },
+    { id: 'routes', name: 'Routes', count: routes.length },
+    { id: 'trips', name: 'Trips', count: trips.length },
+    { id: 'assignments', name: 'Assignments', count: assignments.length }
   ];
 
   if (loading) {
@@ -952,7 +949,6 @@ export default function EnhancedTransportManagement() {
               transition: 'all 0.3s ease'
             }}
           >
-            <span>{tab.icon}</span>
             {tab.name}
             <span style={{
               background: activeTab === tab.id ? 'rgba(255,255,255,0.2)' : '#ddd',
@@ -1035,7 +1031,7 @@ export default function EnhancedTransportManagement() {
         <div style={{ display: 'flex', gap: '15px', flex: 1, flexWrap: 'wrap' }}>
           <input
             type="text"
-            placeholder={`🔍 Search ${activeTab}...`}
+            placeholder={`Search ${activeTab}...`}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{
@@ -1080,7 +1076,7 @@ export default function EnhancedTransportManagement() {
             gap: '5px'
           }}
         >
-          ➕ Add {activeTab === 'assignments' ? 'Assignment' : activeTab.slice(0, -1)}
+          Add {activeTab === 'assignments' ? 'Assignment' : activeTab.slice(0, -1)}
         </button>
       </div>
 
@@ -1178,7 +1174,7 @@ export default function EnhancedTransportManagement() {
                             fontSize: '12px'
                           }}
                         >
-                          👥 Assign
+                          Assign
                         </button>
                         <button
                           onClick={() => handleEdit(bus)}
@@ -1192,7 +1188,7 @@ export default function EnhancedTransportManagement() {
                             fontSize: '12px'
                           }}
                         >
-                          ✏️ Edit
+                          Edit
                         </button>
                         <button
                           onClick={() => handleStatusToggle(bus)}
@@ -1206,7 +1202,7 @@ export default function EnhancedTransportManagement() {
                             fontSize: '12px'
                           }}
                         >
-                          {bus.status === 'active' ? '🔴 Off' : '🟢 On'}
+                          {bus.status === 'active' ? 'Off' : 'On'}
                         </button>
                       </div>
                     </td>
@@ -1294,7 +1290,7 @@ export default function EnhancedTransportManagement() {
                           fontSize: '12px'
                         }}
                       >
-                        ✏️ Edit
+                        Edit
                       </button>
                       <button
                         onClick={() => handleStatusToggle(driver)}
@@ -1308,7 +1304,7 @@ export default function EnhancedTransportManagement() {
                           fontSize: '12px'
                         }}
                       >
-                        {driver.status === 'active' ? '🔴 Off' : '🟢 On'}
+                        {driver.status === 'active' ? 'Off' : 'On'}
                       </button>
                     </div>
                   </td>
@@ -1325,7 +1321,7 @@ export default function EnhancedTransportManagement() {
               <tr style={{ background: '#f8f9fa' }}>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Route</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Description</th>
-                <th style={{ padding: '15px', textAlign: 'left' }}>Start → End</th>
+                <th style={{ padding: '15px', textAlign: 'left' }}>Start - End</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Distance</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Duration</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Stops</th>
@@ -1341,7 +1337,7 @@ export default function EnhancedTransportManagement() {
                   </td>
                   <td style={{ padding: '15px' }}>{route.description}</td>
                   <td style={{ padding: '15px' }}>
-                    {route.startPoint} → {route.endPoint}
+                    {route.startPoint} - {route.endPoint}
                   </td>
                   <td style={{ padding: '15px' }}>{route.distance} km</td>
                   <td style={{ padding: '15px' }}>{route.duration} min</td>
@@ -1356,7 +1352,7 @@ export default function EnhancedTransportManagement() {
                     }}>
                       {route.status}
                     </span>
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>
                     <div style={{ display: 'flex', gap: '5px' }}>
                       <button
@@ -1371,7 +1367,7 @@ export default function EnhancedTransportManagement() {
                           fontSize: '12px'
                         }}
                       >
-                        🗺️ Map
+                        Map
                       </button>
                       <button
                         onClick={() => handleEdit(route)}
@@ -1385,7 +1381,7 @@ export default function EnhancedTransportManagement() {
                           fontSize: '12px'
                         }}
                       >
-                        ✏️ Edit
+                        Edit
                       </button>
                       <button
                         onClick={() => handleDelete(route.id)}
@@ -1399,17 +1395,17 @@ export default function EnhancedTransportManagement() {
                           fontSize: '12px'
                         }}
                       >
-                        🗑️
+                        Delete
                       </button>
                     </div>
-                  </td>
-                </tr>
+                   </td>
+                 </tr>
               ))}
             </tbody>
           </table>
         )}
 
-        {/* Trips Tab - ENHANCED with Student Assignment */}
+        {/* Trips Tab */}
         {activeTab === 'trips' && (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -1421,23 +1417,23 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Students</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-              </tr>
+               </tr>
             </thead>
             <tbody>
               {trips.map(trip => (
                 <tr key={trip.id} style={{ borderBottom: '1px solid #eee' }}>
                   <td style={{ padding: '15px', fontWeight: 'bold' }}>
                     {trip.tripName}
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>{trip.route}</td>
                   <td style={{ padding: '15px' }}>
                     <div>{trip.bus}</div>
                     <div style={{ fontSize: '12px', color: '#666' }}>{trip.driver}</div>
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>
                     <div>{trip.startTime} - {trip.endTime}</div>
                     <div style={{ fontSize: '11px', color: '#666' }}>{trip.tripDate}</div>
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                       <span style={{
@@ -1452,7 +1448,6 @@ export default function EnhancedTransportManagement() {
                       {trip.studentsCount > 0 && (
                         <button
                           onClick={() => {
-                            // Show student list
                             const studentList = trip.students?.map(s => 
                               `${s.firstName} ${s.lastName}`
                             ).join('\n') || 'No student details';
@@ -1468,11 +1463,11 @@ export default function EnhancedTransportManagement() {
                             fontSize: '11px'
                           }}
                         >
-                          👥 View
+                          View
                         </button>
                       )}
                     </div>
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>
                     <span style={{
                       background: getStatusColor(trip.status),
@@ -1483,7 +1478,7 @@ export default function EnhancedTransportManagement() {
                     }}>
                       {trip.status}
                     </span>
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>
                     <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
                       {trip.status === 'scheduled' && (
@@ -1499,7 +1494,7 @@ export default function EnhancedTransportManagement() {
                             fontSize: '12px'
                           }}
                         >
-                          ▶️ Start
+                          Start
                         </button>
                       )}
                       {trip.status === 'running' && (
@@ -1515,7 +1510,7 @@ export default function EnhancedTransportManagement() {
                             fontSize: '12px'
                           }}
                         >
-                          ⏹️ End
+                          End
                         </button>
                       )}
                       <button
@@ -1531,7 +1526,7 @@ export default function EnhancedTransportManagement() {
                         }}
                         title="Assign students to this trip"
                       >
-                        👥 Assign
+                        Assign
                       </button>
                       <button
                         onClick={() => handleEdit(trip)}
@@ -1545,7 +1540,7 @@ export default function EnhancedTransportManagement() {
                           fontSize: '12px'
                         }}
                       >
-                        ✏️ Edit
+                        Edit
                       </button>
                       <button
                         onClick={() => handleDelete(trip.id)}
@@ -1559,11 +1554,11 @@ export default function EnhancedTransportManagement() {
                           fontSize: '12px'
                         }}
                       >
-                        🗑️
+                        Delete
                       </button>
                     </div>
-                  </td>
-                </tr>
+                   </td>
+                 </tr>
               ))}
             </tbody>
           </table>
@@ -1581,7 +1576,7 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Pickup</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Dropoff</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-              </tr>
+               </tr>
             </thead>
             <tbody>
               {assignments.map(student => {
@@ -1591,12 +1586,12 @@ export default function EnhancedTransportManagement() {
                     <td style={{ padding: '15px' }}>
                       <div style={{ fontWeight: 'bold' }}>{student.name}</div>
                       <div style={{ fontSize: '12px', color: '#666' }}>{student.admissionNumber}</div>
-                    </td>
+                     </td>
                     <td style={{ padding: '15px' }}>{student.classLevel}</td>
                     <td style={{ padding: '15px' }}>
                       <div>{student.parentName}</div>
                       <div style={{ fontSize: '12px', color: '#666' }}>{student.parentPhone}</div>
-                    </td>
+                     </td>
                     <td style={{ padding: '15px' }}>
                       <span style={{
                         background: '#2196F3',
@@ -1607,7 +1602,7 @@ export default function EnhancedTransportManagement() {
                       }}>
                         {bus?.busNumber || 'Unknown'}
                       </span>
-                    </td>
+                     </td>
                     <td style={{ padding: '15px' }}>{student.pickupPoint || 'N/A'}</td>
                     <td style={{ padding: '15px' }}>{student.dropoffPoint || 'N/A'}</td>
                     <td style={{ padding: '15px' }}>
@@ -1623,10 +1618,10 @@ export default function EnhancedTransportManagement() {
                           fontSize: '12px'
                         }}
                       >
-                        🔄 Reassign
+                        Reassign
                       </button>
-                    </td>
-                  </tr>
+                     </td>
+                   </tr>
                 );
               })}
             </tbody>
@@ -1920,7 +1915,7 @@ export default function EnhancedTransportManagement() {
 
             <input
               type="text"
-              placeholder="🔍 Search students by name or admission number..."
+              placeholder="Search students by name or admission number..."
               onChange={(e) => {
                 const searchTerm = e.target.value.toLowerCase();
                 const filtered = availableStudents.filter(s => 
@@ -2033,7 +2028,7 @@ export default function EnhancedTransportManagement() {
               <span>Selected: <strong>{selectedStudents.length}</strong> students</span>
               <span>Bus Capacity: <strong>{selectedBusForAssignment.capacity}</strong></span>
               {selectedStudents.length > selectedBusForAssignment.capacity && (
-                <span style={{ color: '#f44336' }}>⚠️ Exceeds capacity!</span>
+                <span style={{ color: '#f44336' }}>Exceeds capacity!</span>
               )}
             </div>
 
@@ -2080,7 +2075,7 @@ export default function EnhancedTransportManagement() {
         </div>
       )}
 
-      {/* NEW: Trip Student Assignment Modal */}
+      {/* Trip Student Assignment Modal */}
       {showTripAssignModal && selectedTripForAssignment && (
         <div style={{
           position: 'fixed',
@@ -2147,7 +2142,7 @@ export default function EnhancedTransportManagement() {
 
             <input
               type="text"
-              placeholder="🔍 Search students by name or admission number..."
+              placeholder="Search students by name or admission number..."
               onChange={(e) => {
                 const searchTerm = e.target.value.toLowerCase();
                 const filtered = availableStudentsForTrip.filter(s => 

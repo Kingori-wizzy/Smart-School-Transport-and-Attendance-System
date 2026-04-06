@@ -5,10 +5,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import Sidebar from '../../components/Layout/Sidebar';
 import AttendanceScanner from '../../components/Attendance/AttendanceScanner';
-// Change this import - use TransportStudents instead
 import TransportStudents from '../../pages/Students/TransportStudents';
 import { attendanceService } from '../../services/attendance';
-import { format, subDays, subMonths, startOfWeek, endOfWeek } from 'date-fns';
+import { format, subDays, subMonths, startOfWeek, endOfWeek, startOfMonth, endOfMonth } from 'date-fns';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell
@@ -26,15 +25,20 @@ export default function AttendancePage() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
+  const [currentTrip, setCurrentTrip] = useState(null);
 
   const tabs = [
-    { id: 'scanner', name: 'Scanner', icon: '📷' },
-    { id: 'records', name: 'Records', icon: '📋' },
-    { id: 'students', name: 'Students', icon: '👥' },
-    { id: 'reports', name: 'Reports', icon: '📊' }
+    { id: 'scanner', name: 'Scanner' },
+    { id: 'records', name: 'Records' },
+    { id: 'students', name: 'Students' },
+    { id: 'reports', name: 'Reports' }
   ];
 
   const COLORS = ['#4CAF50', '#FF9800', '#2196F3', '#f44336', '#9C27B0'];
+
+  useEffect(() => {
+    fetchCurrentTrip();
+  }, []);
 
   useEffect(() => {
     if (activeTab === 'reports') {
@@ -48,12 +52,24 @@ export default function AttendancePage() {
     }
   }, [activeTab]);
 
+  const fetchCurrentTrip = async () => {
+    try {
+      const trip = await attendanceService.getCurrentTrip();
+      if (trip && trip._id) {
+        setCurrentTrip(trip);
+      }
+    } catch (error) {
+      console.error('Error fetching current trip:', error);
+    }
+  };
+
   const fetchAttendanceData = async () => {
     try {
       setLoading(true);
       const data = await attendanceService.getAttendanceByDateRange(startDate, endDate);
-      setAttendanceData(data.records || []);
+      setAttendanceData(data.records || data || []);
     } catch (error) {
+      console.error('Error fetching attendance data:', error);
       toast.error('Failed to fetch attendance data');
     } finally {
       setLoading(false);
@@ -66,6 +82,8 @@ export default function AttendancePage() {
       const response = await attendanceService.getAttendanceStats();
       if (response.success) {
         setStats(response.data);
+      } else {
+        setStats(response);
       }
     } catch (error) {
       console.error('Error fetching stats:', error);
@@ -82,21 +100,27 @@ export default function AttendancePage() {
     switch(range) {
       case 'today':
         start = today;
+        setStartDate(format(today, 'yyyy-MM-dd'));
+        setEndDate(format(today, 'yyyy-MM-dd'));
         break;
       case 'week':
         start = startOfWeek(today);
+        setStartDate(format(start, 'yyyy-MM-dd'));
+        setEndDate(format(today, 'yyyy-MM-dd'));
         break;
       case 'month':
-        start = subMonths(today, 1);
+        start = startOfMonth(today);
+        setStartDate(format(start, 'yyyy-MM-dd'));
+        setEndDate(format(today, 'yyyy-MM-dd'));
         break;
       case 'custom':
         return;
       default:
         start = subDays(today, 7);
+        setStartDate(format(start, 'yyyy-MM-dd'));
+        setEndDate(format(today, 'yyyy-MM-dd'));
     }
     
-    setStartDate(format(start, 'yyyy-MM-dd'));
-    setEndDate(format(today, 'yyyy-MM-dd'));
     fetchAttendanceData();
   };
 
@@ -108,20 +132,21 @@ export default function AttendancePage() {
 
     try {
       setExportLoading(true);
-      const headers = ['Date', 'Student ID', 'Student Name', 'Class', 'Event Type', 'Bus', 'Time', 'Location'];
+      const headers = ['Date', 'Time', 'Student Name', 'Student ID', 'Class', 'Event Type', 'Bus Number', 'Location'];
       const csvData = attendanceData.map(record => [
         format(new Date(record.createdAt || record.date || new Date()), 'yyyy-MM-dd'),
-        record.studentId?._id || record.studentId || record.student?.id || 'N/A',
-        record.studentId?.name || record.studentName || record.student?.name || 'Unknown',
+        format(new Date(record.createdAt || record.date || new Date()), 'HH:mm:ss'),
+        record.studentId?.firstName ? `${record.studentId.firstName} ${record.studentId.lastName}` : (record.studentName || 'Unknown'),
+        record.studentId?.admissionNumber || record.studentId?._id || record.studentId || 'N/A',
         record.studentId?.classLevel || record.className || 'N/A',
         record.eventType || record.type || 'unknown',
-        record.tripId?.busNumber || record.busNumber || record.bus?.busNumber || 'N/A',
-        format(new Date(record.createdAt || record.date || new Date()), 'HH:mm:ss'),
-        record.location ? `${record.location.lat?.toFixed(4)}, ${record.location.lng?.toFixed(4)}` : 'N/A'
+        record.tripId?.vehicleId || record.busNumber || 'N/A',
+        record.gpsSnapshot ? `${record.gpsSnapshot.lat?.toFixed(4)}, ${record.gpsSnapshot.lon?.toFixed(4)}` : 
+        (record.location ? `${record.location.lat?.toFixed(4)}, ${record.location.lng?.toFixed(4)}` : 'N/A')
       ]);
 
       const csv = [headers, ...csvData].map(row => row.join(',')).join('\n');
-      const blob = new Blob([csv], { type: 'text/csv' });
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -138,7 +163,88 @@ export default function AttendancePage() {
   };
 
   const exportToPDF = async () => {
-    toast.success('PDF export feature coming soon');
+    try {
+      setExportLoading(true);
+      const printWindow = window.open('', '_blank');
+      const htmlContent = generatePDFHTML();
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+      printWindow.focus();
+      printWindow.print();
+      toast.success('Print preview opened');
+    } catch (error) {
+      console.error('PDF export error:', error);
+      toast.error('Failed to generate PDF');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const generatePDFHTML = () => {
+    const totalRecords = attendanceData.length;
+    const boarded = attendanceData.filter(r => r.eventType === 'board' || r.type === 'board').length;
+    const alighted = attendanceData.filter(r => r.eventType === 'alight' || r.type === 'alight').length;
+    
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Attendance Report</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 40px; }
+          h1 { color: #333; border-bottom: 2px solid #2196F3; padding-bottom: 10px; }
+          .summary { display: flex; gap: 20px; margin: 30px 0; }
+          .card { background: #f5f5f5; padding: 20px; border-radius: 8px; flex: 1; text-align: center; }
+          .card-value { font-size: 28px; font-weight: bold; color: #2196F3; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th { background: #2196F3; color: white; padding: 12px; text-align: left; }
+          td { padding: 10px; border-bottom: 1px solid #ddd; }
+          .footer { margin-top: 40px; text-align: center; font-size: 12px; color: #999; }
+        </style>
+      </head>
+      <body>
+        <h1>Attendance Report</h1>
+        <p>Period: ${startDate} to ${endDate}</p>
+        
+        <div class="summary">
+          <div class="card">
+            <div class="card-value">${totalRecords}</div>
+            <div>Total Records</div>
+          </div>
+          <div class="card">
+            <div class="card-value">${boarded}</div>
+            <div>Boardings</div>
+          </div>
+          <div class="card">
+            <div class="card-value">${alighted}</div>
+            <div>Alightings</div>
+          </div>
+        </div>
+        
+        <h3>Detailed Records</h3>
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Time</th><th>Student</th><th>Event</th><th>Bus</th></tr>
+          </thead>
+          <tbody>
+            ${attendanceData.slice(0, 100).map(record => `
+              <tr>
+                <td>${format(new Date(record.createdAt || record.date), 'yyyy-MM-dd')}</td>
+                <td>${format(new Date(record.createdAt || record.date), 'HH:mm:ss')}</td>
+                <td>${record.studentId?.firstName ? `${record.studentId.firstName} ${record.studentId.lastName}` : (record.studentName || 'Unknown')}</td>
+                <td>${record.eventType || record.type || 'unknown'}</td>
+                <td>${record.tripId?.vehicleId || record.busNumber || 'N/A'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <div class="footer">
+          Generated on ${format(new Date(), 'yyyy-MM-dd HH:mm:ss')}<br>
+          Smart School Transport System
+        </div>
+      </body>
+      </html>
+    `;
   };
 
   const handleLogout = () => {
@@ -153,7 +259,7 @@ export default function AttendancePage() {
       if (type === 'board') counts.board++;
       else if (type === 'alight') counts.alight++;
       else if (type === 'late') counts.late++;
-      else counts.absent++;
+      else if (type === 'absent') counts.absent++;
     });
     return [
       { name: 'Boarding', value: counts.board },
@@ -168,7 +274,7 @@ export default function AttendancePage() {
     attendanceData.forEach(record => {
       const date = new Date(record.createdAt || record.date);
       const hour = date.getHours();
-      hours[hour]++;
+      if (!isNaN(hour)) hours[hour]++;
     });
     return hours.map((count, hour) => ({ hour: `${hour}:00`, count }));
   };
@@ -177,13 +283,12 @@ export default function AttendancePage() {
     <div className="dashboard">
       <Sidebar />
 
-      {/* Main Content */}
       <div className="main-content">
         <div className="top-bar">
           <h2>Attendance Management</h2>
           <div className="user-info">
             <span className="welcome-text">
-              Welcome, {user?.name || user?.email || 'Admin'}
+              Welcome, {user?.firstName || user?.name || user?.email || 'Admin'}
             </span>
             <button onClick={handleLogout} className="logout-btn">
               Logout
@@ -192,7 +297,38 @@ export default function AttendancePage() {
         </div>
 
         <div className="content-area">
-          {/* Tab Navigation */}
+          {currentTrip && activeTab === 'scanner' && (
+            <div style={{
+              background: '#e3f2fd',
+              padding: '10px 20px',
+              borderRadius: '8px',
+              marginBottom: '20px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '10px'
+            }}>
+              <div>
+                <strong>Active Trip:</strong> {currentTrip.routeName} 
+                <span style={{ marginLeft: '10px', color: '#666' }}>
+                  Bus: {currentTrip.vehicleId}
+                </span>
+              </div>
+              <div>
+                <span style={{
+                  display: 'inline-block',
+                  width: '10px',
+                  height: '10px',
+                  borderRadius: '50%',
+                  backgroundColor: '#4CAF50',
+                  marginRight: '5px'
+                }}></span>
+                {currentTrip.status}
+              </div>
+            </div>
+          )}
+
           <div style={{
             display: 'flex',
             gap: '10px',
@@ -220,14 +356,20 @@ export default function AttendancePage() {
                   whiteSpace: 'nowrap'
                 }}
               >
-                <span>{tab.icon}</span>
-                {tab.name}
+                <span>{tab.name}</span>
               </button>
             ))}
           </div>
 
-          {/* Tab Content */}
-          {activeTab === 'scanner' && <AttendanceScanner />}
+          {activeTab === 'scanner' && (
+            <AttendanceScanner 
+              currentTripId={currentTrip?._id} 
+              onAttendanceRecorded={() => {
+                fetchAttendanceData();
+                fetchStats();
+              }}
+            />
+          )}
           
           {activeTab === 'students' && <TransportStudents />}
           
@@ -260,7 +402,7 @@ export default function AttendancePage() {
                   >
                     <option value="today">Today</option>
                     <option value="week">This Week</option>
-                    <option value="month">Last 30 Days</option>
+                    <option value="month">This Month</option>
                     <option value="custom">Custom Range</option>
                   </select>
                   
@@ -305,7 +447,7 @@ export default function AttendancePage() {
                       color: 'white',
                       border: 'none',
                       borderRadius: '4px',
-                      cursor: exportLoading ? 'not-allowed' : 'pointer',
+                      cursor: exportLoading || attendanceData.length === 0 ? 'not-allowed' : 'pointer',
                       opacity: exportLoading || attendanceData.length === 0 ? 0.6 : 1
                     }}
                   >
@@ -331,56 +473,50 @@ export default function AttendancePage() {
                         <th style={{ padding: '12px', textAlign: 'left' }}>Student</th>
                         <th style={{ padding: '12px', textAlign: 'left' }}>Class</th>
                         <th style={{ padding: '12px', textAlign: 'left' }}>Event</th>
-                        <th style={{ padding: '12px', textAlign: 'left' }}>Bus/Route</th>
-                        <th style={{ padding: '12px', textAlign: 'left' }}>Driver</th>
+                        <th style={{ padding: '12px', textAlign: 'left' }}>Bus</th>
                         <th style={{ padding: '12px', textAlign: 'left' }}>Location</th>
-                       </tr>
+                      </tr>
                     </thead>
                     <tbody>
                       {attendanceData.map((record, index) => (
-                        <tr key={record.id || record._id || index} style={{ borderBottom: '1px solid #eee' }}>
+                        <tr key={record._id || index} style={{ borderBottom: '1px solid #eee' }}>
                           <td style={{ padding: '10px' }}>
-                            {format(new Date(record.createdAt || record.date || new Date()), 'MMM dd, HH:mm:ss')}
-                          </td>
+                            {format(new Date(record.createdAt || record.date), 'MMM dd, HH:mm:ss')}
+                           </td>
                           <td style={{ padding: '10px' }}>
-                            <div style={{ fontWeight: '500' }}>
-                              {record.studentId?.name || record.studentName || record.student?.name || 'Unknown'}
-                            </div>
+                            <strong>
+                              {record.studentId?.firstName ? `${record.studentId.firstName} ${record.studentId.lastName}` : (record.studentName || 'Unknown')}
+                            </strong>
                             <div style={{ fontSize: '11px', color: '#666' }}>
-                              ID: {record.studentId?.admissionNumber || record.studentId?._id || record.studentId || 'N/A'}
+                              ID: {record.studentId?.admissionNumber || record.studentId?._id || 'N/A'}
                             </div>
-                          </td>
+                           </td>
                           <td style={{ padding: '10px' }}>
                             {record.studentId?.classLevel || record.className || 'N/A'}
-                          </td>
+                           </td>
                           <td style={{ padding: '10px' }}>
                             <span style={{
-                              background: (record.eventType === 'board' || record.type === 'board') ? '#4CAF50' : 
-                                        (record.eventType === 'alight' || record.type === 'alight') ? '#FF9800' : 
-                                        (record.eventType === 'late' || record.type === 'late') ? '#f44336' : '#999',
+                              background: (record.eventType === 'board') ? '#4CAF50' : '#FF9800',
                               color: 'white',
                               padding: '4px 8px',
                               borderRadius: '12px',
                               fontSize: '12px'
                             }}>
-                              {record.eventType || record.type || 'unknown'}
+                              {record.eventType === 'board' ? 'Boarded' : 'Alighted'}
                             </span>
-                          </td>
+                           </td>
                           <td style={{ padding: '10px' }}>
-                            {record.tripId?.busNumber || record.busNumber || record.bus?.busNumber || 'N/A'}
-                          </td>
-                          <td style={{ padding: '10px' }}>
-                            {record.driverName || record.tripId?.driverName || 'N/A'}
-                          </td>
+                            {record.tripId?.vehicleId || record.busNumber || 'N/A'}
+                           </td>
                           <td style={{ padding: '10px', fontSize: '12px', color: '#666' }}>
-                            {record.location ? 
-                              `${record.location.lat?.toFixed(4)}, ${record.location.lng?.toFixed(4)}` : 
-                              record.gpsSnapshot ? 
+                            {record.gpsSnapshot ? 
                               `${record.gpsSnapshot.lat?.toFixed(4)}, ${record.gpsSnapshot.lon?.toFixed(4)}` : 
+                              record.location ? 
+                              `${record.location.lat?.toFixed(4)}, ${record.location.lng?.toFixed(4)}` : 
                               'N/A'
                             }
-                          </td>
-                        </tr>
+                           </td>
+                         </tr>
                       ))}
                     </tbody>
                   </table>
@@ -404,7 +540,6 @@ export default function AttendancePage() {
                 </div>
               ) : (
                 <>
-                  {/* Stats Cards */}
                   {stats && (
                     <div style={{
                       display: 'grid',
@@ -420,9 +555,9 @@ export default function AttendancePage() {
                         textAlign: 'center'
                       }}>
                         <div style={{ fontSize: '28px', fontWeight: 'bold' }}>
-                          {stats.today || 0}
+                          {stats.todayTotal || stats.today || 0}
                         </div>
-                        <div>Today's Attendance</div>
+                        <div>Today's Events</div>
                       </div>
                       <div style={{
                         background: 'linear-gradient(135deg, #43cea2 0%, #185a9d 100%)',
@@ -444,9 +579,9 @@ export default function AttendancePage() {
                         textAlign: 'center'
                       }}>
                         <div style={{ fontSize: '28px', fontWeight: 'bold' }}>
-                          {stats.totalStudents || 0}
+                          {stats.boarding || 0}
                         </div>
-                        <div>Total Students</div>
+                        <div>Boardings</div>
                       </div>
                       <div style={{
                         background: 'linear-gradient(135deg, #5f2c82 0%, #49a09d 100%)',
@@ -456,9 +591,9 @@ export default function AttendancePage() {
                         textAlign: 'center'
                       }}>
                         <div style={{ fontSize: '28px', fontWeight: 'bold' }}>
-                          {stats.uniqueStudents || 0}
+                          {stats.alighting || 0}
                         </div>
-                        <div>Unique Today</div>
+                        <div>Alightings</div>
                       </div>
                     </div>
                   )}
@@ -469,13 +604,12 @@ export default function AttendancePage() {
                     gap: '20px',
                     marginBottom: '20px'
                   }}>
-                    {/* Weekly Trend */}
                     <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '8px' }}>
                       <h4 style={{ margin: '0 0 15px 0' }}>Weekly Trend</h4>
                       <ResponsiveContainer width="100%" height={300}>
-                        <LineChart data={stats?.weekly || attendanceData.slice(0, 7)}>
+                        <LineChart data={stats?.weeklyTrend || attendanceData.slice(0, 7)}>
                           <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="_id" />
+                          <XAxis dataKey="date" />
                           <YAxis />
                           <Tooltip />
                           <Line type="monotone" dataKey="count" stroke="#2196F3" strokeWidth={2} />
@@ -483,7 +617,6 @@ export default function AttendancePage() {
                       </ResponsiveContainer>
                     </div>
 
-                    {/* Event Type Distribution */}
                     <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '8px' }}>
                       <h4 style={{ margin: '0 0 15px 0' }}>Event Distribution</h4>
                       <ResponsiveContainer width="100%" height={300}>
@@ -521,23 +654,6 @@ export default function AttendancePage() {
                     </ResponsiveContainer>
                   </div>
 
-                  {/* By Class Distribution */}
-                  {stats?.byClass && stats.byClass.length > 0 && (
-                    <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '8px' }}>
-                      <h4 style={{ margin: '0 0 15px 0' }}>Attendance by Class</h4>
-                      <ResponsiveContainer width="100%" height={300}>
-                        <BarChart data={stats.byClass}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="_id" />
-                          <YAxis />
-                          <Tooltip />
-                          <Bar dataKey="count" fill="#FF9800" />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-
-                  {/* Export Buttons */}
                   <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
                     <button
                       onClick={() => window.print()}
@@ -553,7 +669,7 @@ export default function AttendancePage() {
                         gap: '8px'
                       }}
                     >
-                      🖨️ Print Report
+                      Print Report
                     </button>
                     <button
                       onClick={exportToCSV}
@@ -564,30 +680,32 @@ export default function AttendancePage() {
                         color: 'white',
                         border: 'none',
                         borderRadius: '4px',
-                        cursor: exportLoading ? 'not-allowed' : 'pointer',
+                        cursor: exportLoading || attendanceData.length === 0 ? 'not-allowed' : 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         gap: '8px',
                         opacity: exportLoading || attendanceData.length === 0 ? 0.6 : 1
                       }}
                     >
-                      📥 {exportLoading ? 'Exporting...' : 'Download CSV'}
+                      {exportLoading ? 'Exporting...' : 'Download CSV'}
                     </button>
                     <button
                       onClick={exportToPDF}
+                      disabled={exportLoading}
                       style={{
                         padding: '10px 20px',
                         background: '#f44336',
                         color: 'white',
                         border: 'none',
                         borderRadius: '4px',
-                        cursor: 'pointer',
+                        cursor: exportLoading ? 'not-allowed' : 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '8px'
+                        gap: '8px',
+                        opacity: exportLoading ? 0.6 : 1
                       }}
                     >
-                      📄 Export PDF
+                      {exportLoading ? 'Generating...' : 'Print PDF'}
                     </button>
                   </div>
                 </>

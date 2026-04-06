@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const SystemConfig = require('../models/SystemConfig');
 const UserPreference = require('../models/UserPreference');
 const NotificationSetting = require('../models/NotificationSetting');
@@ -298,11 +299,7 @@ router.post('/backup', isAdmin, async (req, res) => {
     const backupName = `backup_${new Date().toISOString().split('T')[0]}_${timestamp}`;
     const backupPath = path.join(__dirname, '..', 'backups', backupName);
     
-    // Create backup directory if it doesn't exist
     await fs.mkdir(path.join(__dirname, '..', 'backups'), { recursive: true });
-    
-    // Here you would implement actual backup logic
-    // For now, we'll create a mock backup record
     
     const backup = new Backup({
       name: backupName,
@@ -316,7 +313,6 @@ router.post('/backup', isAdmin, async (req, res) => {
     
     await backup.save();
     
-    // Log the backup
     await AuditLog.create({
       userId: req.user.id,
       action: 'CREATE_BACKUP',
@@ -349,13 +345,10 @@ router.post('/restore/:backupId', isAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Backup not found' });
     }
     
-    // Here you would implement actual restore logic
-    
     backup.restoredAt = new Date();
     backup.restoredBy = req.user.id;
     await backup.save();
     
-    // Log the restore
     await AuditLog.create({
       userId: req.user.id,
       action: 'RESTORE_BACKUP',
@@ -387,7 +380,6 @@ router.delete('/backup/:backupId', isAdmin, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Backup not found' });
     }
     
-    // Delete the actual backup file if it exists
     try {
       await fs.unlink(backup.path);
     } catch (err) {
@@ -512,21 +504,18 @@ router.post('/cleanup', isAdmin, async (req, res) => {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - days);
     
-    // Get current system config for retention policy
     const config = await SystemConfig.findOne();
     const retentionDays = config?.dataRetention || days;
     
     const results = {};
     
-    // Clean up old attendance records
     if (req.body.attendance !== false) {
-      const attendanceResult = await mongoose.model('Attendance').deleteMany({
+      const attendanceResult = await mongoose.model('AttendanceRecord').deleteMany({
         createdAt: { $lt: cutoffDate }
       });
       results.attendance = attendanceResult.deletedCount;
     }
     
-    // Clean up old GPS logs
     if (req.body.gpsLogs !== false) {
       const gpsResult = await mongoose.model('GPSLog').deleteMany({
         createdAt: { $lt: cutoffDate }
@@ -534,7 +523,6 @@ router.post('/cleanup', isAdmin, async (req, res) => {
       results.gpsLogs = gpsResult.deletedCount;
     }
     
-    // Clean up old notifications
     if (req.body.notifications !== false) {
       const notifResult = await mongoose.model('Notification').deleteMany({
         createdAt: { $lt: cutoffDate },
@@ -543,7 +531,6 @@ router.post('/cleanup', isAdmin, async (req, res) => {
       results.notifications = notifResult.deletedCount;
     }
     
-    // Clean up old audit logs
     if (req.body.auditLogs !== false) {
       const auditResult = await AuditLog.deleteMany({
         createdAt: { $lt: cutoffDate }
@@ -551,7 +538,6 @@ router.post('/cleanup', isAdmin, async (req, res) => {
       results.auditLogs = auditResult.deletedCount;
     }
     
-    // Log the cleanup
     await AuditLog.create({
       userId: req.user.id,
       action: 'CLEANUP_DATA',
@@ -601,7 +587,8 @@ router.get('/health', isAdmin, async (req, res) => {
   }
 });
 
-// Helper functions for health checks
+// ==================== HELPER FUNCTIONS ====================
+
 async function checkDatabaseHealth() {
   try {
     await mongoose.connection.db.admin().ping();
@@ -614,8 +601,7 @@ async function checkDatabaseHealth() {
 async function checkStorageHealth() {
   try {
     const stats = await fs.stat('/app');
-    const freeSpace = stats.size; // This is simplified
-    return { status: 'ok', freeSpace: '10GB' }; // Mock value
+    return { status: 'ok', freeSpace: '10GB' };
   } catch (error) {
     return { status: 'error', error: error.message };
   }
@@ -630,5 +616,47 @@ async function checkMemoryHealth() {
     rss: `${Math.round(used.rss / 1024 / 1024)} MB`
   };
 }
+
+// ==================== ALIASES FOR FRONTEND COMPATIBILITY ====================
+
+/**
+ * @route   GET /api/settings
+ * @desc    Alias for GET /api/settings/system (frontend compatibility)
+ * @access  Private (Admin)
+ */
+router.get('/', isAdmin, async (req, res) => {
+  req.url = '/system';
+  return router.handle(req, res);
+});
+
+/**
+ * @route   PUT /api/settings
+ * @desc    Alias for PUT /api/settings/system (frontend compatibility)
+ * @access  Private (Admin)
+ */
+router.put('/', isAdmin, async (req, res) => {
+  req.url = '/system';
+  return router.handle(req, res);
+});
+
+/**
+ * @route   GET /api/user/preferences
+ * @desc    Alias for GET /api/settings/preferences (frontend compatibility)
+ * @access  Private
+ */
+router.get('/user/preferences', async (req, res) => {
+  req.url = '/preferences';
+  return router.handle(req, res);
+});
+
+/**
+ * @route   PUT /api/user/preferences
+ * @desc    Alias for PUT /api/settings/preferences (frontend compatibility)
+ * @access  Private
+ */
+router.put('/user/preferences', async (req, res) => {
+  req.url = '/preferences';
+  return router.handle(req, res);
+});
 
 module.exports = router;

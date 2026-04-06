@@ -1,4 +1,3 @@
- 
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import UserManagement from '../../components/Settings/UserManagement';
@@ -27,37 +26,64 @@ export default function SettingsPage() {
     }
   }, [activeTab]);
 
+  // ✅ FIXED: Correct endpoint for system config
   const fetchSystemConfig = async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:5000/api/settings', {
+      const response = await fetch('http://localhost:5000/api/settings/system', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await response.json();
       if (data.success) {
         setSystemConfig(data.data);
       } else {
+        // Set default config if none exists
         setSystemConfig({
           schoolName: 'Smart School',
-          schoolAddress: '',
-          schoolPhone: '',
-          schoolEmail: '',
+          schoolAddress: 'Nairobi, Kenya',
+          schoolPhone: '+254 700 000000',
+          schoolEmail: 'info@smartschool.com',
           timezone: 'Africa/Nairobi',
           dateFormat: 'DD/MM/YYYY',
           timeFormat: '24h',
           language: 'en',
-          currency: 'KES'
+          currency: 'KES',
+          speedLimit: 80,
+          geofenceRadius: 500,
+          fuelAlertThreshold: 15,
+          maxStudentsPerBus: 40,
+          morningTripTime: '06:30',
+          eveningTripTime: '16:30',
+          trackingInterval: 30,
+          offlineCache: true,
+          routeOptimization: true,
+          emailNotifications: true,
+          smsNotifications: true,
+          pushNotifications: true,
+          twoFactorAuth: false,
+          sessionTimeout: 30,
+          passwordPolicy: 'strong',
+          maxLoginAttempts: 5,
+          lockoutDuration: 30,
+          auditLogging: true,
+          dataRetention: 90,
+          autoBackup: true,
+          backupFrequency: 'daily',
+          backupTime: '02:00',
+          retainBackups: 30,
+          backupLocation: 'cloud'
         });
       }
     } catch (error) {
       console.error('Error fetching system config:', error);
       toast.error('Failed to load system configuration');
+      // Set default config on error
       setSystemConfig({
         schoolName: 'Smart School',
-        schoolAddress: '',
-        schoolPhone: '',
-        schoolEmail: '',
+        schoolAddress: 'Nairobi, Kenya',
+        schoolPhone: '+254 700 000000',
+        schoolEmail: 'info@smartschool.com',
         timezone: 'Africa/Nairobi',
         dateFormat: 'DD/MM/YYYY',
         timeFormat: '24h',
@@ -69,17 +95,19 @@ export default function SettingsPage() {
     }
   };
 
+  // ✅ FIXED: Correct endpoint for user preferences
   const fetchUserPreferences = async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:5000/api/user/preferences', {
+      const response = await fetch('http://localhost:5000/api/settings/preferences', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await response.json();
       if (data.success) {
         setUserPreferences(data.data);
       } else {
+        // Set default preferences if none exist
         setUserPreferences({
           theme: 'light',
           compactView: false,
@@ -101,6 +129,7 @@ export default function SettingsPage() {
     } catch (error) {
       console.error('Error fetching preferences:', error);
       toast.error('Failed to load preferences');
+      // Set default preferences on error
       setUserPreferences({
         theme: 'light',
         compactView: false,
@@ -123,10 +152,11 @@ export default function SettingsPage() {
     }
   };
 
+  // ✅ FIXED: Correct endpoint for saving system config
   const handleSaveSystemConfig = async (config) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:5000/api/settings', {
+      const response = await fetch('http://localhost:5000/api/settings/system', {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -144,10 +174,11 @@ export default function SettingsPage() {
     }
   };
 
+  // ✅ FIXED: Correct endpoint for saving user preferences
   const handleSavePreferences = async (prefs) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:5000/api/user/preferences', {
+      const response = await fetch('http://localhost:5000/api/settings/preferences', {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -177,6 +208,8 @@ export default function SettingsPage() {
           <li><a href="/transport">🚌 Transport</a></li>
           <li><a href="/analytics">📊 Analytics</a></li>
           <li><a href="/reports">📑 Reports</a></li>
+          <li><a href="/messaging">💬 Messaging</a></li>
+          <li><a href="/sms">📱 SMS</a></li>
           <li><a href="/settings" className="active">⚙️ Settings</a></li>
         </ul>
       </div>
@@ -186,7 +219,7 @@ export default function SettingsPage() {
           <h2>Settings</h2>
           <div className="user-info">
             <span className="welcome-text">
-              Welcome, {user?.name || user?.email || 'Admin'}
+              Welcome, {user?.firstName || user?.name || user?.email || 'Admin'}
             </span>
             <button onClick={logout} className="logout-btn">
               Logout
@@ -202,7 +235,8 @@ export default function SettingsPage() {
             background: 'white',
             padding: '10px',
             borderRadius: '8px',
-            boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+            flexWrap: 'wrap'
           }}>
             {tabs.map(tab => (
               <button
@@ -235,18 +269,19 @@ export default function SettingsPage() {
           }}>
             {loading ? (
               <div style={{ textAlign: 'center', padding: '50px' }}>
-                <div className="loading-spinner" />
+                <div className="loading-spinner" style={{ margin: '0 auto' }} />
+                <p>Loading...</p>
               </div>
             ) : (
               <>
                 {activeTab === 'users' && <UserManagement />}
-                {activeTab === 'system' && (
+                {activeTab === 'system' && systemConfig && (
                   <SystemConfiguration 
                     config={systemConfig} 
                     onSave={handleSaveSystemConfig} 
                   />
                 )}
-                {activeTab === 'preferences' && (
+                {activeTab === 'preferences' && userPreferences && (
                   <Preferences 
                     preferences={userPreferences} 
                     onSave={handleSavePreferences} 

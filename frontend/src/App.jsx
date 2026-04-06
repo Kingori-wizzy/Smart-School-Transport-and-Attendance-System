@@ -9,7 +9,8 @@ import ProtectedRoute from './components/common/ProtectedRoute';
 import LoadingSpinner from './components/common/LoadingSpinner';
 import './assets/styles/index.css';
 import TransportStudents from './pages/Students/TransportStudents';
-import SMSDashboard from './pages/Admin/SMSDashboard'; // ✅ ADDED SMS Dashboard import
+import SMSDashboard from './pages/Admin/SMSDashboard';
+import MessagingDashboard from './pages/Admin/MessagingDashboard'; // ✅ ADDED Messaging Dashboard import
 
 // Lazy load pages for better performance
 const Dashboard = lazy(() => import('./pages/Dashboard/Dashboard'));
@@ -96,12 +97,21 @@ function App() {
                       </ProtectedRoute>
                     } 
                   />
-                  {/* ✅ ADDED SMS Dashboard Route */}
+                  {/* SMS Dashboard Route */}
                   <Route 
                     path="/sms" 
                     element={
                       <ProtectedRoute>
                         <SMSDashboard />
+                      </ProtectedRoute>
+                    } 
+                  />
+                  {/* ✅ ADDED Messaging Dashboard Route */}
+                  <Route 
+                    path="/messaging" 
+                    element={
+                      <ProtectedRoute>
+                        <MessagingDashboard />
                       </ProtectedRoute>
                     } 
                   />

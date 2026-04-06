@@ -23,12 +23,13 @@ export default function ReportGenerator({ onReportGenerated }) {
   const [reportData, setReportData] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  // Correct endpoints for each report type
   const reportTypes = [
     { id: 'attendance', name: 'Attendance Report', icon: '📊', description: 'Daily attendance trends, class distribution, and student statistics', endpoint: '/api/reports/attendance' },
     { id: 'transport', name: 'Transport Report', icon: '🚌', description: 'Bus utilization, trip logs, and fuel consumption', endpoint: '/api/reports/transport' },
     { id: 'drivers', name: 'Driver Performance', icon: '👤', description: 'Driver ratings, safety scores, and trip history', endpoint: '/api/reports/drivers' },
     { id: 'routes', name: 'Route Efficiency', icon: '🗺️', description: 'Route optimization, on-time performance, and stop analysis', endpoint: '/api/reports/routes' },
-    { id: 'alerts', name: 'Alerts & Incidents', icon: '⚠️', description: 'Speed violations, geofence breaches, and system alerts', endpoint: '/api/reports/alerts' },
+    { id: 'alerts', name: 'Alerts & Incidents', icon: '⚠️', description: 'Speed violations, geofence breaches, and system alerts', endpoint: '/api/reports/incident' },
     { id: 'combined', name: 'Combined Summary', icon: '📑', description: 'Executive summary of all key metrics', endpoint: '/api/reports/combined' }
   ];
 
@@ -119,7 +120,7 @@ export default function ReportGenerator({ onReportGenerated }) {
           url = `http://localhost:5000/api/reports/routes?startDate=${startDate}&endDate=${endDate}`;
           break;
         case 'alerts':
-          url = `http://localhost:5000/api/reports/alerts?startDate=${startDate}&endDate=${endDate}`;
+          url = `http://localhost:5000/api/reports/incident?startDate=${startDate}&endDate=${endDate}`;
           break;
         case 'combined':
           url = `http://localhost:5000/api/reports/combined?startDate=${startDate}&endDate=${endDate}`;
@@ -150,23 +151,89 @@ export default function ReportGenerator({ onReportGenerated }) {
     }
   };
 
-  // Helper function to convert data to CSV
+  // Helper function to convert data to proper CSV format
   const convertToCSV = (data) => {
     if (!data) return '';
     
-    // If data has rawData, use that
-    const sourceData = data.rawData || data;
+    // Handle summary-only data (like combined report)
+    if (data.summary && !data.rawData && !data.dailyTrend) {
+      const rows = [['Metric', 'Value']];
+      Object.entries(data.summary).forEach(([key, value]) => {
+        let displayValue = value;
+        if (key.includes('rate')) displayValue = `${value}%`;
+        if (key.includes('Distance')) displayValue = `${value} km`;
+        rows.push([key.replace(/([A-Z])/g, ' $1').trim(), displayValue]);
+      });
+      return rows.map(row => row.join(',')).join('\n');
+    }
     
+    // Handle daily trend data (attendance report)
+    if (data.dailyTrend && data.dailyTrend.length > 0) {
+      const headers = ['Date', 'Present', 'Absent', 'Late'];
+      const rows = data.dailyTrend.map(day => [
+        day.date,
+        day.present || 0,
+        day.absent || 0,
+        day.late || 0
+      ]);
+      return [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    }
+    
+    // Handle bus performance data (transport report)
+    if (data.busPerformance && data.busPerformance.length > 0) {
+      const headers = ['Bus Name', 'Trips', 'On Time', 'Distance (km)'];
+      const rows = data.busPerformance.map(bus => [
+        bus.name,
+        bus.trips || 0,
+        bus.onTime || 0,
+        bus.distance || 0
+      ]);
+      return [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    }
+    
+    // Handle top drivers data
+    if (data.topDrivers && data.topDrivers.length > 0) {
+      const headers = ['Driver Name', 'Trips', 'Rating'];
+      const rows = data.topDrivers.map(driver => [
+        driver.name,
+        driver.trips || 0,
+        driver.rating || 0
+      ]);
+      return [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    }
+    
+    // Handle route efficiency data
+    if (data.routeEfficiency && data.routeEfficiency.length > 0) {
+      const headers = ['Route Name', 'On Time %', 'Average Load', 'Trips'];
+      const rows = data.routeEfficiency.map(route => [
+        route.name,
+        route.onTime || 0,
+        route.load || 0,
+        route.trips || 0
+      ]);
+      return [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    }
+    
+    // Handle alerts by type
+    if (data.alertsByType && data.alertsByType.length > 0) {
+      const headers = ['Alert Type', 'Count'];
+      const rows = data.alertsByType.map(alert => [
+        alert.name,
+        alert.value || 0
+      ]);
+      return [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    }
+    
+    // Fallback for raw data array
+    const sourceData = data.rawData || data;
     if (Array.isArray(sourceData) && sourceData.length > 0) {
       const headers = Object.keys(sourceData[0]);
       const rows = sourceData.map(row => 
         headers.map(header => {
           let value = row[header];
-          // Handle nested objects
-          if (typeof value === 'object') {
+          if (typeof value === 'object' && value !== null) {
             value = JSON.stringify(value);
           }
-          // Escape quotes and commas
           if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
             value = `"${value.replace(/"/g, '""')}"`;
           }
@@ -176,7 +243,7 @@ export default function ReportGenerator({ onReportGenerated }) {
       return [headers.join(','), ...rows].join('\n');
     }
     
-    // Fallback for non-array data
+    // Ultimate fallback
     return JSON.stringify(sourceData, null, 2);
   };
 
@@ -191,7 +258,7 @@ export default function ReportGenerator({ onReportGenerated }) {
           ${Object.entries(data.summary).map(([key, value]) => `
             <div class="card">
               <div class="card-value">${value}${key.includes('rate') ? '%' : key.includes('Distance') ? ' km' : key.includes('Fuel') ? ' L' : ''}</div>
-              <div>${key.replace(/([A-Z])/g, ' $1').trim()}</div>
+              <div class="card-label">${key.replace(/([A-Z])/g, ' $1').trim()}</div>
             </div>
           `).join('')}
         </div>
@@ -201,7 +268,7 @@ export default function ReportGenerator({ onReportGenerated }) {
     let tableHtml = '';
     if (data.dailyTrend && data.dailyTrend.length > 0) {
       tableHtml = `
-        <h3>Data Preview</h3>
+        <h3>Daily Attendance Trend</h3>
         <table>
           <thead>
             <tr>
@@ -225,6 +292,56 @@ export default function ReportGenerator({ onReportGenerated }) {
       `;
     }
     
+    if (data.busPerformance && data.busPerformance.length > 0) {
+      tableHtml += `
+        <h3>Bus Performance</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Bus Name</th>
+              <th>Trips</th>
+              <th>On Time</th>
+              <th>Distance (km)</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.busPerformance.slice(0, 20).map(bus => `
+              <tr>
+                <td>${bus.name}</td>
+                <td>${bus.trips || 0}</td>
+                <td>${bus.onTime || 0}</td>
+                <td>${bus.distance || 0}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    
+    if (data.topDrivers && data.topDrivers.length > 0) {
+      tableHtml += `
+        <h3>Top Drivers</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Driver Name</th>
+              <th>Trips</th>
+              <th>Rating</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.topDrivers.slice(0, 10).map(driver => `
+              <tr>
+                <td>${driver.name}</td>
+                <td>${driver.trips || 0}</td>
+                <td>${driver.rating || 0}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `;
+    }
+    
     return `
       <!DOCTYPE html>
       <html>
@@ -234,14 +351,21 @@ export default function ReportGenerator({ onReportGenerated }) {
         <style>
           body { font-family: Arial, sans-serif; padding: 40px; margin: 0; }
           h1 { color: #333; border-bottom: 2px solid #2196F3; padding-bottom: 10px; }
+          h3 { color: #555; margin: 30px 0 15px 0; }
           .period { color: #666; margin: 20px 0; }
           .summary { display: flex; gap: 20px; margin: 30px 0; flex-wrap: wrap; }
           .card { background: #f5f5f5; padding: 20px; border-radius: 8px; flex: 1; min-width: 150px; text-align: center; }
           .card-value { font-size: 28px; font-weight: bold; color: #2196F3; }
+          .card-label { font-size: 12px; color: #666; margin-top: 5px; }
           table { border-collapse: collapse; width: 100%; margin: 20px 0; }
           th { background: #2196F3; color: white; padding: 12px; text-align: left; }
           td { padding: 10px; border-bottom: 1px solid #ddd; }
+          tr:hover { background: #f5f5f5; }
           .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; font-size: 12px; color: #999; text-align: center; }
+          @media print {
+            body { padding: 20px; }
+            .no-print { display: none; }
+          }
         </style>
       </head>
       <body>
@@ -274,15 +398,14 @@ export default function ReportGenerator({ onReportGenerated }) {
       switch(exportFormat) {
         case 'csv':
           const csvContent = convertToCSV(reportData);
-          blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+          blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
           fileExtension = 'csv';
           mimeType = 'text/csv';
           break;
           
         case 'excel':
-          // For Excel, create CSV with .xls extension (Excel can open CSV files)
           const excelContent = convertToCSV(reportData);
-          blob = new Blob([excelContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+          blob = new Blob(['\uFEFF' + excelContent], { type: 'application/vnd.ms-excel;charset=utf-8;' });
           fileExtension = 'xls';
           mimeType = 'application/vnd.ms-excel';
           break;
@@ -290,16 +413,17 @@ export default function ReportGenerator({ onReportGenerated }) {
         case 'pdf':
         default:
           const pdfHtml = generatePDFHTML(reportData);
-          blob = new Blob([pdfHtml], { type: 'text/html;charset=utf-8;' });
-          fileExtension = 'html';
-          mimeType = 'text/html';
-          // Note: For true PDF generation, you would need a library like jsPDF
-          // For now, we save as HTML which can be printed to PDF
-          toast.info('Note: Saving as HTML. Use browser print (Ctrl+P) to save as PDF');
-          break;
+          // Open PDF in new window with print dialog
+          const printWindow = window.open('', '_blank');
+          printWindow.document.write(pdfHtml);
+          printWindow.document.close();
+          printWindow.focus();
+          printWindow.print();
+          toast.success('PDF preview opened. Use browser print to save as PDF.');
+          setLoading(false);
+          return;
       }
       
-      // Create download link
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -318,6 +442,7 @@ export default function ReportGenerator({ onReportGenerated }) {
     }
   };
 
+  // Save report to database
   const saveReport = async () => {
     if (!reportData) {
       toast.error('Please generate preview first');
@@ -328,14 +453,17 @@ export default function ReportGenerator({ onReportGenerated }) {
       const report = {
         name: `${reportTypes.find(r => r.id === reportType)?.name} - ${startDate} to ${endDate}`,
         type: reportType,
+        description: reportTypes.find(r => r.id === reportType)?.description || '',
         dateRange: { start: startDate, end: endDate },
         format: exportFormat,
         data: reportData,
-        createdAt: new Date().toISOString()
+        summary: reportData.summary,
+        pages: 1,
+        tags: [reportType, 'generated']
       };
       
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:5000/api/reports', {
+      const response = await fetch('http://localhost:5000/api/reports/save', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -753,7 +881,7 @@ export default function ReportGenerator({ onReportGenerated }) {
           <h3 style={{ margin: '0 0 20px 0', color: '#333' }}>Recently Saved Reports</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {savedReports.slice(0, 5).map(report => (
-              <div key={report.id} style={{
+              <div key={report._id} style={{
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',

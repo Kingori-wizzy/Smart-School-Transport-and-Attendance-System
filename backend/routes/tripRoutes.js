@@ -28,7 +28,6 @@ router.get('/:tripId/bus', isAdminOrDriver, async (req, res) => {
       });
     }
 
-    // Find the bus by vehicleId
     const bus = await Bus.findOne({ busNumber: trip.vehicleId });
     
     res.json({
@@ -60,7 +59,6 @@ router.put('/:tripId/assign-bus/:busId', isAdmin, async (req, res) => {
   try {
     const { tripId, busId } = req.params;
 
-    // Check if trip exists
     const trip = await Trip.findById(tripId);
     if (!trip) {
       return res.status(404).json({ 
@@ -69,7 +67,6 @@ router.put('/:tripId/assign-bus/:busId', isAdmin, async (req, res) => {
       });
     }
 
-    // Check if bus exists and is active
     const bus = await Bus.findById(busId);
     if (!bus) {
       return res.status(404).json({ 
@@ -85,7 +82,6 @@ router.put('/:tripId/assign-bus/:busId', isAdmin, async (req, res) => {
       });
     }
 
-    // Check if bus is already assigned to another active trip
     const existingAssignment = await Trip.findOne({
       _id: { $ne: tripId },
       vehicleId: bus.busNumber,
@@ -99,7 +95,6 @@ router.put('/:tripId/assign-bus/:busId', isAdmin, async (req, res) => {
       });
     }
 
-    // Find students assigned to this bus
     const students = await Student.find({ 
       $or: [
         { 'transportDetails.busId': bus._id },
@@ -111,16 +106,13 @@ router.put('/:tripId/assign-bus/:busId', isAdmin, async (req, res) => {
     
     const studentIds = students.map(s => s._id);
 
-    // Update trip with bus assignment and students
     trip.vehicleId = bus.busNumber;
     trip.students = studentIds;
-    // CRITICAL: Reset attendance when assigning new bus
     trip.attendance = [];
     await trip.save();
 
-    console.log(`✅ Bus ${bus.busNumber} assigned to trip ${trip.routeName} with ${studentIds.length} students`);
+    console.log(`Bus ${bus.busNumber} assigned to trip ${trip.routeName} with ${studentIds.length} students`);
 
-    // Return populated trip
     const updatedTrip = await Trip.findById(tripId)
       .populate('driverId', 'firstName lastName email phone')
       .populate('students', 'firstName lastName admissionNumber qrCode');
@@ -159,14 +151,12 @@ router.delete('/:tripId/unassign-bus', isAdmin, async (req, res) => {
 
     const oldBusNumber = trip.vehicleId;
 
-    // Remove bus assignment and clear students
     trip.vehicleId = '';
     trip.students = [];
-    // CRITICAL: Clear attendance when unassigning bus
     trip.attendance = [];
     await trip.save();
 
-    console.log(`✅ Bus unassigned from trip ${trip.routeName} (was ${oldBusNumber})`);
+    console.log(`Bus unassigned from trip ${trip.routeName} (was ${oldBusNumber})`);
 
     res.json({
       success: true,
@@ -219,19 +209,16 @@ router.get('/unassigned/list', isAdmin, async (req, res) => {
  */
 router.get('/available-buses/list', isAdmin, async (req, res) => {
   try {
-    // Get all active buses
     const buses = await Bus.find({ 
       status: { $ne: 'maintenance' },
       isActive: { $ne: false }
     });
 
-    // Get bus numbers assigned to active trips
     const assignedBusNumbers = await Trip.distinct('vehicleId', {
       status: { $in: ['scheduled', 'running'] },
       vehicleId: { $exists: true, $ne: '' }
     });
 
-    // Filter out buses that are already assigned
     const availableBuses = buses.filter(bus => 
       !assignedBusNumbers.includes(bus.busNumber)
     );
@@ -287,7 +274,6 @@ router.post('/bulk-assign', isAdmin, async (req, res) => {
           continue;
         }
 
-        // Find students for this bus
         const students = await Student.find({ 
           $or: [
             { 'transportDetails.busId': bus._id },
@@ -298,7 +284,6 @@ router.post('/bulk-assign', isAdmin, async (req, res) => {
 
         trip.vehicleId = bus.busNumber;
         trip.students = students.map(s => s._id);
-        // CRITICAL: Reset attendance when bulk assigning
         trip.attendance = [];
         await trip.save();
 
@@ -337,6 +322,57 @@ router.post('/bulk-assign', isAdmin, async (req, res) => {
 // ==================== DRIVER APP ENDPOINTS ====================
 
 /**
+ * @route   GET /api/trips/current
+ * @desc    Get current active trip for the logged-in driver
+ * @access  Private (Driver only)
+ */
+router.get('/current', async (req, res) => {
+  try {
+    if (req.user.role !== 'driver') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Access denied. Driver only.' 
+      });
+    }
+
+    const currentTrip = await Trip.findOne({
+      driverId: req.user.id,
+      status: { $in: ['scheduled', 'running'] }
+    }).populate('students', 'firstName lastName admissionNumber qrCode');
+
+    if (!currentTrip) {
+      return res.json({ 
+        success: true, 
+        data: null, 
+        message: 'No active trip found' 
+      });
+    }
+
+    const tripData = {
+      _id: currentTrip._id,
+      routeName: currentTrip.routeName,
+      vehicleId: currentTrip.vehicleId,
+      status: currentTrip.status,
+      startTime: currentTrip.startTime,
+      scheduledStartTime: currentTrip.scheduledStartTime,
+      studentCount: currentTrip.students?.length || 0,
+      students: currentTrip.students || []
+    };
+
+    res.json({
+      success: true,
+      data: tripData
+    });
+  } catch (error) {
+    console.error('Error fetching current trip:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+});
+
+/**
  * @route   GET /api/trips/driver/today
  * @desc    Get today's trips for the logged-in driver with students
  * @access  Private (Driver only)
@@ -345,7 +381,6 @@ router.get('/driver/today', async (req, res) => {
   try {
     const driverId = req.user.id;
     
-    // Get today's date range
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -359,11 +394,9 @@ router.get('/driver/today', async (req, res) => {
     .populate('driverId', 'firstName lastName email phone')
     .sort({ scheduledStartTime: 1 });
     
-    // Also get bus details for each trip
     const tripsWithDetails = await Promise.all(trips.map(async (trip) => {
       const tripObj = trip.toObject();
       
-      // Get bus details
       if (trip.vehicleId) {
         const bus = await Bus.findOne({ busNumber: trip.vehicleId });
         if (bus) {
@@ -377,7 +410,6 @@ router.get('/driver/today', async (req, res) => {
         }
       }
       
-      // Calculate attendance statistics - only for this trip
       tripObj.statistics = {
         totalStudents: trip.students ? trip.students.length : 0,
         boardedCount: trip.attendance ? trip.attendance.filter(a => a.type === 'board').length : 0,
@@ -420,7 +452,6 @@ router.get('/:id/with-students', isAdminOrDriver, async (req, res) => {
       });
     }
     
-    // Get bus details
     const bus = await Bus.findOne({ busNumber: trip.vehicleId });
     
     const result = trip.toObject();
@@ -470,7 +501,6 @@ router.post('/:id/record-attendance', async (req, res) => {
       });
     }
     
-    // Check if student is assigned to this trip
     if (!trip.students.some(s => s.toString() === studentId)) {
       return res.status(400).json({
         success: false,
@@ -478,7 +508,6 @@ router.post('/:id/record-attendance', async (req, res) => {
       });
     }
     
-    // Check for duplicate attendance
     const existingAttendance = trip.attendance.find(a => 
       a.studentId.toString() === studentId && a.type === type
     );
@@ -490,7 +519,6 @@ router.post('/:id/record-attendance', async (req, res) => {
       });
     }
     
-    // Add attendance record
     trip.attendance.push({
       studentId,
       scannedAt: new Date(),
@@ -523,7 +551,7 @@ router.post('/:id/record-attendance', async (req, res) => {
 
 // ==================== MAIN TRIP ENDPOINTS ====================
 
-// Get all trips - Enhanced with students population
+// GET all trips
 router.get('/', async (req, res) => {
   try {
     const trips = await Trip.find()
@@ -551,7 +579,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get active trips - Enhanced with students
+// GET active trips (scheduled or running)
 router.get('/active', async (req, res) => {
   try {
     const trips = await Trip.find({ 
@@ -581,7 +609,7 @@ router.get('/active', async (req, res) => {
   }
 });
 
-// Get single trip - Enhanced with students
+// GET single trip by ID
 router.get('/:id', async (req, res) => {
   try {
     const trip = await Trip.findById(req.params.id)
@@ -615,13 +643,11 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// ==================== CRITICAL FIX: CREATE TRIP ====================
-// Create trip - Enhanced with auto-populated students and EMPTY attendance
+// CREATE trip - status defaults to 'scheduled'
 router.post('/', isAdmin, async (req, res) => {
   try {
     const { routeName, vehicleId, driverId, tripType, scheduledStartTime, scheduledEndTime, status } = req.body;
     
-    // Find students if vehicleId is provided
     let studentIds = [];
     if (vehicleId) {
       const bus = await Bus.findOne({ busNumber: vehicleId });
@@ -635,11 +661,10 @@ router.post('/', isAdmin, async (req, res) => {
           isActive: true
         });
         studentIds = students.map(s => s._id);
-        console.log(`📚 Found ${studentIds.length} students for bus ${vehicleId}`);
+        console.log(`Found ${studentIds.length} students for bus ${vehicleId}`);
       }
     }
     
-    // CRITICAL: Start with EMPTY attendance for each new trip
     const tripData = {
       routeName,
       vehicleId: vehicleId || '',
@@ -649,10 +674,9 @@ router.post('/', isAdmin, async (req, res) => {
       scheduledEndTime: scheduledEndTime || null,
       status: status || 'scheduled',
       students: studentIds,
-      attendance: []  // CRITICAL: Ensure each trip starts with no attendance records
+      attendance: []
     };
     
-    // Validate required fields
     if (!tripData.routeName) {
       return res.status(400).json({ 
         success: false, 
@@ -673,7 +697,7 @@ router.post('/', isAdmin, async (req, res) => {
       .populate('driverId', 'firstName lastName email phone')
       .populate('students', 'firstName lastName admissionNumber');
     
-    console.log(`✅ Trip created: ${tripData.routeName} with ${studentIds.length} students, 0 attendance records`);
+    console.log(`Trip created: ${tripData.routeName} with status: ${tripData.status}, ${studentIds.length} students`);
     
     res.status(201).json({
       success: true,
@@ -682,7 +706,7 @@ router.post('/', isAdmin, async (req, res) => {
         busNumber: populatedTrip.vehicleId,
         studentsCount: populatedTrip.students ? populatedTrip.students.length : 0
       },
-      message: `Trip created successfully with ${studentIds.length} students`
+      message: `Trip created successfully with status: ${tripData.status}`
     });
   } catch (error) {
     console.error('Error creating trip:', error);
@@ -693,12 +717,11 @@ router.post('/', isAdmin, async (req, res) => {
   }
 });
 
-// Update trip - Preserve students if bus changes
+// UPDATE trip - preserves status unless explicitly changed
 router.put('/:id', isAdmin, async (req, res) => {
   try {
     const updateData = { ...req.body };
     
-    // If vehicleId is being updated, refresh students list
     if (updateData.vehicleId && updateData.vehicleId !== req.body.oldVehicleId) {
       const bus = await Bus.findOne({ busNumber: updateData.vehicleId });
       if (bus) {
@@ -710,7 +733,6 @@ router.put('/:id', isAdmin, async (req, res) => {
           usesTransport: true
         });
         updateData.students = students.map(s => s._id);
-        // CRITICAL: Reset attendance when bus changes
         updateData.attendance = [];
       }
     }
@@ -730,6 +752,8 @@ router.put('/:id', isAdmin, async (req, res) => {
       });
     }
     
+    console.log(`Trip updated: ${trip.routeName}, new status: ${trip.status}`);
+    
     res.json({
       success: true,
       data: {
@@ -748,7 +772,7 @@ router.put('/:id', isAdmin, async (req, res) => {
   }
 });
 
-// Start trip - Enhanced with validation
+// START trip - changes status from 'scheduled' to 'running'
 router.patch('/:id/start', async (req, res) => {
   try {
     const trip = await Trip.findById(req.params.id);
@@ -770,11 +794,17 @@ router.patch('/:id/start', async (req, res) => {
     if (trip.status === 'completed') {
       return res.status(400).json({
         success: false,
-        message: 'Trip is already completed'
+        message: 'Cannot start a completed trip'
       });
     }
     
-    // Check if bus is assigned
+    if (trip.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot start a cancelled trip'
+      });
+    }
+    
     if (!trip.vehicleId) {
       return res.status(400).json({
         success: false,
@@ -782,10 +812,10 @@ router.patch('/:id/start', async (req, res) => {
       });
     }
     
+    const oldStatus = trip.status;
     trip.status = 'running';
     trip.startTime = new Date();
     
-    // Check if late
     const scheduledStart = new Date(trip.scheduledStartTime);
     const now = new Date();
     if (now > scheduledStart) {
@@ -798,7 +828,6 @@ router.patch('/:id/start', async (req, res) => {
     
     await trip.save();
     
-    // Update bus status
     const bus = await Bus.findOne({ busNumber: trip.vehicleId });
     if (bus) {
       await Bus.findByIdAndUpdate(bus._id, { 
@@ -810,6 +839,8 @@ router.patch('/:id/start', async (req, res) => {
     const populatedTrip = await Trip.findById(trip._id)
       .populate('driverId', 'firstName lastName email phone')
       .populate('students', 'firstName lastName admissionNumber');
+    
+    console.log(`Trip started: ${trip.routeName}, status changed from ${oldStatus} to running`);
     
     res.json({
       success: true,
@@ -828,7 +859,7 @@ router.patch('/:id/start', async (req, res) => {
   }
 });
 
-// Complete trip - Enhanced
+// COMPLETE trip - changes status from 'running' to 'completed'
 router.patch('/:id/complete', async (req, res) => {
   try {
     const trip = await Trip.findById(req.params.id);
@@ -847,11 +878,18 @@ router.patch('/:id/complete', async (req, res) => {
       });
     }
     
+    if (trip.status !== 'running') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only running trips can be completed'
+      });
+    }
+    
+    const oldStatus = trip.status;
     trip.status = 'completed';
     trip.endTime = new Date();
     await trip.save();
     
-    // Update bus status
     if (trip.vehicleId) {
       const bus = await Bus.findOne({ busNumber: trip.vehicleId });
       if (bus) {
@@ -865,6 +903,8 @@ router.patch('/:id/complete', async (req, res) => {
     const populatedTrip = await Trip.findById(trip._id)
       .populate('driverId', 'firstName lastName email phone')
       .populate('students', 'firstName lastName admissionNumber');
+    
+    console.log(`Trip completed: ${trip.routeName}, status changed from ${oldStatus} to completed`);
     
     res.json({
       success: true,
@@ -883,7 +923,7 @@ router.patch('/:id/complete', async (req, res) => {
   }
 });
 
-// Cancel trip - Enhanced
+// CANCEL trip - changes status to 'cancelled'
 router.patch('/:id/cancel', async (req, res) => {
   try {
     const trip = await Trip.findById(req.params.id);
@@ -902,11 +942,18 @@ router.patch('/:id/cancel', async (req, res) => {
       });
     }
     
+    if (trip.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Trip is already cancelled'
+      });
+    }
+    
+    const oldStatus = trip.status;
     trip.status = 'cancelled';
     trip.endTime = new Date();
     await trip.save();
     
-    // Update bus status
     if (trip.vehicleId) {
       const bus = await Bus.findOne({ busNumber: trip.vehicleId });
       if (bus && bus.currentTripId?.toString() === trip._id.toString()) {
@@ -916,6 +963,8 @@ router.patch('/:id/cancel', async (req, res) => {
         });
       }
     }
+    
+    console.log(`Trip cancelled: ${trip.routeName}, status changed from ${oldStatus} to cancelled`);
     
     res.json({
       success: true,
@@ -931,7 +980,7 @@ router.patch('/:id/cancel', async (req, res) => {
   }
 });
 
-// Get trips by bus/vehicle - Enhanced
+// GET trips by bus number
 router.get('/bus/:busNumber', async (req, res) => {
   try {
     const trips = await Trip.find({ 
@@ -956,7 +1005,7 @@ router.get('/bus/:busNumber', async (req, res) => {
   }
 });
 
-// Get trips by driver - Enhanced
+// GET trips by driver ID
 router.get('/driver/:driverId', async (req, res) => {
   try {
     const trips = await Trip.find({ 
@@ -980,7 +1029,7 @@ router.get('/driver/:driverId', async (req, res) => {
   }
 });
 
-// Get today's trips - Enhanced
+// GET today's all trips
 router.get('/today/all', async (req, res) => {
   try {
     const today = new Date();
@@ -1009,7 +1058,7 @@ router.get('/today/all', async (req, res) => {
   }
 });
 
-// Get trip statistics
+// GET trip statistics
 router.get('/stats/summary', isAdmin, async (req, res) => {
   try {
     const today = new Date();
@@ -1017,7 +1066,7 @@ router.get('/stats/summary', isAdmin, async (req, res) => {
     
     const stats = {
       totalTrips: await Trip.countDocuments(),
-      activeTrips: await Trip.countDocuments({ status: 'running' }),
+      runningTrips: await Trip.countDocuments({ status: 'running' }),
       scheduledTrips: await Trip.countDocuments({ status: 'scheduled' }),
       completedTrips: await Trip.countDocuments({ status: 'completed' }),
       cancelledTrips: await Trip.countDocuments({ status: 'cancelled' }),
@@ -1047,7 +1096,7 @@ router.get('/stats/summary', isAdmin, async (req, res) => {
   }
 });
 
-// Delete trip - Enhanced
+// DELETE trip
 router.delete('/:id', isAdmin, async (req, res) => {
   try {
     const trip = await Trip.findById(req.params.id);
@@ -1059,15 +1108,13 @@ router.delete('/:id', isAdmin, async (req, res) => {
       });
     }
     
-    // Don't allow deleting running trips
     if (trip.status === 'running') {
       return res.status(400).json({ 
         success: false, 
-        message: 'Cannot delete a running trip. Cancel it first.' 
+        message: 'Cannot delete a running trip. Cancel or complete it first.' 
       });
     }
     
-    // Free up the bus if it was assigned
     if (trip.vehicleId) {
       const bus = await Bus.findOne({ busNumber: trip.vehicleId });
       if (bus && bus.currentTripId?.toString() === trip._id.toString()) {
@@ -1079,6 +1126,8 @@ router.delete('/:id', isAdmin, async (req, res) => {
     }
     
     await trip.deleteOne();
+    
+    console.log(`Trip deleted: ${trip.routeName}`);
     
     res.json({
       success: true,

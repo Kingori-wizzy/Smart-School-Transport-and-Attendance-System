@@ -197,7 +197,7 @@ class SMSProvider {
 
   /**
    * Send via TextBee (Fallback - Free, requires Android app)
-   * FIXED: Improved response handling - accepts 202 status as success
+   * FIXED: Accepts 201 and 202 status codes as success
    */
   async sendViaTextBee(phone, message) {
     const provider = this.providers.find(p => p.name === 'textBee');
@@ -233,13 +233,25 @@ class SMSProvider {
       logger.debug('TextBee response status:', response.status);
       logger.debug('TextBee response data:', JSON.stringify(response.data, null, 2));
 
-      // TextBee returns 202 Accepted when message is queued
-      // This is a success response - the SMS will be sent by the app
-      if (response.status === 202) {
-        logger.info('TextBee: Message accepted and queued for sending');
+      // ✅ FIXED: Accept 201 Created AND 202 Accepted as success
+      if (response.status === 201 || response.status === 202) {
+        logger.info(`TextBee: Message accepted and queued for sending (Status: ${response.status})`);
+        
+        // Extract messageId from different possible response formats
+        let messageId = null;
+        if (response.data?.data?.smsBatchId) {
+          messageId = response.data.data.smsBatchId;
+        } else if (response.data?.id) {
+          messageId = response.data.id;
+        } else if (response.data?.messageId) {
+          messageId = response.data.messageId;
+        } else {
+          messageId = `tb_${Date.now()}`;
+        }
+        
         return {
           success: true,
-          messageId: response.data?.id || `tb_${Date.now()}`,
+          messageId: messageId,
           cost: 0,
           phone: formattedPhone,
           provider: 'textBee',
@@ -253,11 +265,13 @@ class SMSProvider {
           response.data.status === 'sent' || 
           response.data.status === 'queued' ||
           response.data.message === 'Message sent' ||
-          response.data.id
+          response.data.id ||
+          response.data?.data?.success === true
         )) {
+        logger.info('TextBee: Success based on response body');
         return {
           success: true,
-          messageId: response.data.messageId || response.data.id || `tb_${Date.now()}`,
+          messageId: response.data?.data?.smsBatchId || response.data?.messageId || response.data?.id || `tb_${Date.now()}`,
           cost: 0,
           phone: formattedPhone,
           provider: 'textBee'

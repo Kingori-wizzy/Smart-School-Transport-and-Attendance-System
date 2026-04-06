@@ -7,7 +7,9 @@ const path = require('path');
 const fs = require('fs').promises;
 const { authMiddleware } = require('../middleware/authMiddleware');
 const { isAdmin } = require('../middleware/authMiddleware');
-const User = require('../models/User');  // ✅ Only need this once
+const User = require('../models/User');
+const emailService = require('../services/emailService');
+const logger = require('../utils/logger');
 
 // Ensure uploads directory exists
 const uploadDir = path.join(__dirname, '..', 'uploads', 'profiles');
@@ -34,7 +36,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const filetypes = /jpeg|jpg|png|gif/;
     const mimetype = filetypes.test(file.mimetype);
@@ -62,14 +64,16 @@ const validatePassword = [
   body('newPassword').isLength({ min: 6 }).withMessage('New password must be at least 6 characters')
 ];
 
-// ==================== DRIVER CREATION VALIDATION ====================
+// ✅ FIXED: Driver validation with firstName and lastName instead of name
 const validateDriver = [
-  body('name').notEmpty().withMessage('Name is required'),
+  body('firstName').notEmpty().withMessage('First name is required'),
+  body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().normalizeEmail().withMessage('Valid email required'),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   body('phone').optional().matches(/^\+?[\d\s-]{10,}$/).withMessage('Valid phone number required'),
-  body('driverDetails.licenseNumber').optional().notEmpty(),
-  body('driverDetails.licenseExpiry').optional().isISO8601().toDate()
+  body('driverDetails.licenseNumber').optional(),
+  body('driverDetails.licenseExpiry').optional().isISO8601().toDate(),
+  body('driverDetails.experience').optional().isInt({ min: 0, max: 50 })
 ];
 
 // All user routes require authentication
@@ -90,10 +94,9 @@ router.get('/', isAdmin, async (req, res) => {
     if (role) query.role = role;
     if (search) {
       query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
         { firstName: { $regex: search, $options: 'i' } },
-        { lastName: { $regex: search, $options: 'i' } }
+        { lastName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } }
       ];
     }
 
@@ -164,7 +167,6 @@ router.get('/:id', isAdmin, async (req, res) => {
  */
 router.post('/', isAdmin, validateDriver, async (req, res) => {
   try {
-    // Check validation errors
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ 
@@ -173,7 +175,6 @@ router.post('/', isAdmin, validateDriver, async (req, res) => {
       });
     }
 
-    // Check if user already exists
     const existingUser = await User.findOne({ email: req.body.email });
     if (existingUser) {
       return res.status(409).json({ 
@@ -182,15 +183,13 @@ router.post('/', isAdmin, validateDriver, async (req, res) => {
       });
     }
 
-    // Create user
     const user = new User(req.body);
     const newUser = await user.save();
 
-    // Remove password from response
     const userResponse = newUser.toObject();
     delete userResponse.password;
 
-    console.log(`✅ New user created: ${newUser.email} (${newUser.role})`);
+    logger.info(`✅ New user created: ${newUser.email} (${newUser.role})`);
 
     res.status(201).json({
       success: true,
@@ -200,7 +199,6 @@ router.post('/', isAdmin, validateDriver, async (req, res) => {
   } catch (error) {
     console.error('Error creating user:', error);
     
-    // Handle duplicate key errors
     if (error.code === 11000) {
       return res.status(409).json({ 
         success: false, 
@@ -208,7 +206,6 @@ router.post('/', isAdmin, validateDriver, async (req, res) => {
       });
     }
     
-    // Handle validation errors
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(val => val.message);
       return res.status(400).json({ 
@@ -231,7 +228,6 @@ router.post('/', isAdmin, validateDriver, async (req, res) => {
  */
 router.put('/:id', isAdmin, async (req, res) => {
   try {
-    // Don't allow password update through this endpoint
     const { password, ...updateData } = req.body;
 
     const user = await User.findByIdAndUpdate(
@@ -247,7 +243,7 @@ router.put('/:id', isAdmin, async (req, res) => {
       });
     }
 
-    console.log(`✅ User updated: ${user.email}`);
+    logger.info(`✅ User updated: ${user.email}`);
 
     res.json({
       success: true,
@@ -286,7 +282,7 @@ router.delete('/:id', isAdmin, async (req, res) => {
       });
     }
 
-    console.log(`✅ User deactivated: ${user.email}`);
+    logger.info(`✅ User deactivated: ${user.email}`);
 
     res.json({ 
       success: true, 
@@ -337,9 +333,48 @@ router.patch('/:id/status', isAdmin, async (req, res) => {
   }
 });
 
+// ✅ NEW: Reset password endpoint (called from frontend)
+/**
+ * @route   POST /api/users/:id/reset-password
+ * @desc    Send password reset email to user
+ * @access  Private (Admin only)
+ */
+router.post('/:id/reset-password', isAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    user.resetCode = resetCode;
+    user.resetCodeExpiry = Date.now() + 10 * 60 * 1000;
+    await user.save();
+    
+    // Send email with reset code
+    if (emailService && emailService.sendResetPasswordEmail) {
+      await emailService.sendResetPasswordEmail(user.email, user.firstName, resetCode);
+    }
+    
+    logger.info(`Password reset email sent to ${user.email}`);
+    
+    res.json({ 
+      success: true, 
+      message: 'Password reset email sent successfully' 
+    });
+  } catch (error) {
+    console.error('Error resetting password:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ==================== PROFILE MANAGEMENT ENDPOINTS (for logged-in user) ====================
 
-// 📱 Save push notification token
+/**
+ * @route   POST /api/users/push-token
+ * @desc    Save push notification token
+ * @access  Private
+ */
 router.post('/push-token', validatePushToken, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -369,7 +404,7 @@ router.post('/push-token', validatePushToken, async (req, res) => {
       });
     }
 
-    console.log(`✅ Push token saved for user ${userId}`);
+    logger.info(`✅ Push token saved for user ${userId}`);
 
     res.json({ 
       success: true, 
@@ -385,7 +420,11 @@ router.post('/push-token', validatePushToken, async (req, res) => {
   }
 });
 
-// 🗑️ Remove push token (when user logs out)
+/**
+ * @route   DELETE /api/users/push-token
+ * @desc    Remove push token (when user logs out)
+ * @access  Private
+ */
 router.delete('/push-token', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -405,7 +444,7 @@ router.delete('/push-token', async (req, res) => {
       });
     }
 
-    console.log(`✅ Push token removed for user ${userId}`);
+    logger.info(`✅ Push token removed for user ${userId}`);
 
     res.json({ 
       success: true, 
@@ -420,7 +459,11 @@ router.delete('/push-token', async (req, res) => {
   }
 });
 
-// 📱 Get push token
+/**
+ * @route   GET /api/users/push-token
+ * @desc    Get push token
+ * @access  Private
+ */
 router.get('/push-token', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -450,12 +493,16 @@ router.get('/push-token', async (req, res) => {
   }
 });
 
-// 👤 Get user profile
+/**
+ * @route   GET /api/users/profile
+ * @desc    Get user profile
+ * @access  Private
+ */
 router.get('/profile', async (req, res) => {
   try {
     const user = await User.findById(req.user.id)
       .select('-password -pushToken -__v -resetCode -resetCodeExpiry')
-      .populate('children', 'name grade classLevel photo');
+      .populate('children', 'firstName lastName name grade classLevel');
 
     if (!user) {
       return res.status(404).json({ 
@@ -464,7 +511,6 @@ router.get('/profile', async (req, res) => {
       });
     }
 
-    // Add full URL to profile image if exists
     const userObj = user.toObject();
     if (userObj.profileImage) {
       const baseUrl = `${req.protocol}://${req.get('host')}`;
@@ -484,7 +530,11 @@ router.get('/profile', async (req, res) => {
   }
 });
 
-// ✏️ Update user profile
+/**
+ * @route   PUT /api/users/profile
+ * @desc    Update user profile
+ * @access  Private
+ */
 router.put('/profile', validateProfile, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -501,7 +551,6 @@ router.put('/profile', validateProfile, async (req, res) => {
     const updateData = {};
     if (firstName) updateData.firstName = firstName;
     if (lastName) updateData.lastName = lastName;
-    if (firstName && lastName) updateData.name = `${firstName} ${lastName}`.trim();
     if (phone) updateData.phone = phone;
     
     const updatedUser = await User.findByIdAndUpdate(
@@ -517,7 +566,7 @@ router.put('/profile', validateProfile, async (req, res) => {
       });
     }
 
-    console.log(`✅ Profile updated for user ${userId}`);
+    logger.info(`✅ Profile updated for user ${userId}`);
 
     res.json({ 
       success: true, 
@@ -533,8 +582,12 @@ router.put('/profile', validateProfile, async (req, res) => {
   }
 });
 
-// 📸 Upload profile photo
-router.post('/profile/photo', authMiddleware, upload.single('photo'), async (req, res) => {
+/**
+ * @route   POST /api/users/profile/photo
+ * @desc    Upload profile photo
+ * @access  Private
+ */
+router.post('/profile/photo', upload.single('photo'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ 
@@ -544,21 +597,16 @@ router.post('/profile/photo', authMiddleware, upload.single('photo'), async (req
     }
 
     const userId = req.user.id;
-    
-    // Get the old user to delete previous photo if needed
     const oldUser = await User.findById(userId);
     
-    // Construct the photo URL
     const photoUrl = `/uploads/profiles/${req.file.filename}`;
     
-    // Update user with new profile image
     const user = await User.findByIdAndUpdate(
       userId,
       { profileImage: photoUrl },
       { new: true }
     ).select('-password');
     
-    // Optionally delete old photo file
     if (oldUser && oldUser.profileImage) {
       const oldFilePath = path.join(__dirname, '..', oldUser.profileImage);
       try {
@@ -588,7 +636,11 @@ router.post('/profile/photo', authMiddleware, upload.single('photo'), async (req
   }
 });
 
-// 🔐 Change password
+/**
+ * @route   POST /api/users/change-password
+ * @desc    Change password
+ * @access  Private
+ */
 router.post('/change-password', validatePassword, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -622,7 +674,7 @@ router.post('/change-password', validatePassword, async (req, res) => {
     user.password = newPassword;
     await user.save();
     
-    console.log(`✅ Password changed for user ${userId}`);
+    logger.info(`✅ Password changed for user ${userId}`);
 
     res.json({ 
       success: true, 
@@ -637,7 +689,11 @@ router.post('/change-password', validatePassword, async (req, res) => {
   }
 });
 
-// 🗑️ Delete account (soft delete)
+/**
+ * @route   DELETE /api/users/account
+ * @desc    Delete account (soft delete)
+ * @access  Private
+ */
 router.delete('/account', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -661,7 +717,7 @@ router.delete('/account', async (req, res) => {
       });
     }
 
-    console.log(`✅ Account soft deleted for user ${userId}`);
+    logger.info(`✅ Account soft deleted for user ${userId}`);
 
     res.json({ 
       success: true, 
@@ -676,7 +732,11 @@ router.delete('/account', async (req, res) => {
   }
 });
 
-// ✅ Get user activity summary
+/**
+ * @route   GET /api/users/activity-summary
+ * @desc    Get user activity summary
+ * @access  Private
+ */
 router.get('/activity-summary', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -710,7 +770,11 @@ router.get('/activity-summary', async (req, res) => {
   }
 });
 
-// ✅ Verify account ownership
+/**
+ * @route   GET /api/users/verify-account
+ * @desc    Verify account ownership
+ * @access  Private
+ */
 router.get('/verify-account', async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('isActive');
