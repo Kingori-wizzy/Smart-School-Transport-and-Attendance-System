@@ -8,13 +8,15 @@ import {
   ActivityIndicator,
   FlatList,
   Dimensions,
+  Linking,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-native-leaflet-kit';
+import MapView, { Marker, Polyline } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useTheme } from '../../context/ThemeContext';
 import api from '../../services/api';
-import { WebView } from 'react-native-webview';
+import { Ionicons } from '@expo/vector-icons';
 
 const { width, height } = Dimensions.get('window');
 
@@ -25,9 +27,10 @@ export default function OSMNavigationScreen({ route, navigation }) {
   const [currentLocation, setCurrentLocation] = useState(null);
   const [remainingStudents, setRemainingStudents] = useState([]);
   const [nextStudent, setNextStudent] = useState(null);
-  const [routeGeometry, setRouteGeometry] = useState([]);
+  const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [mapKey, setMapKey] = useState(Date.now());
+  const [isCalculating, setIsCalculating] = useState(false);
+  const [directions, setDirections] = useState([]);
   
   const mapRef = useRef(null);
 
@@ -37,7 +40,7 @@ export default function OSMNavigationScreen({ route, navigation }) {
 
   useEffect(() => {
     if (students.length > 0) {
-      const unboarded = students.filter(s => !s.boarded);
+      const unboarded = students.filter(s => !s.boarded && !s.alighted);
       setRemainingStudents(unboarded);
       if (unboarded.length > 0) {
         setNextStudent(unboarded[0]);
@@ -46,11 +49,8 @@ export default function OSMNavigationScreen({ route, navigation }) {
   }, [students]);
 
   useEffect(() => {
-    if (currentLocation && nextStudent) {
-      calculateRoute(currentLocation, {
-        lat: nextStudent.latitude || -1.2864,
-        lng: nextStudent.longitude || 36.8172,
-      });
+    if (currentLocation && nextStudent && nextStudent.pickupCoordinates) {
+      calculateRoute(currentLocation, nextStudent.pickupCoordinates);
     }
   }, [currentLocation, nextStudent]);
 
@@ -59,6 +59,7 @@ export default function OSMNavigationScreen({ route, navigation }) {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Denied', 'Location permission is required for navigation');
+        setIsLoading(false);
         return;
       }
 
@@ -67,8 +68,10 @@ export default function OSMNavigationScreen({ route, navigation }) {
       });
 
       setCurrentLocation({
-        lat: location.coords.latitude,
-        lng: location.coords.longitude,
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
       });
       setIsLoading(false);
     } catch (error) {
@@ -79,29 +82,62 @@ export default function OSMNavigationScreen({ route, navigation }) {
   };
 
   const calculateRoute = async (start, end) => {
+    if (!start || !end) return;
+    
+    setIsCalculating(true);
     try {
-      // Using OSRM (Open Source Routing Machine) - completely free
+      // Using OSRM (Open Source Routing Machine)
       const response = await fetch(
-        `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`
+        `https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson&steps=true`
       );
       
       const data = await response.json();
       
       if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
-        // Convert GeoJSON coordinates to [lat, lng] format for leaflet-kit
-        const coordinates = data.routes[0].geometry.coordinates.map(coord => ({
-          lat: coord[1],
-          lng: coord[0]
+        const route = data.routes[0];
+        
+        // Convert GeoJSON coordinates to format for react-native-maps
+        const coordinates = route.geometry.coordinates.map(coord => ({
+          latitude: coord[1],
+          longitude: coord[0]
         }));
         
-        setRouteGeometry(coordinates);
+        setRouteCoordinates(coordinates);
         
-        // Force map to re-render with new route
-        setMapKey(Date.now());
+        // Extract turn-by-turn directions
+        const steps = route.legs[0].steps.map(step => ({
+          instruction: step.maneuver.instruction,
+          distance: step.distance,
+          duration: step.duration,
+          name: step.name
+        }));
+        setDirections(steps);
+        
+        // Fit map to show entire route
+        if (mapRef.current && coordinates.length > 0) {
+          mapRef.current.fitToCoordinates(coordinates, {
+            edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+            animated: true
+          });
+        }
       }
     } catch (error) {
       console.error('Error calculating route:', error);
+    } finally {
+      setIsCalculating(false);
     }
+  };
+
+  const openExternalNavigation = (destination) => {
+    const url = Platform.select({
+      ios: `http://maps.apple.com/?daddr=${destination.latitude},${destination.longitude}`,
+      android: `https://www.google.com/maps/dir/?api=1&destination=${destination.latitude},${destination.longitude}&travelmode=driving`
+    });
+    
+    Linking.openURL(url).catch(err => {
+      console.error('Error opening maps:', err);
+      Alert.alert('Error', 'Could not open maps application');
+    });
   };
 
   const handleStudentPress = (student) => {
@@ -112,12 +148,19 @@ export default function OSMNavigationScreen({ route, navigation }) {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Get Directions',
-          onPress: async () => {
-            if (currentLocation) {
-              await calculateRoute(currentLocation, {
-                lat: student.latitude || -1.2864,
-                lng: student.longitude || 36.8172,
-              });
+          onPress: () => {
+            if (student.pickupCoordinates) {
+              openExternalNavigation(student.pickupCoordinates);
+            } else {
+              Alert.alert('Error', 'No pickup location set for this student');
+            }
+          }
+        },
+        {
+          text: 'Calculate Route',
+          onPress: () => {
+            if (currentLocation && student.pickupCoordinates) {
+              calculateRoute(currentLocation, student.pickupCoordinates);
             }
           }
         },
@@ -128,49 +171,45 @@ export default function OSMNavigationScreen({ route, navigation }) {
 
   const markAsBoarded = async (student) => {
     try {
-      if (!trip?.id) return;
+      if (!trip?._id) return;
       
-      const result = await api.trip.boardStudent(trip.id, student.id, 'manual');
+      const response = await api.post(`/driver/trips/${trip._id}/board/${student._id}`, {
+        method: 'manual',
+        timestamp: new Date().toISOString()
+      });
       
-      if (result.success || result.data?.success) {
-        const updated = remainingStudents.filter(s => s.id !== student.id);
+      if (response.data.success) {
+        const updated = remainingStudents.filter(s => s._id !== student._id);
         setRemainingStudents(updated);
-        setRouteGeometry([]); // Clear route
+        setRouteCoordinates([]);
+        setDirections([]);
+        
         if (updated.length > 0) {
           setNextStudent(updated[0]);
         } else {
           setNextStudent(null);
+          Alert.alert('Success', 'All students have been boarded!');
         }
-        Alert.alert('✅ Success', `${student.firstName} boarded`);
+        
+        Alert.alert('Success', `${student.firstName} ${student.lastName} boarded. Parent notified.`);
+      } else {
+        Alert.alert('Error', response.data.message || 'Failed to mark as boarded');
       }
     } catch (error) {
       console.error('Error boarding student:', error);
-      Alert.alert('Error', 'Failed to mark as boarded');
+      Alert.alert('Error', error.response?.data?.message || 'Failed to mark as boarded');
     }
   };
 
-  // Prepare markers for the map
-  const markers = [
-    // Current location marker
-    currentLocation && {
-      id: 'current-location',
-      position: { lat: currentLocation.lat, lng: currentLocation.lng },
-      title: 'Your Location',
-      description: 'You are here',
-      icon: '📍',
-    },
-    // Student markers
-    ...remainingStudents.map((student, index) => ({
-      id: student.id,
-      position: { 
-        lat: student.latitude || -1.2864 + (Math.random() * 0.01), 
-        lng: student.longitude || 36.8172 + (Math.random() * 0.01) 
-      },
-      title: `${student.firstName} ${student.lastName}`,
-      description: `${student.classLevel || 'N/A'} • ${student.pickupPoint || 'Pickup'}`,
-      icon: '👤',
-    })),
-  ].filter(Boolean);
+  const centerOnLocation = () => {
+    if (mapRef.current && currentLocation) {
+      mapRef.current.animateToRegion({
+        ...currentLocation,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }, 1000);
+    }
+  };
 
   const StudentListItem = ({ student }) => (
     <TouchableOpacity
@@ -192,14 +231,53 @@ export default function OSMNavigationScreen({ route, navigation }) {
       </View>
       <TouchableOpacity
         style={[styles.navigateButton, { backgroundColor: colors.primary }]}
-        onPress={() => handleStudentPress(student)}
+        onPress={() => {
+          if (student.pickupCoordinates) {
+            openExternalNavigation(student.pickupCoordinates);
+          } else {
+            Alert.alert('Error', 'No pickup location set');
+          }
+        }}
       >
-        <Text style={styles.navigateButtonText}>🚗</Text>
+        <Ionicons name="navigate" size={20} color="#fff" />
       </TouchableOpacity>
     </TouchableOpacity>
   );
 
-  if (isLoading || !currentLocation) {
+  const DirectionsList = () => (
+    <View style={[styles.directionsContainer, { backgroundColor: colors.card }]}>
+      <Text style={[styles.directionsTitle, { color: colors.text }]}>
+        Turn-by-Turn Directions
+      </Text>
+      <FlatList
+        data={directions}
+        keyExtractor={(item, index) => index.toString()}
+        renderItem={({ item, index }) => (
+          <View style={[styles.directionItem, { borderBottomColor: colors.border }]}>
+            <View style={styles.directionNumber}>
+              <Text style={[styles.directionNumberText, { color: colors.primary }]}>
+                {index + 1}
+              </Text>
+            </View>
+            <View style={styles.directionContent}>
+              <Text style={[styles.directionInstruction, { color: colors.text }]}>
+                {item.instruction}
+              </Text>
+              <Text style={[styles.directionDistance, { color: colors.textSecondary }]}>
+                {item.distance < 1000 
+                  ? `${Math.round(item.distance)} m` 
+                  : `${(item.distance / 1000).toFixed(1)} km`}
+              </Text>
+            </View>
+          </View>
+        )}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 10 }}
+      />
+    </View>
+  );
+
+  if (isLoading) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }]}>
         <ActivityIndicator size="large" color={colors.primary} />
@@ -208,116 +286,144 @@ export default function OSMNavigationScreen({ route, navigation }) {
     );
   }
 
-  // Map configuration
-  const mapOptions = {
-    center: { lat: currentLocation.lat, lng: currentLocation.lng },
-    zoom: 13,
-    minZoom: 5,
-    maxZoom: 19,
-  };
+  if (!currentLocation) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background }]}>
+        <Text style={{ color: colors.text, textAlign: 'center', padding: 20 }}>
+          Unable to get your location. Please check GPS settings.
+        </Text>
+        <TouchableOpacity
+          style={[styles.retryButton, { backgroundColor: colors.primary }]}
+          onPress={getCurrentLocation}
+        >
+          <Text style={styles.retryButtonText}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backIcon}>←</Text>
+          <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Navigation</Text>
-        <TouchableOpacity 
-          onPress={() => setMapKey(Date.now())} 
-          style={styles.fitButton}
-        >
-          <Text style={styles.fitButtonIcon}>🔄</Text>
+        <TouchableOpacity onPress={centerOnLocation} style={styles.fitButton}>
+          <Ionicons name="locate" size={22} color="#fff" />
         </TouchableOpacity>
       </LinearGradient>
 
       <View style={styles.mapContainer}>
-        <MapContainer
-          key={mapKey}
+        <MapView
           ref={mapRef}
-          center={mapOptions.center}
-          zoom={mapOptions.zoom}
-          minZoom={mapOptions.minZoom}
-          maxZoom={mapOptions.maxZoom}
-          isDark={isDarkMode}
           style={styles.map}
+          initialRegion={currentLocation}
+          showsUserLocation={true}
+          showsMyLocationButton={false}
+          showsTraffic={true}
         >
-          <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          />
-          
           {/* Current Location Marker */}
-          {currentLocation && (
-            <Marker
-              position={{ lat: currentLocation.lat, lng: currentLocation.lng }}
-              icon="📍"
-              title="Your Location"
-              description="You are here"
-            >
-              <Popup>
-                <Text>Current Location</Text>
-              </Popup>
-            </Marker>
-          )}
+          <Marker
+            coordinate={currentLocation}
+            title="Your Location"
+            description="You are here"
+            pinColor={colors.primary}
+          >
+            <View style={[styles.currentLocationMarker, { backgroundColor: colors.primary }]}>
+              <View style={styles.currentLocationInner} />
+            </View>
+          </Marker>
 
           {/* Student Markers */}
           {remainingStudents.map((student) => (
-            <Marker
-              key={student.id}
-              position={{ 
-                lat: student.latitude || -1.2864 + (Math.random() * 0.01), 
-                lng: student.longitude || 36.8172 + (Math.random() * 0.01) 
-              }}
-              icon="👤"
-              title={`${student.firstName} ${student.lastName}`}
-              description={`${student.classLevel || ''}`}
-            >
-              <Popup>
-                <Text>{student.firstName} {student.lastName}</Text>
-                <Text>{student.pickupPoint || 'No pickup point'}</Text>
-              </Popup>
-            </Marker>
+            student.pickupCoordinates && (
+              <Marker
+                key={student._id}
+                coordinate={student.pickupCoordinates}
+                title={`${student.firstName} ${student.lastName}`}
+                description={student.pickupPoint || 'Pickup location'}
+                pinColor="#FF9800"
+              >
+                <View style={styles.studentMarker}>
+                  <Text style={styles.studentMarkerText}>
+                    {student.firstName?.charAt(0)}{student.lastName?.charAt(0)}
+                  </Text>
+                </View>
+              </Marker>
+            )
           ))}
 
           {/* Route Polyline */}
-          {routeGeometry.length > 0 && (
+          {routeCoordinates.length > 0 && (
             <Polyline
-              positions={routeGeometry}
-              color={colors.primary}
-              weight={4}
-              opacity={0.8}
+              coordinates={routeCoordinates}
+              strokeColor={colors.primary}
+              strokeWidth={4}
+              lineDashPattern={[0]}
             />
           )}
-        </MapContainer>
+        </MapView>
+
+        {/* Center Button */}
+        <TouchableOpacity
+          style={[styles.centerButton, { backgroundColor: colors.card }]}
+          onPress={centerOnLocation}
+        >
+          <Ionicons name="locate" size={24} color={colors.primary} />
+        </TouchableOpacity>
       </View>
 
       {nextStudent && (
         <TouchableOpacity
           style={[styles.nextStudentBanner, { backgroundColor: colors.primary }]}
           onPress={() => {
-            if (currentLocation && nextStudent) {
-              calculateRoute(currentLocation, {
-                lat: nextStudent.latitude || -1.2864,
-                lng: nextStudent.longitude || 36.8172,
-              });
+            if (currentLocation && nextStudent.pickupCoordinates) {
+              calculateRoute(currentLocation, nextStudent.pickupCoordinates);
             }
           }}
         >
-          <Text style={styles.nextStudentText}>
-            Next: {nextStudent.firstName || ''} {nextStudent.lastName || ''}
-          </Text>
-          <Text style={styles.nextStudentArrow}>→</Text>
+          <View>
+            <Text style={styles.nextStudentText}>
+              Next: {nextStudent.firstName || ''} {nextStudent.lastName || ''}
+            </Text>
+            <Text style={styles.nextStudentLocation}>
+              {nextStudent.pickupPoint || 'Pickup location'}
+            </Text>
+          </View>
+          <Ionicons name="arrow-forward" size={24} color="#fff" />
         </TouchableOpacity>
       )}
 
+      {isCalculating && (
+        <View style={styles.calculatingOverlay}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.calculatingText}>Calculating route...</Text>
+        </View>
+      )}
+
       <View style={[styles.studentList, { backgroundColor: colors.card }]}>
-        <Text style={[styles.studentListTitle, { color: colors.text }]}>
-          Remaining Students ({remainingStudents.length})
-        </Text>
+        <View style={styles.studentListHeader}>
+          <Text style={[styles.studentListTitle, { color: colors.text }]}>
+            Remaining Students ({remainingStudents.length})
+          </Text>
+          {routeCoordinates.length > 0 && (
+            <TouchableOpacity
+              onPress={() => {
+                setRouteCoordinates([]);
+                setDirections([]);
+              }}
+            >
+              <Text style={[styles.clearRouteText, { color: colors.error || '#f44336' }]}>
+                Clear Route
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        
         <FlatList
           data={remainingStudents}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => item._id}
           renderItem={({ item }) => <StudentListItem student={item} />}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.studentListContent}
@@ -328,6 +434,19 @@ export default function OSMNavigationScreen({ route, navigation }) {
           }
         />
       </View>
+
+      {/* Directions Panel */}
+      {directions.length > 0 && (
+        <View style={styles.directionsPanel}>
+          <TouchableOpacity
+            style={[styles.closeDirectionsButton, { backgroundColor: colors.card }]}
+            onPress={() => setDirections([])}
+          >
+            <Ionicons name="close" size={24} color={colors.text} />
+          </TouchableOpacity>
+          <DirectionsList />
+        </View>
+      )}
     </View>
   );
 }
@@ -350,7 +469,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  backIcon: { fontSize: 24, color: '#fff' },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
   fitButton: {
     width: 40,
@@ -360,9 +478,51 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  fitButtonIcon: { fontSize: 18, color: '#fff' },
-  mapContainer: { height: 350 },
+  mapContainer: { height: 350, position: 'relative' },
   map: { flex: 1 },
+  centerButton: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    width: 45,
+    height: 45,
+    borderRadius: 22.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  currentLocationMarker: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  currentLocationInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#fff',
+  },
+  studentMarker: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#FF9800',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  studentMarkerText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
   nextStudentBanner: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -372,7 +532,22 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   nextStudentText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  nextStudentArrow: { color: '#fff', fontSize: 20 },
+  nextStudentLocation: { color: 'rgba(255,255,255,0.8)', fontSize: 12, marginTop: 2 },
+  calculatingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  calculatingText: {
+    color: '#fff',
+    marginTop: 10,
+    fontSize: 16,
+  },
   studentList: {
     flex: 1,
     marginHorizontal: 15,
@@ -380,11 +555,20 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingTop: 10,
   },
+  studentListHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 15,
+    paddingBottom: 10,
+  },
   studentListTitle: {
     fontSize: 16,
     fontWeight: '600',
-    paddingHorizontal: 15,
-    paddingBottom: 10,
+  },
+  clearRouteText: {
+    fontSize: 12,
+    fontWeight: '500',
   },
   studentListContent: { paddingBottom: 10 },
   studentListItem: {
@@ -414,5 +598,73 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  navigateButtonText: { color: '#fff', fontSize: 18 },
+  retryButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginTop: 20,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  directionsPanel: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    maxHeight: '50%',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    overflow: 'hidden',
+  },
+  closeDirectionsButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 35,
+    height: 35,
+    borderRadius: 17.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  directionsContainer: {
+    padding: 15,
+    paddingTop: 40,
+    maxHeight: '100%',
+  },
+  directionsTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    paddingHorizontal: 10,
+  },
+  directionItem: {
+    flexDirection: 'row',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderBottomWidth: 1,
+  },
+  directionNumber: {
+    width: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  directionNumberText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  directionContent: {
+    flex: 1,
+    marginLeft: 10,
+  },
+  directionInstruction: {
+    fontSize: 14,
+    marginBottom: 4,
+  },
+  directionDistance: {
+    fontSize: 12,
+  },
 });

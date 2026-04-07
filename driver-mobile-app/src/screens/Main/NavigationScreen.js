@@ -8,37 +8,46 @@ import {
   Alert,
   FlatList,
   ActivityIndicator,
+  Linking,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-native-leaflet-kit';
+import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import locationService from '../../services/location';
+import { Ionicons } from '@expo/vector-icons';
 
 const { width, height } = Dimensions.get('window');
 
 // Helper function to get coordinates from student object
 const getStudentCoordinates = (student) => {
+  if (student.pickupCoordinates) {
+    return {
+      latitude: student.pickupCoordinates.lat,
+      longitude: student.pickupCoordinates.lng,
+    };
+  }
   if (student.coordinates) {
     return {
-      lat: student.coordinates.lat,
-      lng: student.coordinates.lng,
+      latitude: student.coordinates.lat,
+      longitude: student.coordinates.lng,
     };
   }
   if (student.location) {
     return {
-      lat: student.location.lat,
-      lng: student.location.lng,
+      latitude: student.location.lat,
+      longitude: student.location.lng,
     };
   }
   if (student.latitude !== undefined && student.longitude !== undefined) {
     return {
-      lat: student.latitude,
-      lng: student.longitude,
+      latitude: student.latitude,
+      longitude: student.longitude,
     };
   }
-  return { lat: -1.2864, lng: 36.8172 };
+  return null;
 };
 
 export default function NavigationScreen({ route, navigation }) {
@@ -52,13 +61,15 @@ export default function NavigationScreen({ route, navigation }) {
   const [trip, setTrip] = useState(initialTrip);
   const [remainingStudents, setRemainingStudents] = useState([]);
   const [nextStudent, setNextStudent] = useState(null);
-  const [routeGeometry, setRouteGeometry] = useState([]);
+  const [routeCoordinates, setRouteCoordinates] = useState([]);
+  const [directions, setDirections] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [mapKey, setMapKey] = useState(Date.now());
+  const [isCalculating, setIsCalculating] = useState(false);
   
   const locationUnsubscribeRef = useRef(null);
   const intervalRef = useRef(null);
   const isMounted = useRef(true);
+  const mapRef = useRef(null);
 
   // Fetch students if not passed from TripScreen
   const fetchStudents = useCallback(async () => {
@@ -85,27 +96,68 @@ export default function NavigationScreen({ route, navigation }) {
   const calculateRoute = useCallback(async (start, end) => {
     if (!start || !end) return;
     
+    setIsCalculating(true);
     try {
       const response = await fetch(
-        `https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`
+        `https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson&steps=true`
       );
       
       const data = await response.json();
       
       if (data.code === 'Ok' && data.routes && data.routes.length > 0 && isMounted.current) {
-        const coordinates = data.routes[0].geometry.coordinates.map(coord => ({
-          lat: coord[1],
-          lng: coord[0]
+        const route = data.routes[0];
+        
+        // Convert coordinates for map
+        const coordinates = route.geometry.coordinates.map(coord => ({
+          latitude: coord[1],
+          longitude: coord[0]
         }));
-        setRouteGeometry(coordinates);
+        setRouteCoordinates(coordinates);
+        
+        // Extract turn-by-turn directions
+        const steps = route.legs[0].steps.map(step => ({
+          instruction: step.maneuver.instruction,
+          distance: step.distance,
+          duration: step.duration,
+          name: step.name
+        }));
+        setDirections(steps);
+        
+        // Fit map to show route
+        if (mapRef.current && coordinates.length > 0) {
+          mapRef.current.fitToCoordinates(coordinates, {
+            edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+            animated: true
+          });
+        }
       } else {
-        setRouteGeometry([]);
+        setRouteCoordinates([]);
+        setDirections([]);
       }
     } catch (error) {
       console.error('Error calculating route:', error);
-      setRouteGeometry([]);
+      setRouteCoordinates([]);
+    } finally {
+      setIsCalculating(false);
     }
   }, []);
+
+  const openExternalNavigation = (destination) => {
+    if (!destination) {
+      Alert.alert('Error', 'No destination location available');
+      return;
+    }
+    
+    const url = Platform.select({
+      ios: `http://maps.apple.com/?daddr=${destination.latitude},${destination.longitude}`,
+      android: `https://www.google.com/maps/dir/?api=1&destination=${destination.latitude},${destination.longitude}&travelmode=driving`
+    });
+    
+    Linking.openURL(url).catch(err => {
+      console.error('Error opening maps:', err);
+      Alert.alert('Error', 'Could not open maps application');
+    });
+  };
 
   // Start location tracking using locationService
   const startLocationTracking = useCallback(async () => {
@@ -120,18 +172,22 @@ export default function NavigationScreen({ route, navigation }) {
       const initialLocation = await locationService.getCurrentLocation();
       if (initialLocation && isMounted.current) {
         setCurrentLocation({
-          lat: initialLocation.latitude,
-          lng: initialLocation.longitude,
+          latitude: initialLocation.latitude,
+          longitude: initialLocation.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
         });
       }
       
       // Subscribe to location updates
       const unsubscribe = locationService.addListener((location) => {
         if (isMounted.current) {
-          setCurrentLocation({
-            lat: location.latitude,
-            lng: location.longitude,
-          });
+          setCurrentLocation(prev => ({
+            latitude: location.latitude,
+            longitude: location.longitude,
+            latitudeDelta: prev?.latitudeDelta || 0.01,
+            longitudeDelta: prev?.longitudeDelta || 0.01,
+          }));
           
           // Update location on server
           if (tripId) {
@@ -161,10 +217,10 @@ export default function NavigationScreen({ route, navigation }) {
       return;
     }
 
-    const unboarded = students.filter(s => !s.boarded);
+    const unboarded = students.filter(s => !s.boarded && !s.alighted);
     setRemainingStudents(unboarded);
     
-    if (unboarded.length > 0) {
+    if (unboarded.length > 0 && getStudentCoordinates(unboarded[0])) {
       setNextStudent(unboarded[0]);
     } else {
       setNextStudent(null);
@@ -204,13 +260,11 @@ export default function NavigationScreen({ route, navigation }) {
     return () => {
       isMounted.current = false;
       
-      // Clean up location listener
       if (locationUnsubscribeRef.current) {
         locationUnsubscribeRef.current();
         locationUnsubscribeRef.current = null;
       }
       
-      // Clear interval
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -227,7 +281,9 @@ export default function NavigationScreen({ route, navigation }) {
   useEffect(() => {
     if (currentLocation && nextStudent && isMounted.current) {
       const coords = getStudentCoordinates(nextStudent);
-      calculateRoute(currentLocation, coords);
+      if (coords) {
+        calculateRoute(currentLocation, coords);
+      }
     }
   }, [currentLocation, nextStudent, calculateRoute]);
 
@@ -242,9 +298,20 @@ export default function NavigationScreen({ route, navigation }) {
         {
           text: 'Get Directions',
           onPress: () => {
-            if (currentLocation) {
+            if (currentLocation && coords) {
               calculateRoute(currentLocation, coords);
-              setMapKey(Date.now());
+            } else if (!coords) {
+              Alert.alert('Error', 'No pickup location set for this student');
+            }
+          }
+        },
+        {
+          text: 'Open Maps',
+          onPress: () => {
+            if (coords) {
+              openExternalNavigation(coords);
+            } else {
+              Alert.alert('Error', 'No pickup location set for this student');
             }
           }
         },
@@ -266,14 +333,13 @@ export default function NavigationScreen({ route, navigation }) {
       const response = await api.post(`/driver/trips/${activeTripId}/board/${studentId}`, {
         method: 'manual',
         location: currentLocation ? {
-          lat: currentLocation.lat,
-          lng: currentLocation.lng
+          lat: currentLocation.latitude,
+          lng: currentLocation.longitude
         } : null,
         timestamp: new Date().toISOString()
       });
       
       if (response.data?.success && isMounted.current) {
-        // Update local state
         const updatedStudents = students.map(s => 
           (s._id === studentId || s.id === studentId) 
             ? { ...s, boarded: true, status: 'boarded' } 
@@ -281,11 +347,10 @@ export default function NavigationScreen({ route, navigation }) {
         );
         setStudents(updatedStudents);
         
-        Alert.alert('✅ Success', `${student.firstName} marked as boarded`);
+        Alert.alert('Success', `${student.firstName} ${student.lastName} boarded. Parent notified.`);
         
-        // Clear route and refresh
-        setRouteGeometry([]);
-        setMapKey(Date.now());
+        setRouteCoordinates([]);
+        setDirections([]);
       } else {
         Alert.alert('Error', response.data?.message || 'Failed to mark student as boarded');
       }
@@ -300,10 +365,21 @@ export default function NavigationScreen({ route, navigation }) {
     await fetchStudents();
     if (currentLocation && nextStudent && isMounted.current) {
       const coords = getStudentCoordinates(nextStudent);
-      calculateRoute(currentLocation, coords);
+      if (coords) {
+        calculateRoute(currentLocation, coords);
+      }
     }
-    setMapKey(Date.now());
     setRefreshing(false);
+  };
+
+  const centerOnLocation = () => {
+    if (mapRef.current && currentLocation) {
+      mapRef.current.animateToRegion({
+        ...currentLocation,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }, 1000);
+    }
   };
 
   const StudentListItem = ({ student }) => {
@@ -330,13 +406,14 @@ export default function NavigationScreen({ route, navigation }) {
         <TouchableOpacity
           style={[styles.navigateButton, { backgroundColor: colors.primary }]}
           onPress={() => {
-            if (currentLocation) {
+            if (currentLocation && coords) {
               calculateRoute(currentLocation, coords);
-              setMapKey(Date.now());
+            } else if (!coords) {
+              Alert.alert('Error', 'No pickup location set');
             }
           }}
         >
-          <Text style={styles.navigateButtonText}>🚗</Text>
+          <Ionicons name="navigate" size={20} color="#fff" />
         </TouchableOpacity>
       </TouchableOpacity>
     );
@@ -354,101 +431,79 @@ export default function NavigationScreen({ route, navigation }) {
   }
 
   const totalRemaining = remainingStudents.length;
-
-  const mapOptions = {
-    center: currentLocation ? { lat: currentLocation.lat, lng: currentLocation.lng } : { lat: -1.2864, lng: 36.8172 },
-    zoom: 13,
-    minZoom: 5,
-    maxZoom: 19,
-  };
+  const hasValidPickup = nextStudent && getStudentCoordinates(nextStudent);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <LinearGradient colors={[colors.primary, colors.secondary]} style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backIcon}>←</Text>
+          <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Navigation</Text>
-        <TouchableOpacity 
-          onPress={() => {
-            setMapKey(Date.now());
-            if (nextStudent && currentLocation) {
-              const coords = getStudentCoordinates(nextStudent);
-              calculateRoute(currentLocation, coords);
-            }
-          }} 
-          style={styles.fitButton}
-        >
-          <Text style={styles.fitButtonIcon}>🔄</Text>
+        <TouchableOpacity onPress={centerOnLocation} style={styles.fitButton}>
+          <Ionicons name="locate" size={22} color="#fff" />
         </TouchableOpacity>
       </LinearGradient>
 
       <View style={styles.mapContainer}>
-        <MapContainer
-          key={mapKey}
-          center={mapOptions.center}
-          zoom={mapOptions.zoom}
-          minZoom={mapOptions.minZoom}
-          maxZoom={mapOptions.maxZoom}
-          isDark={isDarkMode}
+        <MapView
+          ref={mapRef}
           style={styles.map}
+          initialRegion={currentLocation || { latitude: -1.2864, longitude: 36.8172, latitudeDelta: 0.01, longitudeDelta: 0.01 }}
+          showsUserLocation={true}
+          showsMyLocationButton={false}
+          showsTraffic={true}
         >
-          <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          />
-          
-          {currentLocation && (
-            <Marker
-              position={{ lat: currentLocation.lat, lng: currentLocation.lng }}
-              icon="📍"
-              title="Your Location"
-              description="You are here"
-            >
-              <Popup>
-                <Text>Current Location</Text>
-              </Popup>
-            </Marker>
-          )}
-
+          {/* Student Markers */}
           {remainingStudents.map((student, index) => {
             const coords = getStudentCoordinates(student);
+            if (!coords) return null;
             return (
               <Marker
                 key={student._id || student.id || index}
-                position={{ lat: coords.lat, lng: coords.lng }}
-                icon="👤"
+                coordinate={coords}
                 title={`${student.firstName} ${student.lastName}`}
-                description={`Pickup: ${student.pickupPoint || 'Not set'}`}
+                description={student.pickupPoint || 'Pickup location'}
+                pinColor="#FF9800"
               >
-                <Popup>
-                  <Text style={{ fontWeight: 'bold' }}>{student.firstName} {student.lastName}</Text>
-                  <Text>Class: {student.classLevel || 'N/A'}</Text>
-                  <Text>Pickup: {student.pickupPoint || 'Not set'}</Text>
-                </Popup>
+                <View style={styles.studentMarker}>
+                  <Text style={styles.studentMarkerText}>
+                    {student.firstName?.charAt(0)}{student.lastName?.charAt(0)}
+                  </Text>
+                </View>
               </Marker>
             );
           })}
 
-          {routeGeometry.length > 0 && (
+          {/* Route Polyline */}
+          {routeCoordinates.length > 0 && (
             <Polyline
-              positions={routeGeometry}
-              color={colors.primary}
-              weight={4}
-              opacity={0.8}
+              coordinates={routeCoordinates}
+              strokeColor={colors.primary}
+              strokeWidth={4}
+              lineDashPattern={[0]}
             />
           )}
-        </MapContainer>
+        </MapView>
+
+        {/* Center Button */}
+        <TouchableOpacity
+          style={[styles.centerButton, { backgroundColor: colors.card }]}
+          onPress={centerOnLocation}
+        >
+          <Ionicons name="locate" size={24} color={colors.primary} />
+        </TouchableOpacity>
       </View>
 
-      {nextStudent && (
+      {nextStudent && hasValidPickup && (
         <TouchableOpacity
           style={[styles.nextStudentBanner, { backgroundColor: colors.primary }]}
           onPress={() => {
             if (currentLocation && nextStudent) {
               const coords = getStudentCoordinates(nextStudent);
-              calculateRoute(currentLocation, coords);
-              setMapKey(Date.now());
+              if (coords) {
+                calculateRoute(currentLocation, coords);
+              }
             }
           }}
         >
@@ -461,8 +516,15 @@ export default function NavigationScreen({ route, navigation }) {
               {nextStudent.pickupPoint || 'Pickup location'}
             </Text>
           </View>
-          <Text style={styles.nextStudentArrow}>→</Text>
+          <Ionicons name="arrow-forward" size={28} color="#fff" />
         </TouchableOpacity>
+      )}
+
+      {isCalculating && (
+        <View style={styles.calculatingOverlay}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.calculatingText}>Calculating route...</Text>
+        </View>
       )}
 
       <View style={[styles.studentList, { backgroundColor: colors.card }]}>
@@ -484,8 +546,9 @@ export default function NavigationScreen({ route, navigation }) {
           onRefresh={handleRefresh}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
+              <Ionicons name="checkmark-circle" size={50} color={colors.primary} />
               <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                🎉 All students have been boarded!
+                All students have been boarded!
               </Text>
               <TouchableOpacity
                 style={[styles.backToTripButton, { backgroundColor: colors.primary }]}
@@ -521,7 +584,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  backIcon: { fontSize: 24, color: '#fff' },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
   fitButton: {
     width: 40,
@@ -531,9 +593,38 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  fitButtonIcon: { fontSize: 18, color: '#fff' },
-  mapContainer: { height: 350 },
+  mapContainer: { height: 350, position: 'relative' },
   map: { flex: 1 },
+  centerButton: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    width: 45,
+    height: 45,
+    borderRadius: 22.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  studentMarker: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#FF9800',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  studentMarkerText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
   nextStudentBanner: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -545,7 +636,22 @@ const styles = StyleSheet.create({
   nextStudentLabel: { color: '#fff', fontSize: 12, opacity: 0.9, marginBottom: 4 },
   nextStudentText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   nextStudentAddress: { color: '#fff', fontSize: 12, opacity: 0.8, marginTop: 2 },
-  nextStudentArrow: { color: '#fff', fontSize: 28, fontWeight: 'bold' },
+  calculatingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  calculatingText: {
+    color: '#fff',
+    fontSize: 16,
+    marginTop: 10,
+  },
   studentList: {
     flex: 1,
     marginHorizontal: 15,
@@ -592,7 +698,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  navigateButtonText: { color: '#fff', fontSize: 20 },
   emptyContainer: { alignItems: 'center', padding: 30 },
   emptyText: { fontSize: 16, textAlign: 'center', marginBottom: 15 },
   backToTripButton: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 },

@@ -1,29 +1,52 @@
 const nodemailer = require('nodemailer');
 
-// Configure your email settings
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD
+// Configure transporter with better error handling
+let transporter;
+
+const initTransporter = () => {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+    console.warn('⚠️ Email credentials not configured. Email sending disabled.');
+    return null;
   }
-});
+  
+  const transport = nodemailer.createTransport({
+    service: process.env.EMAIL_SERVICE || 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASSWORD
+    },
+    tls: {
+      rejectUnauthorized: false
+    }
+  });
+  
+  // Verify connection
+  transport.verify((error, success) => {
+    if (error) {
+      console.error('❌ Email transporter error:', error.message);
+    } else {
+      console.log('✅ Email service ready to send messages');
+    }
+  });
+  
+  return transport;
+};
 
 // Email templates
 const templates = {
   boarding: (studentName, time, busNumber) => ({
-    subject: `🚌 ${studentName} has boarded the bus`,
+    subject: `${studentName} has boarded the bus`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
         <div style="background-color: #4CAF50; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-          <h1 style="margin: 0;">🚌 Boarding Alert</h1>
+          <h1 style="margin: 0;">Boarding Alert</h1>
         </div>
         <div style="background-color: white; padding: 30px; border-radius: 0 0 10px 10px;">
           <p style="font-size: 18px;">Dear Parent,</p>
           <p style="font-size: 16px;"><strong>${studentName}</strong> has boarded the school bus.</p>
           <div style="background-color: #f5f5f5; padding: 15px; border-radius: 8px; margin: 20px 0;">
-            <p><strong>🚍 Bus Number:</strong> ${busNumber}</p>
-            <p><strong>⏰ Time:</strong> ${time}</p>
+            <p><strong>Bus Number:</strong> ${busNumber}</p>
+            <p><strong>Time:</strong> ${time}</p>
           </div>
           <p>Track your child's location in real-time through the Smart School app.</p>
           <hr style="margin: 20px 0;">
@@ -35,18 +58,18 @@ const templates = {
   }),
   
   alighting: (studentName, time, busNumber) => ({
-    subject: `🏠 ${studentName} has alighted from the bus`,
+    subject: `${studentName} has alighted from the bus`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
         <div style="background-color: #FF9800; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-          <h1 style="margin: 0;">🏠 Alighting Alert</h1>
+          <h1 style="margin: 0;">Alighting Alert</h1>
         </div>
         <div style="background-color: white; padding: 30px; border-radius: 0 0 10px 10px;">
           <p style="font-size: 18px;">Dear Parent,</p>
           <p style="font-size: 16px;"><strong>${studentName}</strong> has alighted from the school bus.</p>
           <div style="background-color: #f5f5f5; padding: 15px; border-radius: 8px; margin: 20px 0;">
-            <p><strong>🚍 Bus Number:</strong> ${busNumber}</p>
-            <p><strong>⏰ Time:</strong> ${time}</p>
+            <p><strong>Bus Number:</strong> ${busNumber}</p>
+            <p><strong>Time:</strong> ${time}</p>
           </div>
           <p>Your child has arrived safely.</p>
           <hr style="margin: 20px 0;">
@@ -57,19 +80,43 @@ const templates = {
     text: `${studentName} has alighted from the bus (${busNumber}) at ${time}.`
   }),
   
-  tripStart: (routeName, busNumber, estimatedArrival) => ({
-    subject: `🚍 Trip Started: ${routeName}`,
+  resetPassword: (userName, resetCode) => ({
+    subject: `Password Reset Code - Smart School`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
         <div style="background-color: #2196F3; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-          <h1 style="margin: 0;">🚍 Trip Started</h1>
+          <h1 style="margin: 0;">Password Reset</h1>
+        </div>
+        <div style="background-color: white; padding: 30px; border-radius: 0 0 10px 10px;">
+          <p style="font-size: 18px;">Dear ${userName},</p>
+          <p>We received a request to reset your password for your Smart School account.</p>
+          <div style="background-color: #f5f5f5; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;">
+            <p style="font-size: 14px; margin: 0;">Your verification code is:</p>
+            <h1 style="font-size: 36px; letter-spacing: 5px; margin: 10px 0; color: #2196F3;">${resetCode}</h1>
+            <p style="font-size: 12px; margin: 0;">This code expires in 15 minutes</p>
+          </div>
+          <p>If you did not request this password reset, please ignore this email.</p>
+          <hr style="margin: 20px 0;">
+          <p style="color: #666; font-size: 12px;">Smart School Transport System</p>
+        </div>
+      </div>
+    `,
+    text: `Your password reset code is: ${resetCode}. This code expires in 15 minutes.`
+  }),
+  
+  tripStart: (routeName, busNumber, estimatedArrival) => ({
+    subject: `Trip Started: ${routeName}`,
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
+        <div style="background-color: #2196F3; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
+          <h1 style="margin: 0;">Trip Started</h1>
         </div>
         <div style="background-color: white; padding: 30px; border-radius: 0 0 10px 10px;">
           <p style="font-size: 18px;">Dear Parent,</p>
           <p>The bus on route <strong>${routeName}</strong> has started its journey.</p>
           <div style="background-color: #f5f5f5; padding: 15px; border-radius: 8px; margin: 20px 0;">
-            <p><strong>🚍 Bus Number:</strong> ${busNumber}</p>
-            <p><strong>⏰ Estimated Arrival:</strong> ${estimatedArrival}</p>
+            <p><strong>Bus Number:</strong> ${busNumber}</p>
+            <p><strong>Estimated Arrival:</strong> ${estimatedArrival}</p>
           </div>
           <p>Track the bus location in the Smart School app.</p>
           <hr style="margin: 20px 0;">
@@ -81,17 +128,17 @@ const templates = {
   }),
   
   tripComplete: (routeName, busNumber) => ({
-    subject: `✅ Trip Completed: ${routeName}`,
+    subject: `Trip Completed: ${routeName}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
         <div style="background-color: #4CAF50; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-          <h1 style="margin: 0;">✅ Trip Completed</h1>
+          <h1 style="margin: 0;">Trip Completed</h1>
         </div>
         <div style="background-color: white; padding: 30px; border-radius: 0 0 10px 10px;">
           <p style="font-size: 18px;">Dear Parent,</p>
           <p>The bus on route <strong>${routeName}</strong> has completed its journey.</p>
           <div style="background-color: #f5f5f5; padding: 15px; border-radius: 8px; margin: 20px 0;">
-            <p><strong>🚍 Bus Number:</strong> ${busNumber}</p>
+            <p><strong>Bus Number:</strong> ${busNumber}</p>
           </div>
           <p>All students have arrived safely.</p>
           <hr style="margin: 20px 0;">
@@ -103,18 +150,18 @@ const templates = {
   }),
   
   delay: (studentName, minutes, reason) => ({
-    subject: `⏰ Bus Delay Alert for ${studentName}`,
+    subject: `Bus Delay Alert for ${studentName}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
         <div style="background-color: #FF9800; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-          <h1 style="margin: 0;">⏰ Delay Alert</h1>
+          <h1 style="margin: 0;">Delay Alert</h1>
         </div>
         <div style="background-color: white; padding: 30px; border-radius: 0 0 10px 10px;">
           <p style="font-size: 18px;">Dear Parent,</p>
           <p><strong>${studentName}</strong>'s bus is delayed.</p>
           <div style="background-color: #f5f5f5; padding: 15px; border-radius: 8px; margin: 20px 0;">
-            <p><strong>⏰ Delay:</strong> ${minutes} minutes</p>
-            <p><strong>📝 Reason:</strong> ${reason}</p>
+            <p><strong>Delay:</strong> ${minutes} minutes</p>
+            <p><strong>Reason:</strong> ${reason}</p>
           </div>
           <p>We apologize for the inconvenience. Track the bus location in the app.</p>
           <hr style="margin: 20px 0;">
@@ -126,18 +173,18 @@ const templates = {
   }),
   
   emergency: (busNumber, location, description) => ({
-    subject: `🚨 EMERGENCY ALERT - Bus ${busNumber}`,
+    subject: `EMERGENCY ALERT - Bus ${busNumber}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #fff3f3;">
         <div style="background-color: #f44336; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-          <h1 style="margin: 0;">🚨 EMERGENCY ALERT</h1>
+          <h1 style="margin: 0;">EMERGENCY ALERT</h1>
         </div>
         <div style="background-color: white; padding: 30px; border-radius: 0 0 10px 10px;">
           <p style="font-size: 18px;">Dear Parent,</p>
           <p><strong>Emergency situation reported on Bus ${busNumber}</strong></p>
           <div style="background-color: #fff3f3; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f44336;">
-            <p><strong>📍 Location:</strong> ${location}</p>
-            <p><strong>📝 Details:</strong> ${description}</p>
+            <p><strong>Location:</strong> ${location}</p>
+            <p><strong>Details:</strong> ${description}</p>
           </div>
           <p>Please check the Smart School app for updates.</p>
           <hr style="margin: 20px 0;">
@@ -149,11 +196,11 @@ const templates = {
   }),
   
   driverMessage: (driverName, message) => ({
-    subject: `📢 Message from Driver ${driverName}`,
+    subject: `Message from Driver ${driverName}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
         <div style="background-color: #9C27B0; color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0;">
-          <h1 style="margin: 0;">📢 Message from Driver</h1>
+          <h1 style="margin: 0;">Message from Driver</h1>
         </div>
         <div style="background-color: white; padding: 30px; border-radius: 0 0 10px 10px;">
           <p style="font-size: 18px;">Dear Parent,</p>
@@ -179,11 +226,16 @@ const sendEmail = async (to, subject, html, text = null) => {
   try {
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
       console.warn('⚠️ Email credentials not configured. Skipping email send.');
-      return { success: false, error: 'Email not configured' };
+      return { success: false, error: 'Email not configured', to };
+    }
+    
+    const transporterInstance = transporter || initTransporter();
+    if (!transporterInstance) {
+      return { success: false, error: 'Email transporter not initialized', to };
     }
     
     const mailOptions = {
-      from: process.env.EMAIL_USER,
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
       to,
       subject,
       html
@@ -193,12 +245,12 @@ const sendEmail = async (to, subject, html, text = null) => {
       mailOptions.text = text;
     }
 
-    await transporter.sendMail(mailOptions);
-    console.log(`✅ Email sent to ${to}`);
-    return { success: true, to };
+    const info = await transporterInstance.sendMail(mailOptions);
+    console.log(`✅ Email sent to ${to} - Message ID: ${info.messageId}`);
+    return { success: true, messageId: info.messageId, to };
   } catch (error) {
     console.error('❌ Email sending error:', error.message);
-    return { success: false, error: error.message };
+    return { success: false, error: error.message, to };
   }
 };
 
@@ -214,6 +266,13 @@ const sendTemplateEmail = async (to, templateName, params) => {
   
   const { subject, html, text } = template(...params);
   return await sendEmail(to, subject, html, text);
+};
+
+/**
+ * Send password reset email
+ */
+const sendResetPasswordEmail = async (email, userName, resetCode) => {
+  return await sendTemplateEmail(email, 'resetPassword', [userName, resetCode]);
 };
 
 /**
@@ -272,7 +331,6 @@ const sendBulkNotifications = async (parents, eventType, data) => {
   for (const parent of parents) {
     const result = await sendParentNotification(parent, eventType, data);
     results.push({ email: parent.email, success: result.success, error: result.error });
-    // Small delay to avoid rate limiting
     await new Promise(resolve => setTimeout(resolve, 500));
   }
   return results;
@@ -282,20 +340,32 @@ const sendBulkNotifications = async (parents, eventType, data) => {
  * Test email configuration
  */
 const testEmail = async () => {
-  console.log('📧 Testing email configuration...');
+  console.log('Testing email configuration...');
+  console.log(`   Email User: ${process.env.EMAIL_USER}`);
+  console.log(`   Email Service: ${process.env.EMAIL_SERVICE || 'gmail'}`);
+  console.log('');
+  
   const result = await sendEmail(
     process.env.EMAIL_USER,
-    'Smart School Test',
-    '<h1>Test</h1><p>Email service is working!</p>',
+    'Smart School Test - Email Service',
+    '<h1>Email Test</h1><p>Your Smart School email service is working correctly!</p>',
     'Email service is working!'
   );
+  
   console.log(result.success ? '✅ Email test successful' : '❌ Email test failed');
+  if (!result.success) {
+    console.log(`   Error: ${result.error}`);
+  }
   return result;
 };
+
+// Initialize transporter on module load
+transporter = initTransporter();
 
 module.exports = {
   sendEmail,
   sendTemplateEmail,
+  sendResetPasswordEmail,
   sendParentNotification,
   sendBulkNotifications,
   testEmail,

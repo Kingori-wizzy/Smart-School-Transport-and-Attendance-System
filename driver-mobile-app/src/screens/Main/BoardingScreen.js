@@ -13,6 +13,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
+import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import api from '../../services/api';
 import { COLORS } from '../../constants/config';
@@ -29,20 +30,16 @@ export default function BoardingScreen({ route, navigation }) {
   const [isProcessing, setIsProcessing] = useState(false);
   const scannerRef = useRef(null);
 
-  // Load offline queue and check network status
   useEffect(() => {
     (async () => {
       const { status } = await BarCodeScanner.requestPermissionsAsync();
       setHasPermission(status === 'granted');
       
-      // Load offline queue
       await loadOfflineQueue();
       
-      // Check network status
       const netInfo = await NetInfo.fetch();
       setIsOnline(netInfo.isConnected);
       
-      // Listen for network changes
       const unsubscribe = NetInfo.addEventListener(state => {
         setIsOnline(state.isConnected);
         if (state.isConnected && offlineQueue.length > 0) {
@@ -54,7 +51,6 @@ export default function BoardingScreen({ route, navigation }) {
     })();
   }, []);
 
-  // Load offline queue from AsyncStorage
   const loadOfflineQueue = async () => {
     try {
       const queue = await AsyncStorage.getItem('@offline_boarding_queue');
@@ -66,7 +62,6 @@ export default function BoardingScreen({ route, navigation }) {
     }
   };
 
-  // Save to offline queue
   const saveToOfflineQueue = async (studentId, scanData) => {
     try {
       const queueItem = {
@@ -84,7 +79,7 @@ export default function BoardingScreen({ route, navigation }) {
       setOfflineQueue(updatedQueue);
       
       Alert.alert(
-        '📱 Offline Mode',
+        'Offline Mode',
         `Student scan saved locally. ${updatedQueue.length} scan(s) waiting to sync.`,
         [{ text: 'OK' }]
       );
@@ -93,7 +88,6 @@ export default function BoardingScreen({ route, navigation }) {
     }
   };
 
-  // Sync offline queue
   const syncOfflineQueue = async () => {
     if (offlineQueue.length === 0 || !isOnline) return;
     
@@ -110,15 +104,19 @@ export default function BoardingScreen({ route, navigation }) {
         }
 
         try {
-          // ✅ FIXED: Use correct endpoint
-          await api.trip.boardStudent(
-            item.tripId,
-            item.studentId,
-            'qr'
-          );
+          const response = await api.post(`/driver/trips/${item.tripId}/board/${item.studentId}`, {
+            method: 'qr',
+            timestamp: item.timestamp,
+            location: null,
+            deviceId: await getDeviceId()
+          });
           
-          item.synced = true;
-          syncedItems.push(item);
+          if (response.data.success) {
+            item.synced = true;
+            syncedItems.push(item);
+          } else {
+            throw new Error(response.data.message || 'Sync failed');
+          }
         } catch (error) {
           item.retryCount = (item.retryCount || 0) + 1;
           if (item.retryCount < 3) {
@@ -139,8 +137,8 @@ export default function BoardingScreen({ route, navigation }) {
 
       if (syncedItems.length > 0) {
         Alert.alert(
-          '✅ Sync Complete',
-          `${syncedItems.length} scan(s) synced successfully.`,
+          'Sync Complete',
+          `${syncedItems.length} scan(s) synced successfully. Parents notified.`,
           [{ text: 'OK' }]
         );
       }
@@ -151,6 +149,15 @@ export default function BoardingScreen({ route, navigation }) {
     }
   };
 
+  const getDeviceId = async () => {
+    let deviceId = await AsyncStorage.getItem('@device_id');
+    if (!deviceId) {
+      deviceId = `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await AsyncStorage.setItem('@device_id', deviceId);
+    }
+    return deviceId;
+  };
+
   const handleBarCodeScanned = async ({ type, data }) => {
     if (scanned || !scanning || isProcessing || !trip?.id) return;
 
@@ -159,7 +166,6 @@ export default function BoardingScreen({ route, navigation }) {
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
     try {
-      // Parse student ID from QR code
       let studentId = data;
       let scanData = { raw: data };
       
@@ -178,30 +184,44 @@ export default function BoardingScreen({ route, navigation }) {
           id: studentId,
           firstName: 'Offline Scan',
           lastName: '',
-          classLevel: 'Saved locally'
+          classLevel: 'Saved locally - will notify parent when online'
         });
         
         setTimeout(() => {
           setScanned(false);
           setStudent(null);
-        }, 2000);
+        }, 3000);
         
         return;
       }
 
       setIsProcessing(true);
       
-      // ✅ FIXED: Use the correct boardStudent method
-      const result = await api.trip.boardStudent(
-        trip.id,
-        studentId,
-        'qr'
-      );
+      let location = null;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const currentLocation = await Location.getCurrentPositionAsync({});
+          location = {
+            lat: currentLocation.coords.latitude,
+            lng: currentLocation.coords.longitude
+          };
+        }
+      } catch (locError) {
+        console.log('Location not available');
+      }
       
-      if (result.success || result.data?.success) {
+      const response = await api.post(`/driver/trips/${trip.id}/board/${studentId}`, {
+        method: 'qr',
+        timestamp: new Date().toISOString(),
+        location: location,
+        deviceId: await getDeviceId()
+      });
+      
+      if (response.data.success) {
         Alert.alert(
-          '✅ Success',
-          'Student boarded successfully',
+          'Success',
+          `Student boarded. Parent has been notified via SMS and push notification.`,
           [
             { 
               text: 'OK', 
@@ -213,8 +233,10 @@ export default function BoardingScreen({ route, navigation }) {
             }
           ]
         );
+        
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } else {
-        throw new Error(result.message || 'Failed to board student');
+        throw new Error(response.data.message || 'Failed to board student');
       }
       
     } catch (error) {
@@ -224,12 +246,12 @@ export default function BoardingScreen({ route, navigation }) {
         const studentId = data.replace('STU-', '').replace('STD-', '');
         await saveToOfflineQueue(studentId, { raw: data });
         Alert.alert(
-          '📱 Offline Mode',
+          'Offline Mode',
           'Network unavailable. Scan saved for later sync.',
           [{ text: 'OK', onPress: () => setScanned(false) }]
         );
       } else {
-        Alert.alert('❌ Error', error.message || 'Failed to record boarding');
+        Alert.alert('Error', error.message || 'Failed to record boarding');
         setScanned(false);
       }
     } finally {
@@ -240,7 +262,7 @@ export default function BoardingScreen({ route, navigation }) {
   const handleManualEntry = () => {
     Alert.prompt(
       'Manual Entry',
-      'Enter Student ID:',
+      'Enter Student ID or Admission Number:',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -250,19 +272,38 @@ export default function BoardingScreen({ route, navigation }) {
             
             try {
               setIsProcessing(true);
-              const result = await api.trip.boardStudent(
-                trip.id,
-                studentId,
-                'manual'
-              );
               
-              if (result.success || result.data?.success) {
-                Alert.alert('✅ Success', 'Student boarded successfully');
+              let location = null;
+              try {
+                const { status } = await Location.requestForegroundPermissionsAsync();
+                if (status === 'granted') {
+                  const currentLocation = await Location.getCurrentPositionAsync({});
+                  location = {
+                    lat: currentLocation.coords.latitude,
+                    lng: currentLocation.coords.longitude
+                  };
+                }
+              } catch (locError) {
+                console.log('Location not available');
+              }
+              
+              const response = await api.post(`/driver/trips/${trip.id}/board/${studentId}`, {
+                method: 'manual',
+                timestamp: new Date().toISOString(),
+                location: location,
+                deviceId: await getDeviceId()
+              });
+              
+              if (response.data.success) {
+                Alert.alert(
+                  'Success',
+                  'Student boarded. Parent has been notified via SMS and push notification.'
+                );
               } else {
-                Alert.alert('Error', result.message || 'Failed to board student');
+                Alert.alert('Error', response.data.message || 'Failed to board student');
               }
             } catch (error) {
-              Alert.alert('Error', 'Student not found or invalid ID');
+              Alert.alert('Error', error.response?.data?.message || 'Student not found or invalid ID');
             } finally {
               setIsProcessing(false);
             }
@@ -399,6 +440,9 @@ export default function BoardingScreen({ route, navigation }) {
               {student.firstName} {student.lastName}
             </Text>
             <Text style={styles.resultClass}>{student.classLevel}</Text>
+            {!student.id && (
+              <Text style={styles.offlineNote}>Saved offline - will notify parent when online</Text>
+            )}
           </View>
         </View>
       )}
@@ -648,5 +692,10 @@ const styles = StyleSheet.create({
   resultClass: { 
     fontSize: 14, 
     color: '#666' 
+  },
+  offlineNote: {
+    fontSize: 11,
+    color: '#FF9800',
+    marginTop: 4
   },
 });

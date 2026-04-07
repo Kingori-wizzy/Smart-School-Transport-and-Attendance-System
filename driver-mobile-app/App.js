@@ -12,16 +12,13 @@ import { ThemeProvider } from './src/context/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { COLORS } from './src/constants/config';
 
-
-// Add this right after your imports
+// Disable dev menu in development (optional)
 if (__DEV__) {
   try {
     const DevMenu = require('expo-dev-menu');
-    if (DevMenu) {
-      if (typeof DevMenu.setEnabled === 'function') {
-        DevMenu.setEnabled(false);
-        console.log('Dev menu disabled');
-      }
+    if (DevMenu && typeof DevMenu.setEnabled === 'function') {
+      DevMenu.setEnabled(false);
+      console.log('Dev menu disabled');
     }
   } catch (e) {
     console.log('Dev menu not found');
@@ -31,6 +28,7 @@ if (__DEV__) {
 // Keep splash screen visible
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
+// Configure notification handler
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -72,7 +70,7 @@ export default function App() {
 
   const setupNotificationListeners = () => {
     notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-      console.log('📨 Notification received:', notification);
+      console.log('Notification received:', notification);
     });
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
@@ -81,8 +79,8 @@ export default function App() {
   };
 
   const cleanupNotificationListeners = () => {
-    notificationListener.current?.remove();
-    responseListener.current?.remove();
+    if (notificationListener.current) notificationListener.current.remove();
+    if (responseListener.current) responseListener.current.remove();
   };
 
   const handleNotificationResponse = (response) => {

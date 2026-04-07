@@ -7,7 +7,6 @@ const userSchema = new mongoose.Schema({
   // BASIC INFO
   // ===============================
 
-  
   firstName: {
     type: String,
     required: true,
@@ -44,14 +43,14 @@ const userSchema = new mongoose.Schema({
   },
 
   deviceToken: {
-    type: String // for Firebase push notifications (legacy)
+    type: String
   },
 
   // ===============================
   // PUSH NOTIFICATIONS
   // ===============================
   pushToken: {
-    type: String,    // Expo push token for the user's device
+    type: String,
     default: null,
     index: true
   },
@@ -87,12 +86,12 @@ const userSchema = new mongoose.Schema({
   // ADDITIONAL FIELDS
   // ===============================
   profileImage: {
-    type: String,  // URL to profile picture
+    type: String,
     default: null
   },
 
   lastLogin: {
-    type: Date    // Track last login time
+    type: Date
   },
 
   // For parent-child relationship
@@ -103,10 +102,10 @@ const userSchema = new mongoose.Schema({
 
   // For driver specific info
   driverDetails: {
-    licenseNumber: String,
-    licenseExpiry: Date,
-    experience: Number,
-    emergencyContact: String
+    licenseNumber: { type: String },
+    licenseExpiry: { type: Date },
+    experience: { type: Number },
+    emergencyContact: { type: String }
   }
 
 }, { 
@@ -122,33 +121,39 @@ const userSchema = new mongoose.Schema({
   }
 });
 
-
-// 🔐 Password Hashing
+// Password Hashing - runs before saving
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
 
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
-  next();
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (error) {
+    next(error);
+  }
 });
 
-
-// 🔎 Compare Password
+// Compare Password method
 userSchema.methods.comparePassword = async function (password) {
-  return await bcrypt.compare(password, this.password);
+  try {
+    return await bcrypt.compare(password, this.password);
+  } catch (error) {
+    return false;
+  }
 };
 
-// 👤 Get full name
+// Get full name virtual
 userSchema.virtual('fullName').get(function() {
   return `${this.firstName} ${this.lastName}`;
 });
 
-// 📧 Find by email (static method)
+// Find by email static method
 userSchema.statics.findByEmail = function(email) {
   return this.findOne({ email });
 };
 
-// 🔍 Find users by push token (static method)
+// Find users by push token static method
 userSchema.statics.findByPushToken = function(token) {
   return this.findOne({ pushToken: token });
 };

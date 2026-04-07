@@ -18,7 +18,6 @@ export const TripProvider = ({ children }) => {
   
   const { isOnline, addToQueue, syncQueue, pendingCount } = useOffline();
 
-  // Load cached data on mount
   useEffect(() => {
     loadCachedData();
     
@@ -63,12 +62,14 @@ export const TripProvider = ({ children }) => {
       
       if (method === 'POST') {
         if (url.includes('/board/')) {
-          await api.post(url, data);
+          const response = await api.post(url, data);
+          console.log(`Synced boarding: ${item.id} - Parent notified`);
         } else if (url.includes('/alight/')) {
-          await api.post(url, data);
+          const response = await api.post(url, data);
+          console.log(`Synced alighting: ${item.id} - Parent notified`);
         }
       }
-      console.log(`✅ Synced attendance: ${item.id}`);
+      console.log(`Synced attendance: ${item.id}`);
     });
   };
 
@@ -78,7 +79,7 @@ export const TripProvider = ({ children }) => {
       if (method === 'POST') {
         await api.post(url, data);
       }
-      console.log(`✅ Synced incident: ${item.id}`);
+      console.log(`Synced incident: ${item.id}`);
     });
   };
 
@@ -88,7 +89,7 @@ export const TripProvider = ({ children }) => {
       if (method === 'POST') {
         await api.post(url, data);
       }
-      console.log(`✅ Synced trip update: ${item.id}`);
+      console.log(`Synced trip update: ${item.id}`);
     });
   };
 
@@ -137,7 +138,6 @@ export const TripProvider = ({ children }) => {
     }
   };
 
-  // FIXED: Correct API endpoint for fetching trip students
   const fetchTripStudents = async (tripId) => {
     try {
       if (!isOnline) {
@@ -148,7 +148,6 @@ export const TripProvider = ({ children }) => {
         return;
       }
 
-      // CORRECT ENDPOINT: /driver/trips/:tripId/students
       const response = await api.get(`/driver/trips/${tripId}/students`);
       
       if (response.data.success) {
@@ -156,7 +155,6 @@ export const TripProvider = ({ children }) => {
         setTripStudents(students);
         await AsyncStorage.setItem(`@trip_students_${tripId}`, JSON.stringify(students));
         
-        // Load scanned status from cache
         const scans = await AsyncStorage.getItem('@driver_scans');
         if (scans) {
           const scanMap = JSON.parse(scans);
@@ -166,6 +164,15 @@ export const TripProvider = ({ children }) => {
     } catch (error) {
       console.error('Error fetching trip students:', error);
     }
+  };
+
+  const getDeviceId = async () => {
+    let deviceId = await AsyncStorage.getItem('@device_id');
+    if (!deviceId) {
+      deviceId = `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      await AsyncStorage.setItem('@device_id', deviceId);
+    }
+    return deviceId;
   };
 
   const boardStudent = async (tripId, studentId, method = 'qr') => {
@@ -206,10 +213,26 @@ export const TripProvider = ({ children }) => {
           s._id === studentId ? { ...s, status: 'boarded', boarded: true } : s
         ));
         
-        return { success: true, offline: true, queued: true };
+        return { success: true, offline: true, queued: true, notificationSent: false };
       }
 
-      // CORRECT ENDPOINT: /driver/trips/:tripId/board/:studentId
+      // Get location if available
+      let location = null;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const currentLocation = await Location.getCurrentPositionAsync({});
+          location = {
+            lat: currentLocation.coords.latitude,
+            lng: currentLocation.coords.longitude
+          };
+          scanData.location = location;
+        }
+      } catch (locError) {
+        console.log('Location not available');
+      }
+
+      // This API call will trigger SMS and Push notification to parent
       const response = await api.post(`/driver/trips/${tripId}/board/${studentId}`, scanData);
       
       if (activeTrip && activeTrip._id === tripId) {
@@ -225,7 +248,8 @@ export const TripProvider = ({ children }) => {
         [key]: {
           scanned: true,
           type: 'boarding',
-          timestamp: new Date()
+          timestamp: new Date(),
+          notificationSent: true
         }
       };
       
@@ -239,7 +263,13 @@ export const TripProvider = ({ children }) => {
         s._id === studentId ? { ...s, status: 'boarded', boarded: true, boardedAt: new Date() } : s
       ));
       
-      return { success: true, data: response.data };
+      // Return success with notification flag
+      return { 
+        success: true, 
+        data: response.data,
+        notificationSent: true,
+        message: response.data.message || 'Parent notified via SMS and push'
+      };
     } catch (error) {
       console.error('Error boarding student:', error);
       return {
@@ -287,9 +317,26 @@ export const TripProvider = ({ children }) => {
           s._id === studentId ? { ...s, status: 'alighted', alighted: true } : s
         ));
         
-        return { success: true, offline: true, queued: true };
+        return { success: true, offline: true, queued: true, notificationSent: false };
       }
 
+      // Get location if available
+      let location = null;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const currentLocation = await Location.getCurrentPositionAsync({});
+          location = {
+            lat: currentLocation.coords.latitude,
+            lng: currentLocation.coords.longitude
+          };
+          scanData.location = location;
+        }
+      } catch (locError) {
+        console.log('Location not available');
+      }
+
+      // This API call will trigger SMS and Push notification to parent
       const response = await api.post(`/driver/trips/${tripId}/alight/${studentId}`, scanData);
       
       const key = `${tripId}_${studentId}`;
@@ -298,7 +345,8 @@ export const TripProvider = ({ children }) => {
         [key]: {
           scanned: true,
           type: 'alighting',
-          timestamp: new Date()
+          timestamp: new Date(),
+          notificationSent: true
         }
       };
       
@@ -312,7 +360,12 @@ export const TripProvider = ({ children }) => {
         s._id === studentId ? { ...s, status: 'alighted', alighted: true, alightedAt: new Date() } : s
       ));
       
-      return { success: true, data: response.data };
+      return { 
+        success: true, 
+        data: response.data,
+        notificationSent: true,
+        message: response.data.message || 'Parent notified via SMS and push'
+      };
     } catch (error) {
       console.error('Error alighting student:', error);
       return {
@@ -440,15 +493,6 @@ export const TripProvider = ({ children }) => {
     } catch (error) {
       console.error('Error updating location:', error);
     }
-  };
-
-  const getDeviceId = async () => {
-    let deviceId = await AsyncStorage.getItem('@device_id');
-    if (!deviceId) {
-      deviceId = `device_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      await AsyncStorage.setItem('@device_id', deviceId);
-    }
-    return deviceId;
   };
 
   const getStudentScanStatus = (tripId, studentId) => {

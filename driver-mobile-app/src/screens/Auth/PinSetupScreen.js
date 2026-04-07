@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../context/AuthContext';
+import api from '../../services/api';
 import { COLORS } from '../../utils/constants';
 import * as Haptics from 'expo-haptics';
 
@@ -72,13 +73,18 @@ export default function PinSetupScreen({ navigation }) {
     setLoading(true);
     try {
       // Save PIN to backend
-      await api.auth.setPin(pin);
-      setStep('success');
-      setTimeout(() => {
-        navigation.replace('MainTabs');
-      }, 2000);
+      const response = await api.post('/auth/set-pin', { pin });
+      if (response.data.success) {
+        setStep('success');
+        setTimeout(() => {
+          navigation.replace('MainTabs');
+        }, 2000);
+      } else {
+        throw new Error(response.data.message || 'Failed to save PIN');
+      }
     } catch (error) {
-      Alert.alert('Error', 'Failed to save PIN');
+      console.error('Error saving PIN:', error);
+      Alert.alert('Error', error.response?.data?.message || 'Failed to save PIN');
     } finally {
       setLoading(false);
     }
@@ -125,8 +131,8 @@ export default function PinSetupScreen({ navigation }) {
       <View style={styles.content}>
         {step === 'success' ? (
           <View style={styles.successContainer}>
-            <Text style={styles.successIcon}>✅</Text>
-            <Text style={styles.successTitle}>PIN Setup Complete!</Text>
+            <Text style={styles.successIcon}>✓</Text>
+            <Text style={styles.successTitle}>PIN Setup Complete</Text>
             <Text style={styles.successText}>You can now login with biometrics</Text>
           </View>
         ) : (
@@ -157,7 +163,7 @@ export default function PinSetupScreen({ navigation }) {
               </View>
               <View style={styles.keypadRow}>
                 <TouchableOpacity style={styles.keypadButton} onPress={() => {}}>
-                  <Text style={styles.keypadDigit}>⚪</Text>
+                  <Text style={styles.keypadDigit}>○</Text>
                 </TouchableOpacity>
                 <KeypadButton digit="0" letters="" />
                 <TouchableOpacity style={styles.keypadButton} onPress={handleDelete}>
@@ -192,26 +198,120 @@ export default function PinSetupScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  header: { paddingTop: 50, paddingBottom: 20, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
-  backIcon: { fontSize: 24, color: '#fff' },
-  headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  content: { flex: 1, padding: 20, justifyContent: 'center' },
-  instruction: { fontSize: 18, color: '#333', textAlign: 'center', marginBottom: 30 },
-  dotsContainer: { flexDirection: 'row', justifyContent: 'center', marginBottom: 40 },
-  dot: { width: 15, height: 15, borderRadius: 7.5, backgroundColor: '#e0e0e0', marginHorizontal: 8 },
-  dotFilled: { backgroundColor: COLORS.primary },
-  keypad: { marginBottom: 30 },
-  keypadRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 15 },
-  keypadButton: { width: 70, height: 70, borderRadius: 35, backgroundColor: '#f5f5f5', justifyContent: 'center', alignItems: 'center' },
-  keypadDigit: { fontSize: 24, fontWeight: 'bold', color: '#333' },
-  keypadLetters: { fontSize: 10, color: '#999', marginTop: 2 },
-  nextButton: { height: 50, borderRadius: 10, backgroundColor: '#ccc', justifyContent: 'center', alignItems: 'center', marginHorizontal: 20 },
-  nextButtonActive: { backgroundColor: COLORS.primary },
-  nextButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  successContainer: { alignItems: 'center' },
-  successIcon: { fontSize: 60, marginBottom: 20 },
-  successTitle: { fontSize: 24, fontWeight: 'bold', color: '#333', marginBottom: 10 },
-  successText: { fontSize: 14, color: '#666', textAlign: 'center' },
+  container: { 
+    flex: 1, 
+    backgroundColor: '#fff' 
+  },
+  header: { 
+    paddingTop: 50, 
+    paddingBottom: 20, 
+    paddingHorizontal: 20, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between' 
+  },
+  backButton: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 20, 
+    backgroundColor: 'rgba(255,255,255,0.3)', 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  backIcon: { 
+    fontSize: 24, 
+    color: '#fff' 
+  },
+  headerTitle: { 
+    fontSize: 20, 
+    fontWeight: 'bold', 
+    color: '#fff' 
+  },
+  content: { 
+    flex: 1, 
+    padding: 20, 
+    justifyContent: 'center' 
+  },
+  instruction: { 
+    fontSize: 18, 
+    color: '#333', 
+    textAlign: 'center', 
+    marginBottom: 30 
+  },
+  dotsContainer: { 
+    flexDirection: 'row', 
+    justifyContent: 'center', 
+    marginBottom: 40 
+  },
+  dot: { 
+    width: 15, 
+    height: 15, 
+    borderRadius: 7.5, 
+    backgroundColor: '#e0e0e0', 
+    marginHorizontal: 8 
+  },
+  dotFilled: { 
+    backgroundColor: COLORS.primary 
+  },
+  keypad: { 
+    marginBottom: 30 
+  },
+  keypadRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-around', 
+    marginBottom: 15 
+  },
+  keypadButton: { 
+    width: 70, 
+    height: 70, 
+    borderRadius: 35, 
+    backgroundColor: '#f5f5f5', 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
+  keypadDigit: { 
+    fontSize: 24, 
+    fontWeight: 'bold', 
+    color: '#333' 
+  },
+  keypadLetters: { 
+    fontSize: 10, 
+    color: '#999', 
+    marginTop: 2 
+  },
+  nextButton: { 
+    height: 50, 
+    borderRadius: 10, 
+    backgroundColor: '#ccc', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    marginHorizontal: 20 
+  },
+  nextButtonActive: { 
+    backgroundColor: COLORS.primary 
+  },
+  nextButtonText: { 
+    color: '#fff', 
+    fontSize: 16, 
+    fontWeight: '600' 
+  },
+  successContainer: { 
+    alignItems: 'center' 
+  },
+  successIcon: { 
+    fontSize: 60, 
+    marginBottom: 20,
+    color: '#4CAF50'
+  },
+  successTitle: { 
+    fontSize: 24, 
+    fontWeight: 'bold', 
+    color: '#333', 
+    marginBottom: 10 
+  },
+  successText: { 
+    fontSize: 14, 
+    color: '#666', 
+    textAlign: 'center' 
+  },
 });

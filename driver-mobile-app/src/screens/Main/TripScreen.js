@@ -51,6 +51,7 @@ export default function TripScreen({ route, navigation }) {
   const [sendingDelay, setSendingDelay] = useState(false);
   
   const locationWatcher = useRef(null);
+  let socketRef = useRef(null);
 
   useEffect(() => {
     if (!trip || !trip._id) {
@@ -60,13 +61,44 @@ export default function TripScreen({ route, navigation }) {
     }
     loadTripData();
     startLocationTracking();
+    setupSocketConnection();
 
     return () => {
       if (locationWatcher.current) {
         locationWatcher.current.remove();
       }
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
     };
   }, []);
+
+  const setupSocketConnection = () => {
+    try {
+      const { io } = require('socket.io-client');
+      socketRef.current = io('http://localhost:5000', {
+        transports: ['websocket'],
+        auth: { token: user?.token }
+      });
+      
+      socketRef.current.on('connect', () => {
+        console.log('Socket connected for trip');
+        socketRef.current.emit('join-trip', trip._id);
+      });
+      
+      socketRef.current.on(`student-boarded-${trip._id}`, (data) => {
+        console.log('Student boarded event:', data);
+        loadTripData(); // Refresh the list
+      });
+      
+      socketRef.current.on(`student-alighted-${trip._id}`, (data) => {
+        console.log('Student alighted event:', data);
+        loadTripData(); // Refresh the list
+      });
+    } catch (error) {
+      console.error('Socket setup error:', error);
+    }
+  };
 
   const loadTripData = async () => {
     try {
@@ -140,10 +172,11 @@ export default function TripScreen({ route, navigation }) {
     }
   };
 
+  // This will auto-send SMS and Push notification to parent
   const handleBoardStudent = async (student) => {
     Alert.alert(
-      'Board Student',
-      `Confirm ${student.firstName} ${student.lastName} has boarded?`,
+      'Confirm Boarding',
+      `Confirm ${student.firstName} ${student.lastName} has boarded? Parent will be notified automatically.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -165,7 +198,7 @@ export default function TripScreen({ route, navigation }) {
                 );
                 setStudents(updatedStudents);
                 calculateStats(updatedStudents);
-                Alert.alert('Success', `${student.firstName} boarded`);
+                Alert.alert('Success', `${student.firstName} boarded. Parent notified via SMS and push notification.`);
               } else {
                 Alert.alert('Error', response.data.message || 'Failed to record boarding');
               }
@@ -179,10 +212,11 @@ export default function TripScreen({ route, navigation }) {
     );
   };
 
+  // This will auto-send SMS and Push notification to parent
   const handleAlightStudent = async (student) => {
     Alert.alert(
-      'Alight Student',
-      `Confirm ${student.firstName} ${student.lastName} has alighted?`,
+      'Confirm Alighting',
+      `Confirm ${student.firstName} ${student.lastName} has alighted? Parent will be notified automatically.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -204,7 +238,7 @@ export default function TripScreen({ route, navigation }) {
                 );
                 setStudents(updatedStudents);
                 calculateStats(updatedStudents);
-                Alert.alert('Success', `${student.firstName} alighted`);
+                Alert.alert('Success', `${student.firstName} alighted. Parent notified via SMS and push notification.`);
               } else {
                 Alert.alert('Error', response.data.message || 'Failed to record alighting');
               }
@@ -285,8 +319,6 @@ export default function TripScreen({ route, navigation }) {
     navigation.navigate('Navigation', { tripId: trip._id });
   };
 
-  // ==================== MESSAGING FUNCTIONS ====================
-
   const handleOpenMessageModal = (student = null) => {
     setSelectedStudent(student);
     setMessageText('');
@@ -312,7 +344,6 @@ export default function TripScreen({ route, navigation }) {
       let payload;
 
       if (selectedStudent) {
-        // Send to specific parent
         endpoint = `/driver/message/parent/${selectedStudent._id}`;
         payload = {
           message: messageText,
@@ -320,7 +351,6 @@ export default function TripScreen({ route, navigation }) {
           tripId: trip._id
         };
       } else {
-        // Broadcast to all parents
         endpoint = `/driver/message/broadcast/${trip._id}`;
         payload = {
           message: messageText,
@@ -415,12 +445,12 @@ export default function TripScreen({ route, navigation }) {
           
           {status === 'boarded' ? (
             <View style={[styles.statusBadge, { backgroundColor: colors.success || '#4CAF50' }]}>
-              <Ionicons name="checkmark-circle" size={16} color="#fff" />
+              <Ionicons name="checkmark-circle" size={14} color="#fff" />
               <Text style={styles.statusBadgeText}>Boarded</Text>
             </View>
           ) : status === 'alighted' ? (
             <View style={[styles.statusBadge, { backgroundColor: colors.warning || '#FF9800' }]}>
-              <Ionicons name="flag" size={16} color="#fff" />
+              <Ionicons name="flag" size={14} color="#fff" />
               <Text style={styles.statusBadgeText}>Alighted</Text>
             </View>
           ) : (
@@ -429,7 +459,7 @@ export default function TripScreen({ route, navigation }) {
                 style={[styles.actionButton, { backgroundColor: colors.primary || '#2196F3' }]}
                 onPress={() => handleBoardStudent(student)}
               >
-                <Ionicons name="log-in-outline" size={16} color="#fff" />
+                <Ionicons name="log-in-outline" size={14} color="#fff" />
                 <Text style={styles.actionButtonText}>Board</Text>
               </TouchableOpacity>
               
@@ -437,7 +467,7 @@ export default function TripScreen({ route, navigation }) {
                 style={[styles.actionButton, { backgroundColor: colors.warning || '#FF9800' }]}
                 onPress={() => handleAlightStudent(student)}
               >
-                <Ionicons name="log-out-outline" size={16} color="#fff" />
+                <Ionicons name="log-out-outline" size={14} color="#fff" />
                 <Text style={styles.actionButtonText}>Alight</Text>
               </TouchableOpacity>
             </View>
@@ -550,7 +580,7 @@ export default function TripScreen({ route, navigation }) {
             style={[styles.mainActionButton, { backgroundColor: colors.primary || '#2196F3' }]}
             onPress={handleScanQR}
           >
-            <Ionicons name="qr-code-outline" size={24} color="#fff" />
+            <Ionicons name="qr-code-outline" size={20} color="#fff" />
             <Text style={styles.mainActionText}>Scan QR</Text>
           </TouchableOpacity>
 
@@ -558,7 +588,7 @@ export default function TripScreen({ route, navigation }) {
             style={[styles.mainActionButton, { backgroundColor: '#9C27B0' }]}
             onPress={() => handleOpenMessageModal()}
           >
-            <Ionicons name="chatbubble-outline" size={24} color="#fff" />
+            <Ionicons name="chatbubble-outline" size={20} color="#fff" />
             <Text style={styles.mainActionText}>Broadcast</Text>
           </TouchableOpacity>
 
@@ -566,7 +596,7 @@ export default function TripScreen({ route, navigation }) {
             style={[styles.mainActionButton, { backgroundColor: '#FF9800' }]}
             onPress={handleOpenDelayModal}
           >
-            <Ionicons name="time-outline" size={24} color="#fff" />
+            <Ionicons name="time-outline" size={20} color="#fff" />
             <Text style={styles.mainActionText}>Report Delay</Text>
           </TouchableOpacity>
 
@@ -575,7 +605,7 @@ export default function TripScreen({ route, navigation }) {
               style={[styles.mainActionButton, { backgroundColor: colors.success || '#4CAF50' }]}
               onPress={handleViewRoute}
             >
-              <Ionicons name="map-outline" size={24} color="#fff" />
+              <Ionicons name="map-outline" size={20} color="#fff" />
               <Text style={styles.mainActionText}>View Route</Text>
             </TouchableOpacity>
           )}
@@ -585,7 +615,7 @@ export default function TripScreen({ route, navigation }) {
               style={[styles.mainActionButton, { backgroundColor: colors.success || '#4CAF50' }]}
               onPress={handleStartTrip}
             >
-              <Ionicons name="play" size={24} color="#fff" />
+              <Ionicons name="play" size={20} color="#fff" />
               <Text style={styles.mainActionText}>Start Trip</Text>
             </TouchableOpacity>
           )}
@@ -595,7 +625,7 @@ export default function TripScreen({ route, navigation }) {
               style={[styles.mainActionButton, { backgroundColor: colors.danger || '#f44336' }]}
               onPress={handleEndTrip}
             >
-              <Ionicons name="stop" size={24} color="#fff" />
+              <Ionicons name="stop" size={20} color="#fff" />
               <Text style={styles.mainActionText}>End Trip</Text>
             </TouchableOpacity>
           )}
@@ -806,8 +836,8 @@ const styles = StyleSheet.create({
   statusChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   statusChipText: { color: '#fff', fontSize: 12, fontWeight: '600' },
   actionRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', marginHorizontal: 15, marginBottom: 15, gap: 10 },
-  mainActionButton: { paddingHorizontal: 16, paddingVertical: 12, borderRadius: 10, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, minWidth: 100 },
-  mainActionText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  mainActionButton: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6, minWidth: 90 },
+  mainActionText: { color: '#fff', fontSize: 12, fontWeight: '600' },
   studentsCard: { margin: 15, marginTop: 0, padding: 15, borderRadius: 10, elevation: 2 },
   studentsTitle: { fontSize: 16, fontWeight: '600', marginBottom: 15 },
   studentItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1 },
@@ -816,11 +846,11 @@ const styles = StyleSheet.create({
   studentDetails: { fontSize: 12, marginBottom: 2 },
   studentActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   messageButton: { width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  statusBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 15, gap: 4 },
-  statusBadgeText: { color: '#fff', fontSize: 11, fontWeight: '600' },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 15, gap: 3 },
+  statusBadgeText: { color: '#fff', fontSize: 10, fontWeight: '600' },
   actionButtons: { flexDirection: 'row', gap: 5 },
-  actionButton: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 15, gap: 4 },
-  actionButtonText: { color: '#fff', fontSize: 11, fontWeight: '600' },
+  actionButton: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 15, gap: 3 },
+  actionButtonText: { color: '#fff', fontSize: 10, fontWeight: '600' },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 30 },
   emptyText: { marginTop: 10, fontSize: 14, textAlign: 'center' },
   

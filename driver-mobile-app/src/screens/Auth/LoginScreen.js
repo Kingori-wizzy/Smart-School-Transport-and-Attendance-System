@@ -41,26 +41,35 @@ export default function LoginScreen({ navigation }) {
       return;
     }
 
-    console.log('📱 LoginScreen: Attempting login with email:', email);
+    console.log('LoginScreen: Attempting login with email:', email);
     setLoading(true);
     
     try {
       const result = await login(email, password);
-      console.log('📱 LoginScreen: Login result:', result);
+      console.log('LoginScreen: Login result:', result);
       
       if (result && result.success) {
-        console.log('📱 LoginScreen: Login successful, saving credentials...');
+        console.log('LoginScreen: Login successful, saving credentials...');
         if (biometricSupported) {
           await saveCredentials(email, password);
         }
-        // Navigation handled by AuthContext
       } else {
-        console.log('📱 LoginScreen: Login failed:', result?.message || 'Unknown error');
-        Alert.alert('Login Failed', result?.message || 'Invalid credentials');
+        console.log('LoginScreen: Login failed:', result?.message || 'Unknown error');
+        // Show specific error message from backend
+        Alert.alert('Login Failed', result?.message || 'Invalid email or password');
       }
     } catch (error) {
-      console.error('📱 LoginScreen: Unexpected error:', error);
-      Alert.alert('Error', 'An unexpected error occurred');
+      console.error('LoginScreen: Unexpected error:', error);
+      
+      // Extract specific error message from response
+      let errorMessage = 'An unexpected error occurred';
+      if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      Alert.alert('Login Failed', errorMessage);
     } finally {
       setLoading(false);
     }
@@ -70,7 +79,7 @@ export default function LoginScreen({ navigation }) {
     setLoading(true);
     try {
       const result = await loginWithBiometrics();
-      console.log('📱 LoginScreen: Biometric login result:', result);
+      console.log('LoginScreen: Biometric login result:', result);
       
       if (result.success) {
         Alert.alert('Success', 'Logged in with biometrics');
@@ -78,7 +87,7 @@ export default function LoginScreen({ navigation }) {
         Alert.alert('Biometric Failed', result.message);
       }
     } catch (error) {
-      console.error('📱 LoginScreen: Biometric error:', error);
+      console.error('LoginScreen: Biometric error:', error);
       Alert.alert('Error', 'Biometric login failed');
     } finally {
       setLoading(false);
@@ -125,7 +134,7 @@ export default function LoginScreen({ navigation }) {
               backgroundColor: colors.card,
               color: colors.text
             }]}
-            placeholder="••••••••"
+            placeholder="password"
             placeholderTextColor={colors.textSecondary}
             value={password}
             onChangeText={setPassword}
@@ -134,7 +143,6 @@ export default function LoginScreen({ navigation }) {
           />
         </View>
 
-        {/* Forgot Password Link - NEW */}
         <TouchableOpacity
           style={styles.forgotPassword}
           onPress={() => navigation.navigate('ForgotPassword')}
@@ -161,7 +169,7 @@ export default function LoginScreen({ navigation }) {
             disabled={loading}
           >
             <Text style={[styles.biometricText, { color: colors.primary }]}>
-              🔒 Login with Fingerprint
+              Login with Fingerprint
             </Text>
           </TouchableOpacity>
         )}
@@ -172,7 +180,13 @@ export default function LoginScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { height: 200, justifyContent: 'center', alignItems: 'center', borderBottomLeftRadius: 30, borderBottomRightRadius: 30 },
+  header: { 
+    height: 200, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    borderBottomLeftRadius: 30, 
+    borderBottomRightRadius: 30 
+  },
   appName: { fontSize: 24, fontWeight: 'bold', color: '#fff', marginBottom: 5 },
   tagline: { fontSize: 14, color: 'rgba(255,255,255,0.8)' },
   formContainer: { flex: 1, paddingHorizontal: 20, paddingTop: 30 },

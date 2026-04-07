@@ -20,8 +20,8 @@ export default function MessageModal({ visible, onClose, trip, student, onMessag
 
   const messageTypes = [
     { id: 'info', label: 'Information', icon: 'information-circle', color: '#2196F3' },
-    { id: 'delay', label: 'Delay', icon: 'time', color: '#FF9800' },
-    { id: 'emergency', label: 'Emergency', icon: 'alert-circle', color: '#f44336' },
+    { id: 'delay', label: 'Delay Update', icon: 'time', color: '#FF9800' },
+    { id: 'emergency', label: 'Emergency Alert', icon: 'alert-circle', color: '#f44336' },
     { id: 'reminder', label: 'Reminder', icon: 'notifications', color: '#4CAF50' },
   ];
 
@@ -37,11 +37,9 @@ export default function MessageModal({ visible, onClose, trip, student, onMessag
       let payload;
 
       if (student) {
-        // Send to specific parent
         endpoint = `/driver/message/parent/${student._id}`;
         payload = { message, type: messageType, tripId: trip._id };
       } else {
-        // Broadcast to all parents
         endpoint = `/driver/message/broadcast/${trip._id}`;
         payload = { message, type: messageType };
       }
@@ -51,8 +49,10 @@ export default function MessageModal({ visible, onClose, trip, student, onMessag
       if (response.data.success) {
         Alert.alert('Success', 'Message sent successfully');
         setMessage('');
-        onMessageSent && onMessageSent();
+        if (onMessageSent) onMessageSent();
         onClose();
+      } else {
+        Alert.alert('Error', response.data.message || 'Failed to send message');
       }
     } catch (error) {
       console.error('Error sending message:', error);
@@ -63,6 +63,11 @@ export default function MessageModal({ visible, onClose, trip, student, onMessag
   };
 
   const handleDelayReport = async () => {
+    if (!message.trim()) {
+      Alert.alert('Error', 'Please enter a reason for the delay');
+      return;
+    }
+
     setLoading(true);
     try {
       const response = await api.post(`/driver/trips/${trip._id}/delay`, {
@@ -71,12 +76,15 @@ export default function MessageModal({ visible, onClose, trip, student, onMessag
       });
       
       if (response.data.success) {
-        Alert.alert('Success', 'Delay reported to admin');
+        Alert.alert('Success', 'Delay reported to admin. Parents will be notified.');
         setMessage('');
         onClose();
+      } else {
+        Alert.alert('Error', response.data.message || 'Failed to report delay');
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to report delay');
+      console.error('Error reporting delay:', error);
+      Alert.alert('Error', error.response?.data?.message || 'Failed to report delay');
     } finally {
       setLoading(false);
     }
@@ -93,14 +101,14 @@ export default function MessageModal({ visible, onClose, trip, student, onMessag
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>
-              {student ? `Message Parent of ${student.firstName}` : 'Broadcast Message'}
+              {student ? `Message Parent of ${student.firstName} ${student.lastName}` : 'Broadcast Message'}
             </Text>
             <TouchableOpacity onPress={onClose} style={styles.closeButton}>
               <Ionicons name="close" size={24} color="#666" />
             </TouchableOpacity>
           </View>
 
-          <ScrollView>
+          <ScrollView showsVerticalScrollIndicator={false}>
             <Text style={styles.sectionTitle}>Message Type</Text>
             <View style={styles.typeContainer}>
               {messageTypes.map(type => (
@@ -114,7 +122,7 @@ export default function MessageModal({ visible, onClose, trip, student, onMessag
                 >
                   <Ionicons 
                     name={type.icon} 
-                    size={20} 
+                    size={18} 
                     color={messageType === type.id ? '#fff' : type.color} 
                   />
                   <Text style={[
@@ -133,6 +141,7 @@ export default function MessageModal({ visible, onClose, trip, student, onMessag
               multiline
               numberOfLines={4}
               placeholder="Type your message here..."
+              placeholderTextColor="#999"
               value={message}
               onChangeText={setMessage}
               textAlignVertical="top"
@@ -142,27 +151,34 @@ export default function MessageModal({ visible, onClose, trip, student, onMessag
               <TouchableOpacity
                 style={styles.delayButton}
                 onPress={handleDelayReport}
-              >
-                <Text style={styles.delayButtonText}>Report Delay</Text>
-              </TouchableOpacity>
-            )}
-
-            <View style={styles.buttonRow}>
-              <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.sendButton, loading && styles.disabledButton]}
-                onPress={handleSend}
                 disabled={loading}
               >
                 {loading ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={styles.sendButtonText}>Send Message</Text>
+                  <Text style={styles.delayButtonText}>Report Delay</Text>
                 )}
               </TouchableOpacity>
-            </View>
+            )}
+
+            {messageType !== 'delay' && (
+              <View style={styles.buttonRow}>
+                <TouchableOpacity style={styles.cancelButton} onPress={onClose}>
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.sendButton, loading && styles.disabledButton]}
+                  onPress={handleSend}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.sendButtonText}>Send Message</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
           </ScrollView>
         </View>
       </View>
@@ -237,6 +253,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     minHeight: 100,
     fontSize: 14,
+    color: '#333',
   },
   buttonRow: {
     flexDirection: 'row',
@@ -276,7 +293,8 @@ const styles = StyleSheet.create({
   delayButton: {
     marginHorizontal: 16,
     marginTop: 12,
-    paddingVertical: 10,
+    marginBottom: 16,
+    paddingVertical: 12,
     backgroundColor: '#FF9800',
     borderRadius: 8,
     alignItems: 'center',
@@ -284,5 +302,6 @@ const styles = StyleSheet.create({
   delayButtonText: {
     color: '#fff',
     fontWeight: '600',
+    fontSize: 14,
   },
 });

@@ -53,7 +53,6 @@ const QRScanScreen = ({ navigation, route }) => {
 
   useEffect(() => {
     (async () => {
-      // Request camera permission using the correct method
       const { status } = await Camera.requestCameraPermissionsAsync();
       setHasPermission(status === 'granted');
       
@@ -64,7 +63,6 @@ const QRScanScreen = ({ navigation, route }) => {
       checkNetworkStatus();
       loadScanHistory();
       
-      // Listen for network changes
       const unsubscribe = NetInfo.addEventListener(state => {
         setIsOnline(state.isConnected);
         if (state.isConnected && offlineQueue.length > 0) {
@@ -206,7 +204,6 @@ const QRScanScreen = ({ navigation, route }) => {
     Vibration.vibrate(100);
 
     try {
-      // Parse QR data
       let studentId = data;
       let qrData = {};
       
@@ -217,7 +214,6 @@ const QRScanScreen = ({ navigation, route }) => {
         // Not JSON, use raw data
       }
 
-      // Check if student is in this trip
       const student = tripStudents.find(s => 
         s._id === studentId || s.qrCode === data || s.admissionNumber === data
       );
@@ -226,13 +222,11 @@ const QRScanScreen = ({ navigation, route }) => {
         throw new Error('Student not found in this trip');
       }
 
-      // Check if already scanned in this mode
       const existingScan = getStudentScanStatus(tripId, student._id);
       if (existingScan && existingScan.type === scanMode) {
-        throw new Error(`Already recorded as ${scanMode}`);
+        throw new Error(`Already recorded as ${scanMode === 'boarding' ? 'boarded' : 'alighted'}`);
       }
 
-      // Get current location
       let location = null;
       if (currentLocation) {
         location = {
@@ -267,17 +261,14 @@ const QRScanScreen = ({ navigation, route }) => {
           success: true,
           student,
           type: scanMode,
-          offline: result.offline
+          offline: result.offline,
+          notificationSent: result.notificationSent !== false
         });
         setShowResult(true);
 
-        // Fetch student info for display
         await fetchStudentInfo(student._id);
-
-        // Update scan history
         loadScanHistory();
 
-        // Auto-hide result after 3 seconds
         scanTimeout.current = setTimeout(() => {
           setShowResult(false);
           setScanned(false);
@@ -316,8 +307,6 @@ const QRScanScreen = ({ navigation, route }) => {
           text: 'Submit',
           onPress: async (studentId) => {
             if (!studentId) return;
-            
-            // Simulate a scan with manual ID
             await handleBarCodeScanned({ 
               type: 'manual', 
               data: studentId 
@@ -506,13 +495,21 @@ const QRScanScreen = ({ navigation, route }) => {
             {scanResult?.success ? (
               <>
                 <Ionicons name="checkmark-circle" size={60} color="#4CAF50" />
-                <Text style={styles.modalTitle}>Success!</Text>
+                <Text style={styles.modalTitle}>Success</Text>
                 <Text style={styles.modalText}>
                   {scanResult.student?.firstName} {scanResult.student?.lastName}
                 </Text>
                 <Text style={styles.modalSubtext}>
                   {scanResult.type === 'boarding' ? 'Boarded' : 'Alighted'} successfully
                 </Text>
+                {scanResult.notificationSent !== false && (
+                  <View style={styles.notificationBadge}>
+                    <Ionicons name="notifications" size={14} color="#4CAF50" />
+                    <Text style={styles.notificationBadgeText}>
+                      Parent notified via SMS and push
+                    </Text>
+                  </View>
+                )}
                 {scanResult.offline && (
                   <View style={styles.offlineBadgeSmall}>
                     <Ionicons name="cloud-offline-outline" size={16} color="#ff9800" />
@@ -936,6 +933,21 @@ const styles = StyleSheet.create({
   modalSubtext: {
     fontSize: 14,
     color: '#666',
+  },
+  notificationBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#e8f5e9',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    marginTop: 10,
+    gap: 6,
+  },
+  notificationBadgeText: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: '500',
   },
   offlineBadgeSmall: {
     flexDirection: 'row',

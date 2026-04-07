@@ -4,10 +4,13 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
+import { Ionicons } from '@expo/vector-icons';
+import { COLORS } from '../constants/config';
 
 // Auth Screens
 import LoginScreen from '../screens/Auth/LoginScreen';
 import PinSetupScreen from '../screens/Auth/PinSetupScreen';
+import ForgotPasswordScreen from '../screens/Auth/ForgotPasswordScreen';
 
 // Main Screens
 import DashboardScreen from '../screens/Main/DashboardScreen';
@@ -33,7 +36,7 @@ const MainTabs = () => {
   return (
     <Tab.Navigator
       screenOptions={{
-        tabBarActiveTintColor: '#667eea',
+        tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: '#999',
         tabBarStyle: {
           height: 60,
@@ -46,14 +49,18 @@ const MainTabs = () => {
         name="Home"
         component={DashboardScreen}
         options={{
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 24 }}>🏠</Text>,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="home-outline" size={size} color={color} />
+          ),
         }}
       />
       <Tab.Screen
         name="Profile"
         component={ProfileScreen}
         options={{
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 24 }}>👤</Text>,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="person-outline" size={size} color={color} />
+          ),
         }}
       />
     </Tab.Navigator>
@@ -82,7 +89,7 @@ const AppNavigator = () => {
             ]
           );
         } else {
-          console.log('✅ Driver role verified:', driver.firstName);
+          console.log('Driver role verified:', driver.firstName);
         }
       }
     };
@@ -99,6 +106,7 @@ const AppNavigator = () => {
       {!driver ? (
         <>
           <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           <Stack.Screen name="PinSetup" component={PinSetupScreen} />
         </>
       ) : (
