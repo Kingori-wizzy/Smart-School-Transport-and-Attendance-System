@@ -23,6 +23,7 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
   });
   const [location, setLocation] = useState(null);
   const [qrInput, setQrInput] = useState('');
+  const [notificationSent, setNotificationSent] = useState(false);
   
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -52,7 +53,7 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
       if (currentTripId) {
         setSelectedTripId(currentTripId);
       } else {
-        const activeTrip = data?.find(t => t.status === 'active' || t.status === 'in-progress');
+        const activeTrip = data?.find(t => t.status === 'running' || t.status === 'scheduled');
         if (activeTrip) {
           setSelectedTripId(activeTrip._id);
         }
@@ -68,8 +69,8 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
       const statsData = await attendanceService.getTodayAttendance();
       setStats({
         todayTotal: statsData.total || 0,
-        boarded: statsData.present || 0,
-        alighted: 0
+        boarded: statsData.boarded || 0,
+        alighted: statsData.alighted || 0
       });
     } catch (error) {
       console.error('Error fetching stats:', error);
@@ -123,13 +124,71 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
     }
   }, []);
 
+  // NEW: Record attendance with parent notification
+  const recordAttendanceWithNotification = useCallback(async (studentData, type, tripId, locationData) => {
+    try {
+      let response;
+      
+      if (type === 'board') {
+        response = await fetch(`http://localhost:5000/api/trips/${tripId}/students/${studentData._id}/board`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            boardingTime: new Date(),
+            pickupPoint: studentData.pickupPoint || 'School',
+            location: locationData
+          })
+        });
+      } else {
+        response = await fetch(`http://localhost:5000/api/trips/${tripId}/students/${studentData._id}/alight`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            alightingTime: new Date(),
+            dropoffPoint: studentData.dropoffPoint || 'Home',
+            location: locationData
+          })
+        });
+      }
+
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to record attendance');
+      }
+
+      return result;
+    } catch (error) {
+      console.error('Error recording attendance:', error);
+      throw error;
+    }
+  }, []);
+
   const processStudentIdentifier = useCallback(async (identifier) => {
     if (!selectedTripId) {
       toast.error('Please select a trip first');
       return;
     }
 
+    const selectedTrip = trips.find(t => t._id === selectedTripId);
+    if (!selectedTrip) {
+      toast.error('Selected trip not found');
+      return;
+    }
+
+    if (selectedTrip.status !== 'running') {
+      toast.error('Trip must be running to record attendance. Please start the trip first.');
+      return;
+    }
+
     setLoading(true);
+    setNotificationSent(false);
     
     try {
       let studentData;
@@ -145,26 +204,30 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
       
       if (!studentData) {
         toast.error('Student not found');
+        setLoading(false);
         return;
       }
 
       setStudent(studentData);
       
-      let attendance;
-      if (eventType === 'board') {
-        attendance = await attendanceService.recordBoarding(selectedTripId, studentData._id, {
-          method: scanMode,
-          location: location
-        });
-      } else {
-        attendance = await attendanceService.recordAlighting(selectedTripId, studentData._id, {
-          method: scanMode,
-          location: location
-        });
-      }
+      const attendance = await recordAttendanceWithNotification(
+        studentData, 
+        eventType, 
+        selectedTripId, 
+        location
+      );
       
-      toast.success(`${studentData.firstName} ${studentData.lastName} ${eventType === 'board' ? 'boarded' : 'alighted'} successfully`);
+      const actionText = eventType === 'board' ? 'boarded' : 'alighted';
+      const notificationText = attendance.parentNotified 
+        ? `Parent notified via SMS` 
+        : `Parent notification ${attendance.smsSent ? 'sent' : 'failed'}`;
       
+      toast.success(
+        `${studentData.firstName} ${studentData.lastName} ${actionText} successfully. ${notificationText}`,
+        { duration: 5000 }
+      );
+      
+      setNotificationSent(attendance.parentNotified);
       setStudentIdentifier('');
       setStudent(null);
       setQrInput('');
@@ -181,7 +244,7 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
     } finally {
       setLoading(false);
     }
-  }, [selectedTripId, eventType, scanMode, location, fetchTodayStats, fetchRecentScans, onAttendanceRecorded]);
+  }, [selectedTripId, eventType, location, fetchTodayStats, fetchRecentScans, onAttendanceRecorded, trips, recordAttendanceWithNotification]);
 
   const handleManualSubmit = useCallback(async (e) => {
     e.preventDefault();
@@ -227,12 +290,28 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
         <div style={{ fontSize: '12px', color: '#666' }}>
           Class: {student.classLevel || 'N/A'} | ID: {student.admissionNumber || student._id}
         </div>
+        {student.parentPhone && (
+          <div style={{ fontSize: '11px', color: '#666', marginTop: '5px' }}>
+            Parent notified: {notificationSent ? 'Yes' : 'Pending'}
+          </div>
+        )}
       </div>
     );
   };
 
+  const getTripStatusColor = (status) => {
+    switch(status) {
+      case 'running': return '#4CAF50';
+      case 'scheduled': return '#FF9800';
+      case 'completed': return '#9C27B0';
+      case 'cancelled': return '#f44336';
+      default: return '#999';
+    }
+  };
+
   return (
     <div style={{ padding: '20px' }}>
+      {/* Mode Selection */}
       <div style={{
         display: 'flex',
         gap: '10px',
@@ -282,6 +361,7 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
         gap: '20px',
         marginBottom: '20px'
       }}>
+        {/* Left Panel - Scanner */}
         <div style={{
           background: 'white',
           padding: '20px',
@@ -293,6 +373,7 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
             {scanMode === 'manual' && 'Manual Entry'}
           </h3>
 
+          {/* Trip Selection */}
           <div style={{ marginBottom: '15px' }}>
             <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
               Select Trip *
@@ -311,12 +392,26 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
               <option value="">Choose a trip...</option>
               {trips.map(trip => (
                 <option key={trip._id} value={trip._id}>
-                  {trip.routeName} - {trip.status} ({trip.startTime ? format(new Date(trip.startTime), 'HH:mm') : 'N/A'})
+                  {trip.routeName} - {trip.status} 
+                  ({trip.scheduledStartTime ? format(new Date(trip.scheduledStartTime), 'HH:mm') : 'N/A'})
                 </option>
               ))}
             </select>
+            {selectedTripId && (
+              <div style={{ marginTop: '5px', fontSize: '12px' }}>
+                Trip status: 
+                <span style={{ 
+                  color: getTripStatusColor(trips.find(t => t._id === selectedTripId)?.status),
+                  fontWeight: 'bold',
+                  marginLeft: '5px'
+                }}>
+                  {trips.find(t => t._id === selectedTripId)?.status || 'Unknown'}
+                </span>
+              </div>
+            )}
           </div>
 
+          {/* Event Type */}
           <div style={{ marginBottom: '15px' }}>
             <label style={{ display: 'block', marginBottom: '5px', fontWeight: '500' }}>
               Event Type
@@ -335,7 +430,7 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
                   cursor: 'pointer'
                 }}
               >
-                Boarding
+                Boarding (Pickup)
               </button>
               <button
                 type="button"
@@ -350,11 +445,12 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
                   cursor: 'pointer'
                 }}
               >
-                Alighting
+                Alighting (Dropoff)
               </button>
             </div>
           </div>
 
+          {/* QR Scanner Mode */}
           {scanMode === 'qr' && (
             <div>
               <div style={{
@@ -386,7 +482,7 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
                     textAlign: 'center'
                   }}>
                     <div>
-                      <div style={{ fontSize: '48px', marginBottom: '10px' }}>Camera</div>
+                      <div style={{ fontSize: '48px', marginBottom: '10px' }}>📷</div>
                       <p>Camera is off</p>
                     </div>
                   </div>
@@ -463,6 +559,7 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
             </div>
           )}
 
+          {/* Manual Entry Mode */}
           {scanMode === 'manual' && (
             <form onSubmit={handleManualSubmit}>
               <div style={{ marginBottom: '15px' }}>
@@ -507,6 +604,7 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
           )}
         </div>
 
+        {/* Right Panel - Statistics */}
         <div style={{
           background: 'white',
           padding: '20px',
@@ -559,6 +657,7 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
             </div>
           </div>
 
+          {/* GPS Status */}
           <div style={{
             display: 'flex',
             alignItems: 'center',
@@ -577,6 +676,25 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
             )}
           </div>
 
+          {/* Notification Status */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px',
+            background: '#f5f5f5',
+            borderRadius: '4px',
+            marginBottom: '15px',
+            fontSize: '12px'
+          }}>
+            <span>SMS Notifications:</span>
+            <span style={{ color: '#4CAF50', fontWeight: 'bold' }}>Active</span>
+            <span style={{ fontSize: '10px', color: '#666' }}>
+              (Parents receive SMS on board/alight)
+            </span>
+          </div>
+
+          {/* Recent Scans */}
           <h4 style={{ margin: '20px 0 10px 0' }}>Recent Scans</h4>
           <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
             {recentScans.length === 0 ? (
@@ -594,7 +712,18 @@ export default function AttendanceScanner({ currentTripId, onAttendanceRecorded 
                 }}>
                   <span>
                     {scan.studentName || scan.studentId?.name || 'Unknown'} - 
-                    {scan.type === 'board' ? 'Boarded' : 'Alighted'}
+                    <span style={{ 
+                      color: scan.type === 'board' ? '#4CAF50' : '#FF9800',
+                      fontWeight: 'bold',
+                      marginLeft: '4px'
+                    }}>
+                      {scan.type === 'board' ? 'Boarded' : 'Alighted'}
+                    </span>
+                    {scan.parentNotified && (
+                      <span style={{ fontSize: '10px', color: '#666', marginLeft: '4px' }}>
+                        (SMS sent)
+                      </span>
+                    )}
                   </span>
                   <span style={{ color: '#666' }}>
                     {format(new Date(scan.time || scan.createdAt || new Date()), 'HH:mm:ss')}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -21,16 +21,23 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 const NotificationIcon = ({ type, priority }) => {
   const getIconName = () => {
     switch(type) {
+      case 'boarding_alert':
       case 'student_boarded':
       case 'boarding':
         return 'bus-outline';
+      case 'alighting_alert':
       case 'student_alighted':
+      case 'alighting':
       case 'attendance':
         return 'home-outline';
+      case 'trip_start':
       case 'trip_started':
         return 'play-outline';
+      case 'trip_complete':
       case 'trip_completed':
         return 'checkmark-circle-outline';
+      case 'trip_cancelled':
+        return 'close-circle-outline';
       case 'trip_delayed':
         return 'time-outline';
       case 'driver_message':
@@ -45,6 +52,8 @@ const NotificationIcon = ({ type, priority }) => {
         return 'speedometer-outline';
       case 'emergency':
         return 'warning-outline';
+      case 'admin_broadcast':
+        return 'megaphone-outline';
       case 'system':
         return 'settings-outline';
       default:
@@ -54,13 +63,15 @@ const NotificationIcon = ({ type, priority }) => {
 
   const getColor = () => {
     if (priority === 'high' || type === 'emergency') return '#f44336';
+    if (type === 'trip_cancelled') return '#f44336';
     if (type === 'trip_delayed') return '#FF9800';
-    if (type === 'trip_started') return '#4CAF50';
-    if (type === 'trip_completed') return '#4CAF50';
-    if (type === 'student_boarded') return '#4CAF50';
-    if (type === 'student_alighted') return '#2196F3';
+    if (type === 'trip_started' || type === 'trip_start') return '#4CAF50';
+    if (type === 'trip_completed' || type === 'trip_complete') return '#4CAF50';
+    if (type === 'boarding_alert' || type === 'student_boarded') return '#4CAF50';
+    if (type === 'alighting_alert' || type === 'student_alighted') return '#2196F3';
     if (type === 'driver_message') return '#9C27B0';
     if (type === 'delay_report') return '#FF9800';
+    if (type === 'admin_broadcast') return '#607D8B';
     return '#757575';
   };
 
@@ -89,12 +100,14 @@ const FilterTab = ({ label, active, onPress, count }) => (
   </TouchableOpacity>
 );
 
-const EmptyState = () => (
+const EmptyState = ({ filter }) => (
   <View style={styles.emptyContainer}>
     <Ionicons name="notifications-off-outline" size={60} color="#ccc" />
     <Text style={styles.emptyTitle}>No Notifications</Text>
     <Text style={styles.emptyText}>
-      You're all caught up! Check back later for updates about your children.
+      {filter !== 'all' 
+        ? `No ${filter} notifications found.` 
+        : "You're all caught up! Check back later for updates about your children."}
     </Text>
   </View>
 );
@@ -107,129 +120,190 @@ export default function NotificationsScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [filter, setFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
   const [stats, setStats] = useState({
     total: 0,
     unread: 0,
     highPriority: 0,
   });
 
-  useEffect(() => {
-    loadNotifications();
+  const loadNotifications = useCallback(async (pageNum = 1, append = false) => {
+    try {
+      if (pageNum === 1) setLoading(true);
+      
+      const response = await api.get(`/notifications?page=${pageNum}&limit=20`);
+      const data = response.data;
+      
+      if (data.success) {
+        const newNotifications = data.data || [];
+        const pagination = data.pagination || {};
+        
+        setNotifications(prev => append ? [...prev, ...newNotifications] : newNotifications);
+        setHasMore(pageNum < (pagination.pages || 1));
+        setPage(pageNum);
+        
+        if (pagination.unread !== undefined) {
+          setStats(prev => ({
+            ...prev,
+            unread: pagination.unread,
+            total: pagination.total || newNotifications.length,
+          }));
+        }
+      }
+    } catch (error) {
+      console.error('Error loading notifications:', error);
+      Alert.alert('Error', 'Failed to load notifications');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  const loadStats = useCallback(async () => {
+    try {
+      const response = await api.get('/notifications/unread/count');
+      if (response.data.success) {
+        setStats(prev => ({
+          ...prev,
+          unread: response.data.data?.unreadCount || 0,
+        }));
+      }
+    } catch (error) {
+      console.error('Error loading stats:', error);
+    }
   }, []);
 
   useEffect(() => {
+    loadNotifications();
+    loadStats();
+  }, [loadNotifications, loadStats]);
+
+  // Handle real-time socket alerts
+  useEffect(() => {
     if (alerts && alerts.length > 0) {
       const newAlerts = alerts.map(alert => ({
-        id: `alert-${Date.now()}-${Math.random()}`,
-        type: alert.type || 'alert',
+        _id: `alert-${Date.now()}-${Math.random()}`,
+        type: alert.type || 'general',
         title: getNotificationTitle(alert),
         message: alert.message || getNotificationMessage(alert),
-        timestamp: alert.timestamp || new Date(),
-        read: false,
-        priority: alert.type === 'emergency' || alert.type === 'speed' ? 'high' : 'normal',
-        data: alert.data,
-        childName: alert.childName,
-        childId: alert.childId,
-        busNumber: alert.busNumber,
+        createdAt: alert.timestamp || new Date().toISOString(),
+        isRead: false,
+        priority: alert.type === 'emergency' ? 'high' : 'normal',
+        metadata: alert.data || {},
+        studentId: alert.studentId ? { firstName: alert.childName, lastName: '' } : null,
+        tripId: alert.tripId ? { routeName: alert.busNumber ? `Bus ${alert.busNumber}` : 'School Bus' } : null,
+        smsSent: alert.smsSent || false,
       }));
       
       setNotifications(prev => {
         const merged = [...newAlerts, ...prev];
         const unique = merged.filter((item, index, self) =>
-          index === self.findIndex(t => t.id === item.id)
+          index === self.findIndex(t => t._id === item._id)
         );
-        return unique;
+        return unique.slice(0, 100);
       });
+      
+      loadStats();
     }
-  }, [alerts]);
-
-  useEffect(() => {
-    calculateStats();
-  }, [notifications]);
+  }, [alerts, loadStats]);
 
   const getNotificationTitle = (notification) => {
-    switch(notification.type) {
+    const type = notification.type;
+    const childName = notification.childName || notification.metadata?.studentName || 'Student';
+    
+    switch(type) {
+      case 'boarding_alert':
       case 'student_boarded':
-        return `${notification.childName || 'Student'} Boarded`;
+        return `${childName} Boarded`;
+      case 'alighting_alert':
       case 'student_alighted':
-        return `${notification.childName || 'Student'} Alighted`;
+        return `${childName} Alighted`;
+      case 'trip_start':
       case 'trip_started':
-        return `Trip Started`;
+        return 'Trip Started';
+      case 'trip_complete':
       case 'trip_completed':
-        return `Trip Completed`;
+        return 'Trip Completed';
+      case 'trip_cancelled':
+        return 'Trip Cancelled';
       case 'trip_delayed':
-        return `Trip Delayed`;
+        return 'Trip Delayed';
       case 'driver_message':
       case 'driver_broadcast':
-        return `Message from Driver`;
+        return 'Message from Driver';
       case 'delay_report':
-        return `Delay Report`;
+        return 'Delay Report';
       case 'emergency':
-        return `EMERGENCY ALERT`;
+        return 'EMERGENCY ALERT';
+      case 'admin_broadcast':
+        return 'Announcement';
       default:
         return notification.title || 'Notification';
     }
   };
 
   const getNotificationMessage = (notification) => {
-    switch(notification.type) {
+    const type = notification.type;
+    const childName = notification.childName || notification.metadata?.studentName || 'Student';
+    const busNumber = notification.busNumber || notification.metadata?.busNumber || 'Bus';
+    const time = notification.timestamp ? format(new Date(notification.timestamp), 'h:mm a') : '';
+    const location = notification.location || notification.metadata?.location || 'pickup point';
+    
+    switch(type) {
+      case 'boarding_alert':
       case 'student_boarded':
-        return `${notification.childName || 'Student'} has boarded the bus at ${format(new Date(notification.timestamp), 'hh:mm a')}`;
+        return `${childName} has boarded ${busNumber} at ${location} at ${time}.`;
+      case 'alighting_alert':
       case 'student_alighted':
-        return `${notification.childName || 'Student'} has alighted from the bus at ${format(new Date(notification.timestamp), 'hh:mm a')}`;
+        return `${childName} has alighted from ${busNumber} at ${location} at ${time}.`;
+      case 'trip_start':
       case 'trip_started':
-        return `The bus has started its journey. Students will be notified as they board.`;
+        return `The bus has started its journey. Your child is on the way to school.`;
+      case 'trip_complete':
       case 'trip_completed':
-        return `The bus trip has been completed. All students have arrived safely.`;
+        return `The bus trip has been completed. Your child has arrived safely.`;
+      case 'trip_cancelled':
+        return `The scheduled trip has been CANCELLED. Please make alternative arrangements.`;
       case 'trip_delayed':
-        return `${notification.data?.message || `The bus is delayed by approximately ${notification.data?.minutes || 'some'} minutes due to ${notification.data?.reason || 'unforeseen circumstances'}.`}`;
+        return `${notification.message || `The bus is delayed by approximately ${notification.metadata?.minutes || 'some'} minutes.`}`;
       case 'driver_message':
-      case 'driver_broadcast':
         return notification.message;
       case 'delay_report':
-        return `Delay reported: ${notification.data?.reason || 'Unknown reason'}. Estimated delay: ${notification.data?.estimatedDelayMinutes || 'some'} minutes.`;
+        return `Delay reported: ${notification.metadata?.reason || 'Unknown reason'}.`;
       case 'emergency':
         return `EMERGENCY SITUATION reported. Please check app for updates.`;
+      case 'admin_broadcast':
+        return notification.message;
       default:
         return notification.message;
     }
   };
 
-  const loadNotifications = async () => {
-    try {
-      setLoading(true);
-      const response = await api.get('/parent/notifications');
-      const data = response.data?.data || [];
-      setNotifications(data);
-    } catch (error) {
-      console.error('Error loading notifications:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const calculateStats = () => {
-    const unread = notifications.filter(n => !n.read).length;
-    const highPriority = notifications.filter(n => n.priority === 'high' || n.type === 'emergency').length;
-    setStats({
-      total: notifications.length,
-      unread,
-      highPriority,
-    });
-  };
-
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadNotifications();
-    setRefreshing(false);
+    await loadNotifications(1, false);
+    await loadStats();
+  };
+
+  const loadMore = () => {
+    if (hasMore && !loading) {
+      loadNotifications(page + 1, true);
+    }
   };
 
   const markAsRead = async (id) => {
     try {
-      await api.patch(`/parent/notifications/${id}/read`);
-      setNotifications(prev =>
-        prev.map(notif => notif._id === id || notif.id === id ? { ...notif, read: true } : notif)
-      );
+      const response = await api.put(`/notifications/${id}/read`);
+      if (response.data.success) {
+        setNotifications(prev =>
+          prev.map(notif => notif._id === id ? { ...notif, isRead: true } : notif)
+        );
+        setStats(prev => ({
+          ...prev,
+          unread: Math.max(0, prev.unread - 1),
+        }));
+      }
     } catch (error) {
       console.error('Error marking as read:', error);
     }
@@ -245,12 +319,16 @@ export default function NotificationsScreen({ navigation }) {
           text: 'Mark All',
           onPress: async () => {
             try {
-              await api.post('/parent/notifications/mark-all-read');
-              setNotifications(prev =>
-                prev.map(notif => ({ ...notif, read: true }))
-              );
+              const response = await api.put('/notifications/read-all');
+              if (response.data.success) {
+                setNotifications(prev =>
+                  prev.map(notif => ({ ...notif, isRead: true }))
+                );
+                setStats(prev => ({ ...prev, unread: 0 }));
+              }
             } catch (error) {
               console.error('Error marking all as read:', error);
+              Alert.alert('Error', 'Failed to mark all as read');
             }
           },
         },
@@ -269,10 +347,14 @@ export default function NotificationsScreen({ navigation }) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await api.delete(`/parent/notifications/${id}`);
-              setNotifications(prev => prev.filter(n => (n._id || n.id) !== id));
+              const response = await api.delete(`/notifications/${id}`);
+              if (response.data.success) {
+                setNotifications(prev => prev.filter(n => n._id !== id));
+                loadStats();
+              }
             } catch (error) {
               console.error('Error deleting notification:', error);
+              Alert.alert('Error', 'Failed to delete notification');
             }
           },
         },
@@ -291,10 +373,14 @@ export default function NotificationsScreen({ navigation }) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await api.delete('/parent/notifications/all');
-              setNotifications([]);
+              const response = await api.delete('/notifications/clear/all');
+              if (response.data.success) {
+                setNotifications([]);
+                setStats(prev => ({ ...prev, total: 0, unread: 0, highPriority: 0 }));
+              }
             } catch (error) {
               console.error('Error clearing notifications:', error);
+              Alert.alert('Error', 'Failed to clear notifications');
             }
           },
         },
@@ -302,37 +388,40 @@ export default function NotificationsScreen({ navigation }) {
     );
   };
 
-  const handleNotificationPress = (notification) => {
-    markAsRead(notification._id || notification.id);
+  const handleNotificationPress = async (notification) => {
+    if (!notification.isRead) {
+      await markAsRead(notification._id);
+    }
     
-    switch (notification.type) {
+    const type = notification.type;
+    const metadata = notification.metadata || {};
+    
+    switch (type) {
+      case 'boarding_alert':
+      case 'alighting_alert':
       case 'student_boarded':
       case 'student_alighted':
-      case 'attendance':
-        if (notification.childName || notification.data?.childId) {
-          navigation.navigate('Attendance', { 
-            child: { name: notification.childName, id: notification.data?.childId } 
+        if (notification.studentId || metadata.studentId) {
+          navigation.navigate('ChildTracking', { 
+            childId: notification.studentId?._id || metadata.studentId,
+            childName: metadata.studentName || 'Student'
           });
+        } else {
+          navigation.navigate('Tracking');
         }
         break;
+      case 'trip_start':
+      case 'trip_complete':
       case 'trip_started':
       case 'trip_completed':
-      case 'trip_delayed':
-        if (notification.busNumber) {
-          navigation.navigate('Tracking', { 
-            child: { busNumber: notification.busNumber, name: 'Bus' } 
-          });
-        }
+      case 'trip_cancelled':
+        navigation.navigate('Tracking');
         break;
       case 'driver_message':
-      case 'driver_broadcast':
-      case 'message':
         navigation.navigate('Messages');
         break;
       case 'emergency':
-        navigation.navigate('Emergency', { 
-          alert: notification 
-        });
+        navigation.navigate('Emergency', { alert: notification });
         break;
       default:
         break;
@@ -342,7 +431,7 @@ export default function NotificationsScreen({ navigation }) {
   const renderRightActions = (notification) => (
     <TouchableOpacity
       style={styles.deleteAction}
-      onPress={() => deleteNotification(notification._id || notification.id)}
+      onPress={() => deleteNotification(notification._id)}
     >
       <Ionicons name="trash-outline" size={24} color="#fff" />
     </TouchableOpacity>
@@ -351,14 +440,15 @@ export default function NotificationsScreen({ navigation }) {
   const filterNotifications = () => {
     switch (filter) {
       case 'unread':
-        return notifications.filter(n => !n.read);
+        return notifications.filter(n => !n.isRead);
       case 'alerts':
         return notifications.filter(n => 
-          ['geofence', 'speed', 'emergency', 'delay_report'].includes(n.type)
+          ['geofence', 'speed', 'emergency', 'delay_report', 'trip_cancelled'].includes(n.type)
         );
       case 'updates':
         return notifications.filter(n => 
-          ['student_boarded', 'student_alighted', 'trip_started', 'trip_completed', 'trip_delayed', 'driver_message'].includes(n.type)
+          ['boarding_alert', 'alighting_alert', 'student_boarded', 'student_alighted', 
+           'trip_start', 'trip_complete', 'trip_started', 'trip_completed', 'driver_message'].includes(n.type)
         );
       default:
         return notifications;
@@ -370,7 +460,7 @@ export default function NotificationsScreen({ navigation }) {
     const groups = {};
 
     filtered.forEach(notification => {
-      const date = new Date(notification.createdAt || notification.timestamp);
+      const date = new Date(notification.createdAt);
       let groupKey;
 
       if (isToday(date)) {
@@ -393,7 +483,7 @@ export default function NotificationsScreen({ navigation }) {
   const renderNotification = ({ item }) => (
     <Swipeable renderRightActions={() => renderRightActions(item)}>
       <TouchableOpacity
-        style={[styles.notificationItem, !item.read && styles.unreadItem]}
+        style={[styles.notificationItem, !item.isRead && styles.unreadItem]}
         onPress={() => handleNotificationPress(item)}
         activeOpacity={0.7}
       >
@@ -405,7 +495,7 @@ export default function NotificationsScreen({ navigation }) {
               {item.title || getNotificationTitle(item)}
             </Text>
             <Text style={styles.notificationTime}>
-              {format(new Date(item.createdAt || item.timestamp), 'HH:mm')}
+              {format(new Date(item.createdAt), 'HH:mm')}
             </Text>
           </View>
           
@@ -414,11 +504,16 @@ export default function NotificationsScreen({ navigation }) {
           </Text>
           
           <View style={styles.notificationFooter}>
-            {item.childName && (
-              <Text style={styles.childName}>Student: {item.childName}</Text>
+            {item.studentId && (
+              <Text style={styles.childName}>
+                Student: {item.studentId.firstName} {item.studentId.lastName}
+              </Text>
             )}
-            {item.busNumber && (
-              <Text style={styles.busNumber}>Bus: {item.busNumber}</Text>
+            {item.tripId?.routeName && (
+              <Text style={styles.busNumber}>Trip: {item.tripId.routeName}</Text>
+            )}
+            {item.smsSent && (
+              <Text style={styles.smsBadge}>SMS sent</Text>
             )}
             {item.priority === 'high' && (
               <View style={styles.priorityBadge}>
@@ -428,7 +523,7 @@ export default function NotificationsScreen({ navigation }) {
           </View>
         </View>
 
-        {!item.read && <View style={styles.unreadDot} />}
+        {!item.isRead && <View style={styles.unreadDot} />}
       </TouchableOpacity>
     </Swipeable>
   );
@@ -439,7 +534,12 @@ export default function NotificationsScreen({ navigation }) {
     data: groupedNotifications[date],
   }));
 
-  if (loading) {
+  // Calculate high priority count
+  const highPriorityCount = notifications.filter(n => 
+    n.priority === 'high' || n.type === 'emergency' || n.type === 'trip_cancelled'
+  ).length;
+
+  if (loading && notifications.length === 0) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={COLORS.primary} />
@@ -468,9 +568,11 @@ export default function NotificationsScreen({ navigation }) {
               <Ionicons name="checkmark-done-outline" size={20} color="#fff" />
             </TouchableOpacity>
           )}
-          <TouchableOpacity onPress={clearAll} style={styles.headerButton}>
-            <Ionicons name="trash-outline" size={20} color="#fff" />
-          </TouchableOpacity>
+          {notifications.length > 0 && (
+            <TouchableOpacity onPress={clearAll} style={styles.headerButton}>
+              <Ionicons name="trash-outline" size={20} color="#fff" />
+            </TouchableOpacity>
+          )}
         </View>
       </LinearGradient>
 
@@ -478,7 +580,7 @@ export default function NotificationsScreen({ navigation }) {
         <View style={styles.offlineBanner}>
           <Ionicons name="wifi-outline" size={16} color="#fff" />
           <Text style={styles.offlineText}>
-            You're offline. Notifications may be delayed.
+            Offline mode. Notifications may be delayed.
           </Text>
         </View>
       )}
@@ -488,7 +590,7 @@ export default function NotificationsScreen({ navigation }) {
           label="All"
           active={filter === 'all'}
           onPress={() => setFilter('all')}
-          count={stats.total}
+          count={notifications.length}
         />
         <FilterTab
           label="Unread"
@@ -500,19 +602,24 @@ export default function NotificationsScreen({ navigation }) {
           label="Alerts"
           active={filter === 'alerts'}
           onPress={() => setFilter('alerts')}
-          count={notifications.filter(n => ['geofence', 'speed', 'emergency', 'delay_report'].includes(n.type)).length}
+          count={notifications.filter(n => 
+            ['geofence', 'speed', 'emergency', 'delay_report', 'trip_cancelled'].includes(n.type)
+          ).length}
         />
         <FilterTab
           label="Updates"
           active={filter === 'updates'}
           onPress={() => setFilter('updates')}
-          count={notifications.filter(n => ['student_boarded', 'student_alighted', 'trip_started', 'trip_completed', 'trip_delayed', 'driver_message'].includes(n.type)).length}
+          count={notifications.filter(n => 
+            ['boarding_alert', 'alighting_alert', 'student_boarded', 'student_alighted', 
+             'trip_start', 'trip_complete', 'trip_started', 'trip_completed', 'driver_message'].includes(n.type)
+          ).length}
         />
       </View>
 
       <View style={styles.statsBar}>
         <View style={styles.statItem}>
-          <Text style={styles.statValue}>{stats.highPriority}</Text>
+          <Text style={styles.statValue}>{highPriorityCount}</Text>
           <Text style={styles.statLabel}>Urgent</Text>
         </View>
         <View style={styles.statDivider} />
@@ -522,7 +629,7 @@ export default function NotificationsScreen({ navigation }) {
         </View>
         <View style={styles.statDivider} />
         <View style={styles.statItem}>
-          <Text style={styles.statValue}>{stats.total}</Text>
+          <Text style={styles.statValue}>{notifications.length}</Text>
           <Text style={styles.statLabel}>Total</Text>
         </View>
       </View>
@@ -534,7 +641,7 @@ export default function NotificationsScreen({ navigation }) {
           <View>
             <Text style={styles.sectionHeader}>{item.title}</Text>
             {item.data.map(notification => (
-              <View key={notification._id || notification.id}>
+              <View key={notification._id}>
                 {renderNotification({ item: notification })}
               </View>
             ))}
@@ -543,7 +650,9 @@ export default function NotificationsScreen({ navigation }) {
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
-        ListEmptyComponent={<EmptyState />}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.3}
+        ListEmptyComponent={<EmptyState filter={filter} />}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       />
@@ -562,51 +671,161 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 10, fontSize: 16, color: '#666' },
-  header: { paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
+  header: { 
+    paddingTop: 50, 
+    paddingBottom: 15, 
+    paddingHorizontal: 20, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between' 
+  },
+  backButton: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 20, 
+    backgroundColor: 'rgba(255,255,255,0.3)', 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
   headerTitle: { flexDirection: 'row', alignItems: 'center' },
   headerText: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginRight: 8 },
-  headerBadge: { backgroundColor: '#f44336', borderRadius: 12, minWidth: 24, height: 24, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6 },
+  headerBadge: { 
+    backgroundColor: '#f44336', 
+    borderRadius: 12, 
+    minWidth: 24, 
+    height: 24, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    paddingHorizontal: 6 
+  },
   headerBadgeText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
   headerActions: { flexDirection: 'row' },
-  headerButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
-  offlineBanner: { backgroundColor: '#f44336', padding: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  headerButton: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 20, 
+    backgroundColor: 'rgba(255,255,255,0.3)', 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    marginLeft: 8 
+  },
+  offlineBanner: { 
+    backgroundColor: '#f44336', 
+    padding: 10, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center' 
+  },
   offlineText: { color: '#fff', fontSize: 12, fontWeight: '500', marginLeft: 8 },
-  filterContainer: { flexDirection: 'row', backgroundColor: '#fff', paddingVertical: 10, paddingHorizontal: 15, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
-  filterTab: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 20, marginRight: 8 },
+  filterContainer: { 
+    flexDirection: 'row', 
+    backgroundColor: '#fff', 
+    paddingVertical: 10, 
+    paddingHorizontal: 15, 
+    borderBottomWidth: 1, 
+    borderBottomColor: '#f0f0f0' 
+  },
+  filterTab: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    paddingVertical: 6, 
+    paddingHorizontal: 12, 
+    borderRadius: 20, 
+    marginRight: 8 
+  },
   activeFilterTab: { backgroundColor: COLORS.primary },
   filterText: { fontSize: 13, color: '#666', marginRight: 4 },
   activeFilterText: { color: '#fff' },
-  filterBadge: { backgroundColor: '#e0e0e0', borderRadius: 10, minWidth: 18, height: 18, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
+  filterBadge: { 
+    backgroundColor: '#e0e0e0', 
+    borderRadius: 10, 
+    minWidth: 18, 
+    height: 18, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    paddingHorizontal: 4 
+  },
   activeFilterBadge: { backgroundColor: 'rgba(255,255,255,0.3)' },
   filterBadgeText: { fontSize: 10, color: '#666' },
   activeFilterBadgeText: { color: '#fff' },
-  statsBar: { flexDirection: 'row', backgroundColor: '#fff', paddingVertical: 12, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  statsBar: { 
+    flexDirection: 'row', 
+    backgroundColor: '#fff', 
+    paddingVertical: 12, 
+    paddingHorizontal: 20, 
+    borderBottomWidth: 1, 
+    borderBottomColor: '#f0f0f0' 
+  },
   statItem: { flex: 1, alignItems: 'center' },
   statValue: { fontSize: 18, fontWeight: 'bold', color: COLORS.primary },
   statLabel: { fontSize: 11, color: '#999', marginTop: 2 },
   statDivider: { width: 1, height: '100%', backgroundColor: '#f0f0f0' },
   listContent: { paddingBottom: 80 },
-  sectionHeader: { fontSize: 14, fontWeight: '600', color: '#666', backgroundColor: '#f5f5f5', paddingHorizontal: 15, paddingVertical: 8 },
-  notificationItem: { flexDirection: 'row', backgroundColor: '#fff', padding: 15, borderBottomWidth: 1, borderBottomColor: '#f0f0f0', position: 'relative' },
+  sectionHeader: { 
+    fontSize: 14, 
+    fontWeight: '600', 
+    color: '#666', 
+    backgroundColor: '#f5f5f5', 
+    paddingHorizontal: 15, 
+    paddingVertical: 8 
+  },
+  notificationItem: { 
+    flexDirection: 'row', 
+    backgroundColor: '#fff', 
+    padding: 15, 
+    borderBottomWidth: 1, 
+    borderBottomColor: '#f0f0f0', 
+    position: 'relative' 
+  },
   unreadItem: { backgroundColor: '#f0f7ff' },
-  notificationIcon: { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  notificationIcon: { 
+    width: 48, 
+    height: 48, 
+    borderRadius: 24, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    marginRight: 12 
+  },
   notificationContent: { flex: 1 },
-  notificationHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  notificationHeader: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 4 
+  },
   notificationTitle: { fontSize: 15, fontWeight: '600', color: '#333', flex: 1, marginRight: 8 },
   notificationTime: { fontSize: 11, color: '#999' },
   notificationMessage: { fontSize: 13, color: '#666', marginBottom: 6, lineHeight: 18 },
-  notificationFooter: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
-  childName: { fontSize: 11, color: COLORS.primary, marginRight: 10 },
-  busNumber: { fontSize: 11, color: '#FF9800', marginRight: 10 },
+  notificationFooter: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  childName: { fontSize: 11, color: COLORS.primary },
+  busNumber: { fontSize: 11, color: '#FF9800' },
+  smsBadge: { fontSize: 10, color: '#4CAF50', fontWeight: '500' },
   priorityBadge: { backgroundColor: '#f44336', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   priorityText: { color: '#fff', fontSize: 8, fontWeight: 'bold' },
-  unreadDot: { position: 'absolute', top: 20, right: 15, width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.primary },
+  unreadDot: { 
+    position: 'absolute', 
+    top: 20, 
+    right: 15, 
+    width: 8, 
+    height: 8, 
+    borderRadius: 4, 
+    backgroundColor: COLORS.primary 
+  },
   deleteAction: { backgroundColor: '#f44336', justifyContent: 'center', alignItems: 'center', width: 70 },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60, paddingHorizontal: 30 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 8 },
   emptyText: { fontSize: 14, color: '#666', textAlign: 'center', lineHeight: 20 },
-  realtimeIndicator: { position: 'absolute', bottom: 20, right: 20, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.7)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  realtimeIndicator: { 
+    position: 'absolute', 
+    bottom: 20, 
+    right: 20, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    backgroundColor: 'rgba(0,0,0,0.7)', 
+    paddingHorizontal: 12, 
+    paddingVertical: 6, 
+    borderRadius: 20 
+  },
   realtimeDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#4CAF50', marginRight: 6 },
   realtimeText: { color: '#fff', fontSize: 12, fontWeight: '500' },
 });

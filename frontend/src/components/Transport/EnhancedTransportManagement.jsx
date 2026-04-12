@@ -263,6 +263,7 @@ export default function EnhancedTransportManagement() {
         routeId: trip.routeId,
         bus: trip.vehicleId || 'Unknown Bus',
         busNumber: trip.vehicleId,
+        busId: trip.busId || trip.vehicleId,
         driver: typeof trip.driverId === 'object' ? trip.driverId?.name || 'Unknown Driver' : 'Unknown Driver',
         driverId: typeof trip.driverId === 'object' ? trip.driverId?._id : trip.driverId,
         startTime: trip.scheduledStartTime ? format(new Date(trip.scheduledStartTime), 'HH:mm') : '--:--',
@@ -295,13 +296,13 @@ export default function EnhancedTransportManagement() {
 
   const assignStudentToTrip = async (studentId, tripId, tripType) => {
     try {
-      const response = await fetch(`http://localhost:5000/api/students/${studentId}/assign-trip`, {
+      const response = await fetch(`http://localhost:5000/api/trips/${tripId}/assign-student`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ tripId, tripType })
+        body: JSON.stringify({ studentId, tripType })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Failed to assign student');
@@ -314,9 +315,13 @@ export default function EnhancedTransportManagement() {
 
   const removeStudentFromTrip = async (studentId, tripId) => {
     try {
-      const response = await fetch(`http://localhost:5000/api/students/${studentId}/remove-trip/${tripId}`, {
+      const response = await fetch(`http://localhost:5000/api/trips/${tripId}/remove-student`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        headers: { 
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ studentId })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Failed to remove student');
@@ -508,7 +513,9 @@ export default function EnhancedTransportManagement() {
         
         const tripData = {
           routeName: selectedRoute?.routeName || '',
+          routeId: formData.routeId,
           vehicleId: selectedBus?.busNumber || '',
+          busId: formData.busId || null,
           driverId: formData.driverId,
           tripType: formData.tripType || 'morning',
           scheduledStartTime: new Date(`${formData.tripDate}T${formData.startTime}:00`).toISOString(),
@@ -611,7 +618,7 @@ export default function EnhancedTransportManagement() {
       setFormData({
         ...formData,
         routeId: item.routeId || item.route?._id || '',
-        busId: item.busNumber ? buses.find(b => b.busNumber === item.busNumber)?._id : '',
+        busId: item.busId || (item.busNumber ? buses.find(b => b.busNumber === item.busNumber)?._id : ''),
         driverId: item.driverId || item.driver?._id || '',
         startTime: item.startTime || '',
         endTime: item.endTime || '',
@@ -810,7 +817,7 @@ export default function EnhancedTransportManagement() {
       const data = await response.json();
       const studentsData = data.data || [];
       const available = studentsData.filter(s => 
-        !s.busId && !s.transportDetails?.busId && s.usesTransport !== false
+        (!s.busId && !s.transportDetails?.busId) || s.usesTransport === false
       );
       setAvailableStudents(available);
       setSelectedStudents([]);
@@ -836,43 +843,44 @@ export default function EnhancedTransportManagement() {
     }
 
     setAssignLoading(true);
+    let successCount = 0;
+    let failCount = 0;
+
     try {
       for (const studentId of selectedStudents) {
-        const student = availableStudents.find(s => s._id === studentId);
-        
-        const updateData = {
-          busId: selectedBusForAssignment._id,
-          transportDetails: {
-            ...student.transportDetails,
-            busId: selectedBusForAssignment._id,
-            status: 'active',
-            pickupPoint: {
-              name: student.pickupPoint || 'School Gate',
-              coordinates: { lat: 0, lng: 0 }
+        try {
+          const response = await fetch(`http://localhost:5000/api/students/${studentId}/assign-bus`, {
+            method: 'PUT',
+            headers: {
+              'Authorization': `Bearer ${localStorage.getItem('token')}`,
+              'Content-Type': 'application/json'
             },
-            dropoffPoint: {
-              name: student.dropoffPoint || 'Home',
-              coordinates: { lat: 0, lng: 0 }
-            }
-          },
-          usesTransport: true
-        };
+            body: JSON.stringify({
+              busId: selectedBusForAssignment._id,
+              busNumber: selectedBusForAssignment.busNumber,
+              pickupPoint: availableStudents.find(s => s._id === studentId)?.pickupPoint || 'School Gate',
+              dropoffPoint: availableStudents.find(s => s._id === studentId)?.dropoffPoint || 'Home'
+            })
+          });
 
-        const response = await fetch(`http://localhost:5000/api/students/${studentId}`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(updateData)
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to assign student ${student.firstName} ${student.lastName}`);
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || 'Failed to assign student');
+          }
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to assign student ${studentId}:`, error);
+          failCount++;
         }
       }
 
-      toast.success(`Successfully assigned ${selectedStudents.length} student(s) to bus ${selectedBusForAssignment.busNumber}`);
+      if (successCount > 0) {
+        toast.success(`Successfully assigned ${successCount} student(s) to bus ${selectedBusForAssignment.busNumber}`);
+      }
+      if (failCount > 0) {
+        toast.error(`Failed to assign ${failCount} student(s)`);
+      }
+      
       setShowAssignModal(false);
       setSelectedBusForAssignment(null);
       setSelectedStudents([]);
@@ -1202,7 +1210,7 @@ export default function EnhancedTransportManagement() {
                             fontSize: '12px'
                           }}
                         >
-                          {bus.status === 'active' ? 'Off' : 'On'}
+                          {bus.status === 'active' ? 'Deactivate' : 'Activate'}
                         </button>
                       </div>
                     </td>
@@ -1256,7 +1264,7 @@ export default function EnhancedTransportManagement() {
                         {buses.find(b => b._id === driver.assignedBus)?.busNumber || 'Unknown'}
                       </span>
                     ) : 'Not assigned'}
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>
                     <span style={{
                       background: getStatusColor(driver.status),
@@ -1267,15 +1275,15 @@ export default function EnhancedTransportManagement() {
                     }}>
                       {driver.status}
                     </span>
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>
                     <span style={{ color: '#FFC107' }}>
-                      {'⭐'.repeat(Math.floor(driver.rating))}
+                      {'★'.repeat(Math.floor(driver.rating))}
                     </span>
                     <span style={{ marginLeft: '5px', fontSize: '12px' }}>
                       {driver.rating}
                     </span>
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>
                     <div style={{ display: 'flex', gap: '5px' }}>
                       <button
@@ -1304,14 +1312,14 @@ export default function EnhancedTransportManagement() {
                           fontSize: '12px'
                         }}
                       >
-                        {driver.status === 'active' ? 'Off' : 'On'}
+                        {driver.status === 'active' ? 'Deactivate' : 'Activate'}
                       </button>
                     </div>
-                  </td>
-                </tr>
+                    </td>
+                  </tr>
               ))}
             </tbody>
-          </table>
+           </table>
         )}
 
         {/* Routes Tab */}
@@ -1327,18 +1335,18 @@ export default function EnhancedTransportManagement() {
                 <th style={{ padding: '15px', textAlign: 'left' }}>Stops</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Status</th>
                 <th style={{ padding: '15px', textAlign: 'left' }}>Actions</th>
-              </tr>
+               </tr>
             </thead>
             <tbody>
               {routes.map(route => (
                 <tr key={route.id} style={{ borderBottom: '1px solid #eee' }}>
                   <td style={{ padding: '15px', fontWeight: 'bold' }}>
                     {route.routeName}
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>{route.description}</td>
                   <td style={{ padding: '15px' }}>
                     {route.startPoint} - {route.endPoint}
-                  </td>
+                   </td>
                   <td style={{ padding: '15px' }}>{route.distance} km</td>
                   <td style={{ padding: '15px' }}>{route.duration} min</td>
                   <td style={{ padding: '15px' }}>{route.stops} stops</td>
@@ -1352,7 +1360,7 @@ export default function EnhancedTransportManagement() {
                     }}>
                       {route.status}
                     </span>
-                   </td>
+                    </td>
                   <td style={{ padding: '15px' }}>
                     <div style={{ display: 'flex', gap: '5px' }}>
                       <button
@@ -1398,11 +1406,11 @@ export default function EnhancedTransportManagement() {
                         Delete
                       </button>
                     </div>
-                   </td>
-                 </tr>
+                    </td>
+                  </tr>
               ))}
             </tbody>
-          </table>
+           </table>
         )}
 
         {/* Trips Tab */}
@@ -1424,16 +1432,16 @@ export default function EnhancedTransportManagement() {
                 <tr key={trip.id} style={{ borderBottom: '1px solid #eee' }}>
                   <td style={{ padding: '15px', fontWeight: 'bold' }}>
                     {trip.tripName}
-                   </td>
+                    </td>
                   <td style={{ padding: '15px' }}>{trip.route}</td>
                   <td style={{ padding: '15px' }}>
                     <div>{trip.bus}</div>
                     <div style={{ fontSize: '12px', color: '#666' }}>{trip.driver}</div>
-                   </td>
+                    </td>
                   <td style={{ padding: '15px' }}>
                     <div>{trip.startTime} - {trip.endTime}</div>
                     <div style={{ fontSize: '11px', color: '#666' }}>{trip.tripDate}</div>
-                   </td>
+                    </td>
                   <td style={{ padding: '15px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                       <span style={{
@@ -1467,7 +1475,7 @@ export default function EnhancedTransportManagement() {
                         </button>
                       )}
                     </div>
-                   </td>
+                    </td>
                   <td style={{ padding: '15px' }}>
                     <span style={{
                       background: getStatusColor(trip.status),
@@ -1478,7 +1486,7 @@ export default function EnhancedTransportManagement() {
                     }}>
                       {trip.status}
                     </span>
-                   </td>
+                    </td>
                   <td style={{ padding: '15px' }}>
                     <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
                       {trip.status === 'scheduled' && (
@@ -1557,11 +1565,11 @@ export default function EnhancedTransportManagement() {
                         Delete
                       </button>
                     </div>
-                   </td>
-                 </tr>
+                    </td>
+                  </tr>
               ))}
             </tbody>
-          </table>
+           </table>
         )}
 
         {/* Assignments Tab */}
@@ -1586,12 +1594,12 @@ export default function EnhancedTransportManagement() {
                     <td style={{ padding: '15px' }}>
                       <div style={{ fontWeight: 'bold' }}>{student.name}</div>
                       <div style={{ fontSize: '12px', color: '#666' }}>{student.admissionNumber}</div>
-                     </td>
+                      </td>
                     <td style={{ padding: '15px' }}>{student.classLevel}</td>
                     <td style={{ padding: '15px' }}>
                       <div>{student.parentName}</div>
                       <div style={{ fontSize: '12px', color: '#666' }}>{student.parentPhone}</div>
-                     </td>
+                      </td>
                     <td style={{ padding: '15px' }}>
                       <span style={{
                         background: '#2196F3',
@@ -1602,7 +1610,7 @@ export default function EnhancedTransportManagement() {
                       }}>
                         {bus?.busNumber || 'Unknown'}
                       </span>
-                     </td>
+                      </td>
                     <td style={{ padding: '15px' }}>{student.pickupPoint || 'N/A'}</td>
                     <td style={{ padding: '15px' }}>{student.dropoffPoint || 'N/A'}</td>
                     <td style={{ padding: '15px' }}>
@@ -1620,12 +1628,12 @@ export default function EnhancedTransportManagement() {
                       >
                         Reassign
                       </button>
-                     </td>
-                   </tr>
+                      </td>
+                    </tr>
                 );
               })}
             </tbody>
-          </table>
+           </table>
         )}
       </div>
 
@@ -1965,7 +1973,6 @@ export default function EnhancedTransportManagement() {
                       <th style={{ padding: '12px', textAlign: 'left' }}>Student Name</th>
                       <th style={{ padding: '12px', textAlign: 'left' }}>Admission No.</th>
                       <th style={{ padding: '12px', textAlign: 'left' }}>Class</th>
-                      <th style={{ padding: '12px', textAlign: 'left' }}>Pickup Point</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1988,26 +1995,6 @@ export default function EnhancedTransportManagement() {
                         </td>
                         <td style={{ padding: '12px' }}>
                           {student.classLevel}
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <input
-                            type="text"
-                            placeholder="Pickup point"
-                            value={student.pickupPoint || ''}
-                            onChange={(e) => {
-                              const updated = [...availableStudents];
-                              const index = updated.findIndex(s => s._id === student._id);
-                              updated[index].pickupPoint = e.target.value;
-                              setAvailableStudents(updated);
-                            }}
-                            style={{
-                              width: '120px',
-                              padding: '6px',
-                              border: '1px solid #ddd',
-                              borderRadius: '4px',
-                              fontSize: '12px'
-                            }}
-                          />
                         </td>
                       </tr>
                     ))}
@@ -2224,7 +2211,7 @@ export default function EnhancedTransportManagement() {
                           </td>
                           <td style={{ padding: '12px' }}>
                             {student.transportDetails?.busId?.busNumber || student.busId?.busNumber || 'Not assigned'}
-                          </td>
+                                                    </td>
                         </tr>
                       ))}
                     </tbody>

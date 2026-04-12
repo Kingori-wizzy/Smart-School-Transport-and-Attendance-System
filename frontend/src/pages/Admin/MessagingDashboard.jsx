@@ -25,7 +25,18 @@ import {
   DialogActions,
   LinearProgress,
   Snackbar,
-  Avatar
+  Avatar,
+  Tab,
+  Tabs,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  IconButton,
+  Tooltip
 } from '@mui/material';
 import {
   Send as SendIcon,
@@ -35,41 +46,65 @@ import {
   Schedule as ScheduleIcon,
   CheckCircle as CheckCircleIcon,
   Error as ErrorIcon,
-  Close as CloseIcon
+  Close as CloseIcon,
+  Delete as DeleteIcon,
+  Visibility as VisibilityIcon,
+  Message as MessageIcon
 } from '@mui/icons-material';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 
-// API Service
+// API Service with better error handling
 const messagingAPI = {
   getRecipients: async (role) => {
     const token = localStorage.getItem('token');
-    const response = await fetch(`http://localhost:5000/api/messaging/recipients?role=${role}`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    return response.json();
+    try {
+      const response = await fetch(`http://localhost:5000/api/messaging/recipients?role=${role}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to fetch recipients');
+      return data;
+    } catch (error) {
+      console.error(`Error fetching ${role}s:`, error);
+      return { success: false, data: [] };
+    }
   },
   
   sendMessage: async (data) => {
     const token = localStorage.getItem('token');
-    const response = await fetch('http://localhost:5000/api/messaging/send', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(data)
-    });
-    return response.json();
+    try {
+      const response = await fetch('http://localhost:5000/api/messaging/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Failed to send messages');
+      return result;
+    } catch (error) {
+      console.error('Error sending message:', error);
+      throw error;
+    }
   },
   
-  getMessageHistory: async (params) => {
+  getMessageHistory: async (params = {}) => {
     const token = localStorage.getItem('token');
     const query = new URLSearchParams(params).toString();
-    const response = await fetch(`http://localhost:5000/api/messaging/history?${query}`, {
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
-    return response.json();
+    try {
+      const response = await fetch(`http://localhost:5000/api/messaging/history?${query}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to fetch history');
+      return data;
+    } catch (error) {
+      console.error('Error fetching message history:', error);
+      return { success: false, data: [] };
+    }
   }
 };
 
@@ -83,18 +118,16 @@ export default function MessagingDashboard() {
   const [tabValue, setTabValue] = useState(0);
   const [loading, setLoading] = useState(false);
   const [recipients, setRecipients] = useState({ drivers: [], parents: [] });
-  const [selectedRecipients, setSelectedRecipients] = useState({
-    drivers: [],
-    parents: []
-  });
-  const [selectAll, setSelectAll] = useState({ drivers: false, parents: false });
+  const [selectedDrivers, setSelectedDrivers] = useState([]);
+  const [selectedParents, setSelectedParents] = useState([]);
+  const [selectAllDrivers, setSelectAllDrivers] = useState(false);
+  const [selectAllParents, setSelectAllParents] = useState(false);
   const [message, setMessage] = useState('');
-  const [messageType, setMessageType] = useState('sms');
+  const [messageType, setMessageType] = useState('both'); // 'sms', 'email', 'both'
   const [sending, setSending] = useState(false);
   const [messageHistory, setMessageHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
-  const [previewMessage, setPreviewMessage] = useState('');
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
 
   useEffect(() => {
@@ -110,8 +143,12 @@ export default function MessagingDashboard() {
         messagingAPI.getRecipients('parent')
       ]);
       
-      if (driversRes.success) setRecipients(prev => ({ ...prev, drivers: driversRes.data || [] }));
-      if (parentsRes.success) setRecipients(prev => ({ ...prev, parents: parentsRes.data || [] }));
+      if (driversRes.success) {
+        setRecipients(prev => ({ ...prev, drivers: driversRes.data || [] }));
+      }
+      if (parentsRes.success) {
+        setRecipients(prev => ({ ...prev, parents: parentsRes.data || [] }));
+      }
     } catch (error) {
       console.error('Error fetching recipients:', error);
       toast.error('Failed to load recipients');
@@ -134,50 +171,48 @@ export default function MessagingDashboard() {
     }
   };
 
+  // Driver selection handlers
   const handleSelectAllDrivers = (checked) => {
-    setSelectAll(prev => ({ ...prev, drivers: checked }));
+    setSelectAllDrivers(checked);
     if (checked) {
-      setSelectedRecipients(prev => ({
-        ...prev,
-        drivers: recipients.drivers.map(d => d._id)
-      }));
+      setSelectedDrivers(recipients.drivers.map(d => d.id || d._id));
     } else {
-      setSelectedRecipients(prev => ({ ...prev, drivers: [] }));
-    }
-  };
-
-  const handleSelectAllParents = (checked) => {
-    setSelectAll(prev => ({ ...prev, parents: checked }));
-    if (checked) {
-      setSelectedRecipients(prev => ({
-        ...prev,
-        parents: recipients.parents.map(p => p._id)
-      }));
-    } else {
-      setSelectedRecipients(prev => ({ ...prev, parents: [] }));
+      setSelectedDrivers([]);
     }
   };
 
   const handleSelectDriver = (driverId) => {
-    setSelectedRecipients(prev => ({
-      ...prev,
-      drivers: prev.drivers.includes(driverId)
-        ? prev.drivers.filter(id => id !== driverId)
-        : [...prev.drivers, driverId]
-    }));
+    setSelectedDrivers(prev => {
+      const newSelected = prev.includes(driverId)
+        ? prev.filter(id => id !== driverId)
+        : [...prev, driverId];
+      setSelectAllDrivers(newSelected.length === recipients.drivers.length && recipients.drivers.length > 0);
+      return newSelected;
+    });
+  };
+
+  // Parent selection handlers
+  const handleSelectAllParents = (checked) => {
+    setSelectAllParents(checked);
+    if (checked) {
+      setSelectedParents(recipients.parents.map(p => p.id || p._id));
+    } else {
+      setSelectedParents([]);
+    }
   };
 
   const handleSelectParent = (parentId) => {
-    setSelectedRecipients(prev => ({
-      ...prev,
-      parents: prev.parents.includes(parentId)
-        ? prev.parents.filter(id => id !== parentId)
-        : [...prev.parents, parentId]
-    }));
+    setSelectedParents(prev => {
+      const newSelected = prev.includes(parentId)
+        ? prev.filter(id => id !== parentId)
+        : [...prev, parentId];
+      setSelectAllParents(newSelected.length === recipients.parents.length && recipients.parents.length > 0);
+      return newSelected;
+    });
   };
 
   const getSelectedCount = () => {
-    return selectedRecipients.drivers.length + selectedRecipients.parents.length;
+    return selectedDrivers.length + selectedParents.length;
   };
 
   const handleOpenSendDialog = () => {
@@ -191,27 +226,15 @@ export default function MessagingDashboard() {
     }
     
     const recipientList = [
-      ...selectedRecipients.drivers.map(id => {
-        const driver = recipients.drivers.find(d => d._id === id);
-        return `Driver: ${driver?.firstName} ${driver?.lastName} (${driver?.phone || driver?.email})`;
+      ...selectedDrivers.map(id => {
+        const driver = recipients.drivers.find(d => (d.id || d._id) === id);
+        return `Driver: ${driver?.firstName} ${driver?.lastName}`;
       }),
-      ...selectedRecipients.parents.map(id => {
-        const parent = recipients.parents.find(p => p._id === id);
-        return `Parent: ${parent?.firstName} ${parent?.lastName} (${parent?.phone || parent?.email})`;
+      ...selectedParents.map(id => {
+        const parent = recipients.parents.find(p => (p.id || p._id) === id);
+        return `Parent: ${parent?.firstName} ${parent?.lastName}`;
       })
     ];
-    
-    setPreviewMessage(`
-      Message Preview
-      
-      Recipients: ${recipientList.length} people
-      Type: ${messageType.toUpperCase()}
-      
-      Message:
-      ${message}
-      
-      ${messageType === 'sms' ? 'SMS charges may apply' : 'Email notifications will be sent'}
-    `);
     
     setSendDialogOpen(true);
   };
@@ -221,34 +244,29 @@ export default function MessagingDashboard() {
     try {
       const response = await messagingAPI.sendMessage({
         recipients: {
-          drivers: selectedRecipients.drivers,
-          parents: selectedRecipients.parents
+          drivers: selectedDrivers,
+          parents: selectedParents
         },
-        message: message,
+        message: message.trim(),
         type: messageType
       });
       
       if (response.success) {
-        setSnackbar({
-          open: true,
-          message: `Message sent to ${response.summary?.successful || getSelectedCount()} recipients`,
-          severity: 'success'
-        });
+        const successCount = response.summary?.smsSent + response.summary?.emailSent || getSelectedCount();
+        toast.success(`Message sent to ${successCount} recipient(s)`);
         setSendDialogOpen(false);
         setMessage('');
-        setSelectedRecipients({ drivers: [], parents: [] });
-        setSelectAll({ drivers: false, parents: false });
+        setSelectedDrivers([]);
+        setSelectedParents([]);
+        setSelectAllDrivers(false);
+        setSelectAllParents(false);
         fetchMessageHistory();
       } else {
         throw new Error(response.message || 'Failed to send messages');
       }
     } catch (error) {
       console.error('Error sending messages:', error);
-      setSnackbar({
-        open: true,
-        message: error.message || 'Failed to send messages',
-        severity: 'error'
-      });
+      toast.error(error.message || 'Failed to send messages');
     } finally {
       setSending(false);
     }
@@ -268,6 +286,7 @@ export default function MessagingDashboard() {
       {/* Header */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <MessageIcon fontSize="large" color="primary" />
           Messaging Center
         </Typography>
         <Button
@@ -285,7 +304,7 @@ export default function MessagingDashboard() {
       {/* Stats Cards */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
         <Grid item xs={12} sm={6} md={3}>
-          <Card>
+          <Card sx={{ bgcolor: '#e3f2fd' }}>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>Total Drivers</Typography>
               <Typography variant="h4">{recipients.drivers.length}</Typography>
@@ -296,7 +315,7 @@ export default function MessagingDashboard() {
           </Card>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <Card>
+          <Card sx={{ bgcolor: '#e8f5e9' }}>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>Total Parents</Typography>
               <Typography variant="h4">{recipients.parents.length}</Typography>
@@ -307,18 +326,18 @@ export default function MessagingDashboard() {
           </Card>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ bgcolor: '#e3f2fd' }}>
+          <Card sx={{ bgcolor: '#fff3e0' }}>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>Selected Recipients</Typography>
               <Typography variant="h4">{getSelectedCount()}</Typography>
               <Typography variant="body2">
-                Drivers: {selectedRecipients.drivers.length} | Parents: {selectedRecipients.parents.length}
+                Drivers: {selectedDrivers.length} | Parents: {selectedParents.length}
               </Typography>
             </CardContent>
           </Card>
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <Card sx={{ bgcolor: '#e8f5e9' }}>
+          <Card sx={{ bgcolor: '#fce4ec' }}>
             <CardContent>
               <Typography color="textSecondary" gutterBottom>Message Type</Typography>
               <FormControl fullWidth size="small">
@@ -327,7 +346,7 @@ export default function MessagingDashboard() {
                   onChange={(e) => setMessageType(e.target.value)}
                   sx={{ mt: 1 }}
                 >
-                  <MenuItem value="sms">SMS Only</MenuItem>
+                  <MenuItem value="sms">SMS Only (TextBee)</MenuItem>
                   <MenuItem value="email">Email Only</MenuItem>
                   <MenuItem value="both">SMS + Email</MenuItem>
                 </Select>
@@ -337,24 +356,12 @@ export default function MessagingDashboard() {
         </Grid>
       </Grid>
 
-      {/* Main Tabs */}
+      {/* Tabs */}
       <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
-        <Box sx={{ display: 'flex', gap: 2 }}>
-          <Button
-            onClick={() => setTabValue(0)}
-            variant={tabValue === 0 ? 'contained' : 'text'}
-            startIcon={<GroupIcon />}
-          >
-            Select Recipients
-          </Button>
-          <Button
-            onClick={() => setTabValue(1)}
-            variant={tabValue === 1 ? 'contained' : 'text'}
-            startIcon={<ScheduleIcon />}
-          >
-            Message History
-          </Button>
-        </Box>
+        <Tabs value={tabValue} onChange={(e, v) => setTabValue(v)}>
+          <Tab label="Select Recipients" icon={<GroupIcon />} iconPosition="start" />
+          <Tab label="Message History" icon={<ScheduleIcon />} iconPosition="start" />
+        </Tabs>
       </Box>
 
       {/* Tab 1: Select Recipients */}
@@ -371,7 +378,7 @@ export default function MessagingDashboard() {
                   <FormControlLabel
                     control={
                       <Checkbox
-                        checked={selectAll.drivers}
+                        checked={selectAllDrivers}
                         onChange={(e) => handleSelectAllDrivers(e.target.checked)}
                       />
                     }
@@ -389,7 +396,7 @@ export default function MessagingDashboard() {
                   <Box sx={{ maxHeight: 400, overflow: 'auto' }}>
                     {recipients.drivers.map((driver) => (
                       <Box
-                        key={driver._id}
+                        key={driver.id || driver._id}
                         sx={{
                           display: 'flex',
                           alignItems: 'center',
@@ -412,8 +419,8 @@ export default function MessagingDashboard() {
                           </Box>
                         </Box>
                         <Checkbox
-                          checked={selectedRecipients.drivers.includes(driver._id)}
-                          onChange={() => handleSelectDriver(driver._id)}
+                          checked={selectedDrivers.includes(driver.id || driver._id)}
+                          onChange={() => handleSelectDriver(driver.id || driver._id)}
                         />
                       </Box>
                     ))}
@@ -434,7 +441,7 @@ export default function MessagingDashboard() {
                   <FormControlLabel
                     control={
                       <Checkbox
-                        checked={selectAll.parents}
+                        checked={selectAllParents}
                         onChange={(e) => handleSelectAllParents(e.target.checked)}
                       />
                     }
@@ -452,7 +459,7 @@ export default function MessagingDashboard() {
                   <Box sx={{ maxHeight: 400, overflow: 'auto' }}>
                     {recipients.parents.map((parent) => (
                       <Box
-                        key={parent._id}
+                        key={parent.id || parent._id}
                         sx={{
                           display: 'flex',
                           alignItems: 'center',
@@ -475,8 +482,8 @@ export default function MessagingDashboard() {
                           </Box>
                         </Box>
                         <Checkbox
-                          checked={selectedRecipients.parents.includes(parent._id)}
-                          onChange={() => handleSelectParent(parent._id)}
+                          checked={selectedParents.includes(parent.id || parent._id)}
+                          onChange={() => handleSelectParent(parent.id || parent._id)}
                         />
                       </Box>
                     ))}
@@ -501,7 +508,12 @@ export default function MessagingDashboard() {
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
                   sx={{ mb: 2 }}
-                  helperText={`${message.length}/160 characters ${messageType === 'sms' ? '(SMS limit)' : ''}`}
+                  helperText={
+                    messageType === 'sms' 
+                      ? `${message.length}/160 characters (SMS limit)`
+                      : `${message.length} characters`
+                  }
+                  error={messageType === 'sms' && message.length > 160}
                 />
                 <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2 }}>
                   <Button
@@ -510,7 +522,7 @@ export default function MessagingDashboard() {
                     size="large"
                     startIcon={<SendIcon />}
                     onClick={handleOpenSendDialog}
-                    disabled={getSelectedCount() === 0 || !message.trim()}
+                    disabled={getSelectedCount() === 0 || !message.trim() || (messageType === 'sms' && message.length > 160)}
                   >
                     Send to {getSelectedCount()} Recipient{getSelectedCount() !== 1 ? 's' : ''}
                   </Button>
@@ -535,51 +547,67 @@ export default function MessagingDashboard() {
                 No messages sent yet
               </Typography>
             ) : (
-              <Box sx={{ overflow: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid #ddd' }}>
-                      <th style={{ padding: '12px', textAlign: 'left' }}>Date</th>
-                      <th style={{ padding: '12px', textAlign: 'left' }}>Type</th>
-                      <th style={{ padding: '12px', textAlign: 'left' }}>Message</th>
-                      <th style={{ padding: '12px', textAlign: 'left' }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Date</TableCell>
+                      <TableCell>Type</TableCell>
+                      <TableCell>Message</TableCell>
+                      <TableCell>Recipient</TableCell>
+                      <TableCell>Status</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
                     {messageHistory.map((msg) => (
-                      <tr key={msg._id} style={{ borderBottom: '1px solid #eee' }}>
-                        <td style={{ padding: '12px' }}>
-                          {format(new Date(msg.createdAt), 'MMM dd, HH:mm')}
-                        </td>
-                        <td style={{ padding: '12px' }}>
+                      <TableRow key={msg.id || msg._id} hover>
+                        <TableCell>
+                          {msg.createdAt ? format(new Date(msg.createdAt), 'MMM dd, HH:mm') : 'N/A'}
+                        </TableCell>
+                        <TableCell>
                           <Chip
-                            label={msg.type?.toUpperCase()}
+                            label={msg.type?.toUpperCase() || 'ADMIN'}
                             size="small"
-                            color={msg.type === 'sms' ? 'primary' : msg.type === 'email' ? 'secondary' : 'default'}
+                            color="primary"
+                            variant="outlined"
                           />
-                        </td>
-                        <td style={{ padding: '12px' }}>
-                          <Typography variant="body2" sx={{ maxWidth: 300 }}>
-                            {msg.message?.substring(0, 80)}...
-                          </Typography>
-                        </td>
-                        <td style={{ padding: '12px' }}>
+                        </TableCell>
+                        <TableCell>
+                          <Tooltip title={msg.message}>
+                            <Typography variant="body2" sx={{ maxWidth: 250 }}>
+                              {msg.message?.length > 60 ? msg.message.substring(0, 60) + '...' : msg.message}
+                            </Typography>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell>
+                          {msg.recipient ? (
+                            <Box>
+                              <Typography variant="body2">{msg.recipient.name}</Typography>
+                              <Typography variant="caption" color="textSecondary">
+                                {msg.recipient.email}
+                              </Typography>
+                            </Box>
+                          ) : (
+                            <Typography variant="caption" color="textSecondary">Broadcast</Typography>
+                          )}
+                        </TableCell>
+                        <TableCell>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            {msg.deliveryStatus?.success ? (
+                            {msg.smsSent !== false ? (
                               <CheckCircleIcon color="success" fontSize="small" />
                             ) : (
                               <ErrorIcon color="error" fontSize="small" />
                             )}
                             <Typography variant="caption">
-                              {msg.deliveryStatus?.success ? 'Delivered' : 'Failed'}
+                              {msg.smsSent !== false ? 'Sent' : 'Pending'}
                             </Typography>
                           </Box>
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
-              </Box>
+                  </TableBody>
+                </Table>
+              </TableContainer>
             )}
           </CardContent>
         </Card>
@@ -591,13 +619,36 @@ export default function MessagingDashboard() {
         <DialogContent>
           <Alert severity="info" sx={{ mb: 2 }}>
             <AlertTitle>Message Preview</AlertTitle>
-            <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', margin: 0 }}>
-              {previewMessage}
-            </pre>
+            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+              {message}
+            </Typography>
           </Alert>
           <Typography variant="body2" color="textSecondary">
-            This action cannot be undone. Messages will be sent immediately.
+            Sending to {getSelectedCount()} recipient(s):
           </Typography>
+          <Box sx={{ mt: 1, maxHeight: 200, overflow: 'auto' }}>
+            {selectedDrivers.map(id => {
+              const driver = recipients.drivers.find(d => (d.id || d._id) === id);
+              return driver && (
+                <Typography key={id} variant="caption" display="block">
+                  • Driver: {driver.firstName} {driver.lastName}
+                </Typography>
+              );
+            })}
+            {selectedParents.map(id => {
+              const parent = recipients.parents.find(p => (p.id || p._id) === id);
+              return parent && (
+                <Typography key={id} variant="caption" display="block">
+                  • Parent: {parent.firstName} {parent.lastName}
+                </Typography>
+              );
+            })}
+          </Box>
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            {messageType === 'sms' && 'SMS charges may apply.'}
+            {messageType === 'email' && 'Email notifications will be sent.'}
+            {messageType === 'both' && 'Both SMS and email notifications will be sent.'}
+          </Alert>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setSendDialogOpen(false)}>Cancel</Button>

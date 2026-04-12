@@ -76,7 +76,7 @@ export default function TripScreen({ route, navigation }) {
   const setupSocketConnection = () => {
     try {
       const { io } = require('socket.io-client');
-      socketRef.current = io('http://localhost:5000', {
+      socketRef.current = io('http://192.168.100.3:5000', {
         transports: ['websocket'],
         auth: { token: user?.token }
       });
@@ -88,12 +88,12 @@ export default function TripScreen({ route, navigation }) {
       
       socketRef.current.on(`student-boarded-${trip._id}`, (data) => {
         console.log('Student boarded event:', data);
-        loadTripData(); // Refresh the list
+        loadTripData();
       });
       
       socketRef.current.on(`student-alighted-${trip._id}`, (data) => {
         console.log('Student alighted event:', data);
-        loadTripData(); // Refresh the list
+        loadTripData();
       });
     } catch (error) {
       console.error('Socket setup error:', error);
@@ -104,24 +104,35 @@ export default function TripScreen({ route, navigation }) {
     try {
       setLoading(true);
       
-      const response = await api.get(`/driver/trips/${trip._id}/students`);
-      console.log('Students response:', response.data);
+      // Use the correct endpoint to get trip with students
+      const response = await api.get(`/trips/${trip._id}/with-students`);
+      console.log('Trip data response:', response.data);
       
-      const studentsData = response.data?.data || [];
-      setStudents(studentsData);
-      calculateStats(studentsData);
+      if (response.data?.success) {
+        const tripData = response.data.data;
+        const studentsData = tripData?.students || [];
+        setStudents(studentsData);
+        setTrip(tripData);
+        calculateStats(studentsData);
+      } else {
+        setStudents([]);
+        calculateStats([]);
+      }
       
     } catch (error) {
       console.error('Error loading trip students:', error);
       Alert.alert('Error', 'Failed to load students');
+      setStudents([]);
+      calculateStats([]);
     } finally {
       setLoading(false);
     }
   };
 
   const calculateStats = (studentsList) => {
-    const boarded = studentsList.filter(s => s.status === 'boarded' || s.boarded).length;
-    const alighted = studentsList.filter(s => s.status === 'alighted' || s.alighted).length;
+    // Check attendance records for boarded/alighted status
+    const boarded = studentsList.filter(s => s.attendance?.some(a => a.type === 'board')).length;
+    const alighted = studentsList.filter(s => s.attendance?.some(a => a.type === 'alight')).length;
     
     setStats({
       totalStudents: studentsList.length,
@@ -172,7 +183,7 @@ export default function TripScreen({ route, navigation }) {
     }
   };
 
-  // This will auto-send SMS and Push notification to parent
+  // FIXED: Board student - uses correct endpoint that triggers SMS
   const handleBoardStudent = async (student) => {
     Alert.alert(
       'Confirm Boarding',
@@ -183,24 +194,16 @@ export default function TripScreen({ route, navigation }) {
           text: 'Confirm Boarding',
           onPress: async () => {
             try {
-              const response = await api.post(`/driver/trips/${trip._id}/board/${student._id}`, {
-                method: 'manual',
-                location: location ? {
-                  lat: location.coords.latitude,
-                  lng: location.coords.longitude
-                } : null,
-                timestamp: new Date().toISOString()
+              const response = await api.trip.boardStudent(trip._id, student._id, {
+                lat: location?.coords?.latitude,
+                lng: location?.coords?.longitude
               });
               
-              if (response.data.success) {
-                const updatedStudents = students.map(s =>
-                  s._id === student._id ? { ...s, status: 'boarded', boarded: true } : s
-                );
-                setStudents(updatedStudents);
-                calculateStats(updatedStudents);
-                Alert.alert('Success', `${student.firstName} boarded. Parent notified via SMS and push notification.`);
+              if (response.success) {
+                await loadTripData();
+                Alert.alert('Success', `${student.firstName} boarded. Parent notified via SMS.`);
               } else {
-                Alert.alert('Error', response.data.message || 'Failed to record boarding');
+                Alert.alert('Error', response.message || 'Failed to record boarding');
               }
             } catch (error) {
               console.error('Error boarding student:', error);
@@ -212,7 +215,7 @@ export default function TripScreen({ route, navigation }) {
     );
   };
 
-  // This will auto-send SMS and Push notification to parent
+  // FIXED: Alight student - uses correct endpoint that triggers SMS
   const handleAlightStudent = async (student) => {
     Alert.alert(
       'Confirm Alighting',
@@ -223,24 +226,16 @@ export default function TripScreen({ route, navigation }) {
           text: 'Confirm Alighting',
           onPress: async () => {
             try {
-              const response = await api.post(`/driver/trips/${trip._id}/alight/${student._id}`, {
-                method: 'manual',
-                location: location ? {
-                  lat: location.coords.latitude,
-                  lng: location.coords.longitude
-                } : null,
-                timestamp: new Date().toISOString()
+              const response = await api.trip.alightStudent(trip._id, student._id, {
+                lat: location?.coords?.latitude,
+                lng: location?.coords?.longitude
               });
               
-              if (response.data.success) {
-                const updatedStudents = students.map(s =>
-                  s._id === student._id ? { ...s, status: 'alighted', alighted: true } : s
-                );
-                setStudents(updatedStudents);
-                calculateStats(updatedStudents);
-                Alert.alert('Success', `${student.firstName} alighted. Parent notified via SMS and push notification.`);
+              if (response.success) {
+                await loadTripData();
+                Alert.alert('Success', `${student.firstName} alighted. Parent notified via SMS.`);
               } else {
-                Alert.alert('Error', response.data.message || 'Failed to record alighting');
+                Alert.alert('Error', response.message || 'Failed to record alighting');
               }
             } catch (error) {
               console.error('Error alighting student:', error);
@@ -252,22 +247,24 @@ export default function TripScreen({ route, navigation }) {
     );
   };
 
+  // FIXED: Start trip - uses PATCH method
   const handleStartTrip = async () => {
     Alert.alert(
       'Start Trip',
-      'Are you sure you want to start this trip?',
+      'Are you sure you want to start this trip? Parents will be notified.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Start Trip',
           onPress: async () => {
             try {
-              const response = await api.post(`/driver/trips/${trip._id}/start`);
-              if (response.data.success) {
-                setTrip({ ...trip, status: 'in-progress' });
-                Alert.alert('Success', 'Trip started successfully');
+              const response = await api.trip.start(trip._id);
+              if (response.success) {
+                setTrip({ ...trip, status: 'running' });
+                await loadTripData();
+                Alert.alert('Success', 'Trip started successfully. Parents notified.');
               } else {
-                Alert.alert('Error', response.data.message || 'Failed to start trip');
+                Alert.alert('Error', response.message || 'Failed to start trip');
               }
             } catch (error) {
               console.error('Error starting trip:', error);
@@ -279,10 +276,11 @@ export default function TripScreen({ route, navigation }) {
     );
   };
 
+  // FIXED: End trip - uses PATCH method
   const handleEndTrip = async () => {
     Alert.alert(
       'End Trip',
-      'Are you sure you want to end this trip?',
+      'Are you sure you want to end this trip? Parents will be notified.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -290,12 +288,12 @@ export default function TripScreen({ route, navigation }) {
           style: 'destructive',
           onPress: async () => {
             try {
-              const response = await api.post(`/driver/trips/${trip._id}/end`);
-              if (response.data.success) {
-                Alert.alert('Success', 'Trip ended successfully');
+              const response = await api.trip.end(trip._id);
+              if (response.success) {
+                Alert.alert('Success', 'Trip ended successfully. Parents notified.');
                 navigation.goBack();
               } else {
-                Alert.alert('Error', response.data.message || 'Failed to end trip');
+                Alert.alert('Error', response.message || 'Failed to end trip');
               }
             } catch (error) {
               console.error('Error ending trip:', error);
@@ -390,7 +388,7 @@ export default function TripScreen({ route, navigation }) {
       });
       
       if (response.data.success) {
-        Alert.alert('Success', 'Delay reported to admin');
+        Alert.alert('Success', 'Delay reported to admin. Parents will be notified.');
         setShowDelayModal(false);
         setDelayReason('');
       } else {
@@ -411,8 +409,11 @@ export default function TripScreen({ route, navigation }) {
   };
 
   const getStudentStatus = (student) => {
-    if (student.status === 'alighted') return 'alighted';
-    if (student.status === 'boarded') return 'boarded';
+    const hasBoarded = student.attendance?.some(a => a.type === 'board');
+    const hasAlighted = student.attendance?.some(a => a.type === 'alight');
+    
+    if (hasAlighted) return 'alighted';
+    if (hasBoarded) return 'boarded';
     return 'pending';
   };
 
@@ -489,7 +490,7 @@ export default function TripScreen({ route, navigation }) {
   }
 
   const busNumber = trip.busNumber || trip.vehicleId || 'N/A';
-  const isTripActive = trip.status === 'in-progress' || trip.status === 'running';
+  const isTripActive = trip.status === 'running' || trip.status === 'in-progress';
   const isTripScheduled = trip.status === 'scheduled';
   const hasPendingStudents = stats.remaining > 0;
 

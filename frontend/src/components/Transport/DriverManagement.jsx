@@ -4,14 +4,17 @@ import { transportService } from '../../services/transport';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 
-export default function DriverManagement() {
+export default function DriverManagement({ onDriverSelect, selectedDriverId }) {
   const [drivers, setDrivers] = useState([]);
   const [buses, setBuses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
+  const [showStatsModal, setShowStatsModal] = useState(false);
   const [editingDriver, setEditingDriver] = useState(null);
   const [selectedDriver, setSelectedDriver] = useState(null);
   const [driverStats, setDriverStats] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -43,7 +46,6 @@ export default function DriverManagement() {
         throw new Error(data.message || 'Failed to fetch drivers');
       }
       
-      // Transform the data to match component format
       const formattedDrivers = (data.data || []).map(d => ({
         id: d._id,
         _id: d._id,
@@ -62,13 +64,16 @@ export default function DriverManagement() {
         joinDate: d.createdAt ? d.createdAt.split('T')[0] : new Date().toISOString().split('T')[0],
         rating: d.driverDetails?.rating || 4.5,
         totalTrips: d.driverDetails?.totalTrips || 0,
-        incidents: d.driverDetails?.incidents || 0
+        incidents: d.driverDetails?.incidents || 0,
+        onTimeRate: d.driverDetails?.onTimeRate || 92,
+        safetyScore: d.driverDetails?.safetyScore || 96
       }));
       
       setDrivers(formattedDrivers);
     } catch (error) {
       console.error('Error fetching drivers:', error);
       toast.error(error.message || 'Failed to fetch drivers');
+      setDrivers([]);
     } finally {
       setLoading(false);
     }
@@ -80,6 +85,7 @@ export default function DriverManagement() {
       setBuses(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error fetching buses:', error);
+      setBuses([]);
     }
   };
 
@@ -92,30 +98,32 @@ export default function DriverManagement() {
       if (data.success) {
         setDriverStats(data.data);
       } else {
-        // Fallback mock data
         setDriverStats({
           monthlyTrips: driver.totalTrips || 0,
           avgSpeed: 45,
-          onTimeRate: 92,
+          onTimeRate: driver.onTimeRate || 92,
           fuelEfficiency: 8.5,
           studentCompliments: 5,
-          safetyScore: 96,
+          safetyScore: driver.safetyScore || 96,
           lastTrip: new Date().toISOString(),
-          nextTrip: new Date(Date.now() + 86400000).toISOString()
+          nextTrip: new Date(Date.now() + 86400000).toISOString(),
+          totalDistance: 1250,
+          attendanceRate: 98
         });
       }
     } catch (error) {
       console.error('Error fetching driver stats:', error);
-      // Fallback mock data
       setDriverStats({
         monthlyTrips: driver.totalTrips || 0,
         avgSpeed: 45,
-        onTimeRate: 92,
+        onTimeRate: driver.onTimeRate || 92,
         fuelEfficiency: 8.5,
         studentCompliments: 5,
-        safetyScore: 96,
+        safetyScore: driver.safetyScore || 96,
         lastTrip: new Date().toISOString(),
-        nextTrip: new Date(Date.now() + 86400000).toISOString()
+        nextTrip: new Date(Date.now() + 86400000).toISOString(),
+        totalDistance: 1250,
+        attendanceRate: 98
       });
     }
   };
@@ -128,7 +136,6 @@ export default function DriverManagement() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Validate required fields
     if (!formData.firstName || !formData.lastName) {
       toast.error('First name and last name are required');
       return;
@@ -154,6 +161,8 @@ export default function DriverManagement() {
         phone: formData.phone,
         role: 'driver',
         isActive: formData.status === 'active',
+        emergencyContact: formData.emergencyContact,
+        address: formData.address,
         driverDetails: {
           licenseNumber: formData.licenseNumber,
           licenseExpiry: formData.licenseExpiry,
@@ -164,7 +173,6 @@ export default function DriverManagement() {
 
       let response;
       if (editingDriver) {
-        // Update existing driver
         response = await fetch(`http://localhost:5000/api/users/${editingDriver._id}`, {
           method: 'PUT',
           headers: {
@@ -174,7 +182,6 @@ export default function DriverManagement() {
           body: JSON.stringify(driverData)
         });
       } else {
-        // Create new driver
         driverData.password = 'password123';
         response = await fetch('http://localhost:5000/api/users', {
           method: 'POST',
@@ -190,6 +197,22 @@ export default function DriverManagement() {
       
       if (!response.ok) {
         throw new Error(result.message || 'Failed to save driver');
+      }
+      
+      // If assigned bus, also update the bus with driver
+      if (formData.assignedBus && !editingDriver) {
+        await fetch(`http://localhost:5000/api/buses/${formData.assignedBus}/assign-driver`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ 
+            driverId: result.data?._id || editingDriver?._id,
+            driverName: `${formData.firstName} ${formData.lastName}`,
+            driverPhone: formData.phone
+          })
+        });
       }
       
       toast.success(editingDriver ? 'Driver updated successfully' : 'Driver added successfully');
@@ -240,6 +263,7 @@ export default function DriverManagement() {
   const handleViewStats = async (driver) => {
     setSelectedDriver(driver);
     await fetchDriverStats(driver);
+    setShowStatsModal(true);
   };
 
   const handleDelete = async (id) => {
@@ -297,11 +321,36 @@ export default function DriverManagement() {
     }
   };
 
+  const getStatusIcon = (status) => {
+    switch(status) {
+      case 'active': return '✅';
+      case 'on-leave': return '🌴';
+      case 'inactive': return '⛔';
+      default: return '❓';
+    }
+  };
+
+  // Filter drivers based on search and status
+  const filteredDrivers = drivers.filter(driver => {
+    const matchesSearch = searchTerm === '' || 
+      driver.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      driver.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      driver.phone.includes(searchTerm);
+    const matchesStatus = filterStatus === 'all' || driver.status === filterStatus;
+    return matchesSearch && matchesStatus;
+  });
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '40px' }}>
-        <div className="loading-spinner" style={{ margin: '0 auto' }} />
+        <div className="loading-spinner" style={{ margin: '0 auto', width: '40px', height: '40px', border: '4px solid #f3f3f3', borderTop: '4px solid #2196F3', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
         <p style={{ marginTop: '10px', color: '#666' }}>Loading drivers...</p>
+        <style>{`
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+        `}</style>
       </div>
     );
   }
@@ -317,7 +366,12 @@ export default function DriverManagement() {
         flexWrap: 'wrap',
         gap: '10px'
       }}>
-        <h3 style={{ margin: 0 }}>Driver Management</h3>
+        <div>
+          <h3 style={{ margin: 0 }}>👨‍✈️ Driver Management</h3>
+          <p style={{ margin: '5px 0 0 0', fontSize: '14px', color: '#666' }}>
+            Manage your drivers, track performance, and assign to buses
+          </p>
+        </div>
         <button
           onClick={() => {
             setEditingDriver(null);
@@ -329,12 +383,17 @@ export default function DriverManagement() {
             background: '#4CAF50',
             color: 'white',
             border: 'none',
-            borderRadius: '4px',
+            borderRadius: '8px',
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            gap: '5px'
+            gap: '8px',
+            fontSize: '14px',
+            fontWeight: '500',
+            transition: 'all 0.3s ease'
           }}
+          onMouseEnter={(e) => e.target.style.transform = 'translateY(-2px)'}
+          onMouseLeave={(e) => e.target.style.transform = 'translateY(0)'}
         >
           ➕ Add New Driver
         </button>
@@ -343,57 +402,409 @@ export default function DriverManagement() {
       {/* Stats Overview */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
         gap: '15px',
         marginBottom: '20px'
       }}>
         <div style={{
           background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
           color: 'white',
-          padding: '15px',
-          borderRadius: '8px',
+          padding: '20px',
+          borderRadius: '12px',
           textAlign: 'center'
         }}>
-          <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{drivers.length}</div>
-          <div style={{ fontSize: '12px', opacity: 0.9 }}>Total Drivers</div>
+          <div style={{ fontSize: '32px', fontWeight: 'bold' }}>{drivers.length}</div>
+          <div style={{ fontSize: '14px', opacity: 0.9 }}>Total Drivers</div>
         </div>
         <div style={{
           background: 'linear-gradient(135deg, #43cea2 0%, #185a9d 100%)',
           color: 'white',
-          padding: '15px',
-          borderRadius: '8px',
+          padding: '20px',
+          borderRadius: '12px',
           textAlign: 'center'
         }}>
-          <div style={{ fontSize: '24px', fontWeight: 'bold' }}>
+          <div style={{ fontSize: '32px', fontWeight: 'bold' }}>
             {drivers.filter(d => d.status === 'active').length}
           </div>
-          <div style={{ fontSize: '12px', opacity: 0.9 }}>Active Drivers</div>
+          <div style={{ fontSize: '14px', opacity: 0.9 }}>Active Drivers</div>
         </div>
         <div style={{
           background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
           color: 'white',
-          padding: '15px',
-          borderRadius: '8px',
+          padding: '20px',
+          borderRadius: '12px',
           textAlign: 'center'
         }}>
-          <div style={{ fontSize: '24px', fontWeight: 'bold' }}>
+          <div style={{ fontSize: '32px', fontWeight: 'bold' }}>
             {drivers.filter(d => d.assignedBus).length}
           </div>
-          <div style={{ fontSize: '12px', opacity: 0.9 }}>Assigned to Bus</div>
+          <div style={{ fontSize: '14px', opacity: 0.9 }}>Assigned to Bus</div>
         </div>
         <div style={{
           background: 'linear-gradient(135deg, #5f2c82 0%, #49a09d 100%)',
           color: 'white',
-          padding: '15px',
-          borderRadius: '8px',
+          padding: '20px',
+          borderRadius: '12px',
           textAlign: 'center'
         }}>
-          <div style={{ fontSize: '24px', fontWeight: 'bold' }}>
+          <div style={{ fontSize: '32px', fontWeight: 'bold' }}>
             {drivers.length ? (drivers.reduce((sum, d) => sum + (d.rating || 0), 0) / drivers.length).toFixed(1) : 0}
           </div>
-          <div style={{ fontSize: '12px', opacity: 0.9 }}>Avg Rating</div>
+          <div style={{ fontSize: '14px', opacity: 0.9 }}>Avg Rating</div>
         </div>
       </div>
+
+      {/* Search and Filter Bar */}
+      <div style={{
+        display: 'flex',
+        gap: '15px',
+        marginBottom: '20px',
+        flexWrap: 'wrap'
+      }}>
+        <input
+          type="text"
+          placeholder="🔍 Search drivers by name, email, or phone..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          style={{
+            flex: 1,
+            padding: '12px',
+            border: '1px solid #ddd',
+            borderRadius: '8px',
+            fontSize: '14px',
+            minWidth: '200px'
+          }}
+        />
+        <select
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value)}
+          style={{
+            padding: '12px',
+            border: '1px solid #ddd',
+            borderRadius: '8px',
+            fontSize: '14px',
+            background: 'white'
+          }}
+        >
+          <option value="all">All Status</option>
+          <option value="active">✅ Active</option>
+          <option value="inactive">⛔ Inactive</option>
+          <option value="on-leave">🌴 On Leave</option>
+        </select>
+      </div>
+
+      {/* Driver Cards */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))',
+        gap: '20px'
+      }}>
+        {filteredDrivers.map(driver => (
+          <div
+            key={driver.id}
+            style={{
+              background: 'white',
+              borderRadius: '12px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              borderLeft: `4px solid ${getStatusColor(driver.status)}`,
+              transition: 'all 0.3s ease',
+              overflow: 'hidden',
+              ...(selectedDriverId === driver._id ? {
+                boxShadow: '0 4px 16px rgba(33, 150, 243, 0.3)',
+                transform: 'translateY(-2px)'
+              } : {})
+            }}
+            onClick={() => {
+              if (onDriverSelect) onDriverSelect(driver);
+              handleViewStats(driver);
+            }}
+          >
+            <div style={{ padding: '20px' }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '15px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{
+                    width: '50px',
+                    height: '50px',
+                    background: 'linear-gradient(135deg, #2196F3 0%, #1976D2 100%)',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    fontWeight: 'bold',
+                    fontSize: '20px'
+                  }}>
+                    {driver.firstName?.charAt(0) || driver.name?.charAt(0) || '?'}
+                  </div>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: '16px', color: '#333' }}>
+                      {driver.name || `${driver.firstName} ${driver.lastName}`}
+                    </h4>
+                    <div style={{ fontSize: '12px', color: '#666' }}>{driver.email || 'No email'}</div>
+                  </div>
+                </div>
+                <span style={{
+                  background: getStatusColor(driver.status),
+                  color: 'white',
+                  padding: '4px 12px',
+                  borderRadius: '20px',
+                  fontSize: '12px',
+                  fontWeight: '500',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}>
+                  {getStatusIcon(driver.status)} {driver.status}
+                </span>
+              </div>
+
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '10px',
+                marginBottom: '15px',
+                fontSize: '13px'
+              }}>
+                <div>
+                  <div style={{ color: '#666', marginBottom: '2px' }}>📞 Phone</div>
+                  <div style={{ fontWeight: '500' }}>{driver.phone || 'N/A'}</div>
+                </div>
+                <div>
+                  <div style={{ color: '#666', marginBottom: '2px' }}>🪪 License</div>
+                  <div style={{ fontWeight: '500' }}>{driver.licenseNumber || 'N/A'}</div>
+                </div>
+                <div>
+                  <div style={{ color: '#666', marginBottom: '2px' }}>📅 Expiry</div>
+                  <div style={{
+                    fontWeight: '500',
+                    color: driver.licenseExpiry && new Date(driver.licenseExpiry) < new Date() ? '#f44336' : 'inherit'
+                  }}>
+                    {driver.licenseExpiry ? format(new Date(driver.licenseExpiry), 'MMM dd, yyyy') : 'N/A'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: '#666', marginBottom: '2px' }}>⭐ Experience</div>
+                  <div style={{ fontWeight: '500' }}>{driver.experience} years</div>
+                </div>
+              </div>
+
+              {/* Performance Stats */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                marginBottom: '15px',
+                padding: '12px',
+                background: '#f8f9fa',
+                borderRadius: '8px'
+              }}>
+                <div style={{ flex: 1, textAlign: 'center' }}>
+                  <div style={{ fontSize: '11px', color: '#666' }}>Trips</div>
+                  <div style={{ fontWeight: 'bold', fontSize: '16px' }}>{driver.totalTrips}</div>
+                </div>
+                <div style={{ flex: 1, textAlign: 'center' }}>
+                  <div style={{ fontSize: '11px', color: '#666' }}>Rating</div>
+                  <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#FFC107' }}>
+                    {driver.rating} ⭐
+                  </div>
+                </div>
+                <div style={{ flex: 1, textAlign: 'center' }}>
+                  <div style={{ fontSize: '11px', color: '#666' }}>Incidents</div>
+                  <div style={{ 
+                    fontWeight: 'bold', 
+                    fontSize: '16px',
+                    color: driver.incidents > 0 ? '#f44336' : '#4CAF50' 
+                  }}>
+                    {driver.incidents}
+                  </div>
+                </div>
+                <div style={{ flex: 1, textAlign: 'center' }}>
+                  <div style={{ fontSize: '11px', color: '#666' }}>On-Time</div>
+                  <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#2196F3' }}>
+                    {driver.onTimeRate}%
+                  </div>
+                </div>
+              </div>
+
+              {/* Assigned Bus */}
+              {driver.assignedBus && (
+                <div style={{
+                  marginBottom: '15px',
+                  padding: '8px 12px',
+                  background: '#e3f2fd',
+                  borderRadius: '6px',
+                  fontSize: '13px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}>
+                  <span>🚌</span>
+                  <span>Assigned to: <strong>
+                    {buses.find(b => b._id === driver.assignedBus)?.busNumber || 'Unknown'}
+                  </strong></span>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div style={{
+                display: 'flex',
+                gap: '10px',
+                borderTop: '1px solid #eee',
+                paddingTop: '15px',
+                marginTop: '5px'
+              }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleViewStats(driver);
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    background: '#9C27B0',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: '500',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => e.target.style.background = '#7B1FA2'}
+                  onMouseLeave={(e) => e.target.style.background = '#9C27B0'}
+                >
+                  📊 Stats
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleEdit(driver);
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    background: '#FF9800',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: '500',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => e.target.style.background = '#F57C00'}
+                  onMouseLeave={(e) => e.target.style.background = '#FF9800'}
+                >
+                  ✏️ Edit
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleStatusToggle(driver);
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    background: driver.status === 'active' ? '#FF5722' : '#4CAF50',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: '500',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => e.target.style.opacity = '0.9'}
+                  onMouseLeave={(e) => e.target.style.opacity = '1'}
+                >
+                  {driver.status === 'active' ? '🔴 Deactivate' : '🟢 Activate'}
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDelete(driver.id);
+                  }}
+                  style={{
+                    padding: '8px 12px',
+                    background: '#f44336',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    transition: 'all 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => e.target.style.background = '#D32F2F'}
+                  onMouseLeave={(e) => e.target.style.background = '#f44336'}
+                >
+                  🗑️
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {filteredDrivers.length === 0 && !loading && (
+        <div style={{
+          textAlign: 'center',
+          padding: '60px',
+          background: 'white',
+          borderRadius: '12px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+        }}>
+          <div style={{ fontSize: '64px', marginBottom: '16px' }}>👨‍✈️</div>
+          <h3 style={{ marginBottom: '8px', color: '#333' }}>No drivers found</h3>
+          <p style={{ color: '#666', marginBottom: '20px' }}>
+            {searchTerm || filterStatus !== 'all' 
+              ? 'Try adjusting your search or filter criteria'
+              : 'Get started by adding your first driver to the system'}
+          </p>
+          {(searchTerm || filterStatus !== 'all') ? (
+            <button
+              onClick={() => {
+                setSearchTerm('');
+                setFilterStatus('all');
+              }}
+              style={{
+                padding: '10px 24px',
+                background: '#2196F3',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              Clear Filters
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                setEditingDriver(null);
+                resetForm();
+                setShowForm(true);
+              }}
+              style={{
+                padding: '10px 24px',
+                background: '#4CAF50',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                fontSize: '14px'
+              }}
+            >
+              ➕ Add New Driver
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Add/Edit Form Modal */}
       {showForm && (
@@ -413,14 +824,14 @@ export default function DriverManagement() {
           <div style={{
             background: 'white',
             padding: '30px',
-            borderRadius: '8px',
-            width: '600px',
+            borderRadius: '12px',
+            width: '650px',
             maxWidth: '90%',
             maxHeight: '90vh',
             overflowY: 'auto'
           }}>
-            <h3 style={{ margin: '0 0 20px 0' }}>
-              {editingDriver ? 'Edit Driver' : 'Add New Driver'}
+            <h3 style={{ margin: '0 0 20px 0', color: '#333' }}>
+              {editingDriver ? '✏️ Edit Driver' : '➕ Add New Driver'}
             </h3>
             <form onSubmit={handleSubmit}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
@@ -436,9 +847,10 @@ export default function DriverManagement() {
                     required
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   />
                 </div>
@@ -455,9 +867,10 @@ export default function DriverManagement() {
                     required
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   />
                 </div>
@@ -474,9 +887,10 @@ export default function DriverManagement() {
                     placeholder="Optional - auto-generated if empty"
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   />
                 </div>
@@ -493,9 +907,10 @@ export default function DriverManagement() {
                     required
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   />
                 </div>
@@ -512,9 +927,10 @@ export default function DriverManagement() {
                     required
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   />
                 </div>
@@ -531,9 +947,10 @@ export default function DriverManagement() {
                     required
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   />
                 </div>
@@ -551,9 +968,10 @@ export default function DriverManagement() {
                     max="50"
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   />
                 </div>
@@ -568,9 +986,10 @@ export default function DriverManagement() {
                     onChange={handleInputChange}
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   >
                     <option value="">Unassigned</option>
@@ -592,13 +1011,15 @@ export default function DriverManagement() {
                     onChange={handleInputChange}
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   >
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
+                    <option value="active">✅ Active</option>
+                    <option value="inactive">⛔ Inactive</option>
+                    <option value="on-leave">🌴 On Leave</option>
                   </select>
                 </div>
 
@@ -614,9 +1035,10 @@ export default function DriverManagement() {
                     placeholder="Emergency phone number"
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   />
                 </div>
@@ -633,15 +1055,16 @@ export default function DriverManagement() {
                     placeholder="Driver's residential address"
                     style={{
                       width: '100%',
-                      padding: '8px',
+                      padding: '10px',
                       border: '1px solid #ddd',
-                      borderRadius: '4px'
+                      borderRadius: '6px',
+                      fontSize: '14px'
                     }}
                   />
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+              <div style={{ display: 'flex', gap: '12px', marginTop: '25px' }}>
                 <button
                   type="submit"
                   style={{
@@ -650,11 +1073,14 @@ export default function DriverManagement() {
                     background: '#4CAF50',
                     color: 'white',
                     border: 'none',
-                    borderRadius: '4px',
+                    borderRadius: '6px',
                     cursor: 'pointer',
                     fontSize: '14px',
-                    fontWeight: '500'
+                    fontWeight: '500',
+                    transition: 'all 0.2s ease'
                   }}
+                  onMouseEnter={(e) => e.target.style.background = '#45a049'}
+                  onMouseLeave={(e) => e.target.style.background = '#4CAF50'}
                 >
                   {editingDriver ? 'Update Driver' : 'Add Driver'}
                 </button>
@@ -663,6 +1089,7 @@ export default function DriverManagement() {
                   onClick={() => {
                     setShowForm(false);
                     setEditingDriver(null);
+                    resetForm();
                   }}
                   style={{
                     flex: 1,
@@ -670,11 +1097,14 @@ export default function DriverManagement() {
                     background: '#f44336',
                     color: 'white',
                     border: 'none',
-                    borderRadius: '4px',
+                    borderRadius: '6px',
                     cursor: 'pointer',
                     fontSize: '14px',
-                    fontWeight: '500'
+                    fontWeight: '500',
+                    transition: 'all 0.2s ease'
                   }}
+                  onMouseEnter={(e) => e.target.style.background = '#D32F2F'}
+                  onMouseLeave={(e) => e.target.style.background = '#f44336'}
                 >
                   Cancel
                 </button>
@@ -685,7 +1115,7 @@ export default function DriverManagement() {
       )}
 
       {/* Driver Stats Modal */}
-      {selectedDriver && driverStats && (
+      {showStatsModal && selectedDriver && driverStats && (
         <div style={{
           position: 'fixed',
           top: 0,
@@ -696,280 +1126,145 @@ export default function DriverManagement() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          zIndex: 1000
+          zIndex: 1001,
+          overflowY: 'auto'
         }}>
           <div style={{
             background: 'white',
             padding: '30px',
-            borderRadius: '8px',
-            width: '450px',
-            maxWidth: '90%'
+            borderRadius: '12px',
+            width: '500px',
+            maxWidth: '90%',
+            maxHeight: '90vh',
+            overflowY: 'auto'
           }}>
-            <h3 style={{ margin: '0 0 15px 0' }}>
-              {selectedDriver.name} - Performance Stats
-            </h3>
-            <div style={{ marginBottom: '10px' }}>
-              <strong>Monthly Trips:</strong> {driverStats.monthlyTrips}
-            </div>
-            <div style={{ marginBottom: '10px' }}>
-              <strong>On-Time Rate:</strong> {driverStats.onTimeRate}%
-            </div>
-            <div style={{ marginBottom: '10px' }}>
-              <strong>Fuel Efficiency:</strong> {driverStats.fuelEfficiency} km/L
-            </div>
-            <div style={{ marginBottom: '10px' }}>
-              <strong>Safety Score:</strong> {driverStats.safetyScore}/100
-            </div>
-            <div style={{ marginBottom: '10px' }}>
-              <strong>Student Compliments:</strong> {driverStats.studentCompliments}
-            </div>
-            <div style={{ marginBottom: '10px' }}>
-              <strong>Last Trip:</strong> {format(new Date(driverStats.lastTrip), 'MMM dd, yyyy')}
-            </div>
-            <div style={{ marginBottom: '20px' }}>
-              <strong>Next Trip:</strong> {format(new Date(driverStats.nextTrip), 'MMM dd, yyyy')}
-            </div>
-            <button
-              onClick={() => setSelectedDriver(null)}
-              style={{
-                width: '100%',
-                padding: '10px',
-                background: '#2196F3',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Driver Cards */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))',
-        gap: '20px'
-      }}>
-        {drivers.map(driver => (
-          <div
-            key={driver.id}
-            style={{
-              background: 'white',
-              padding: '20px',
-              borderRadius: '8px',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-              borderLeft: `4px solid ${getStatusColor(driver.status)}`,
-              transition: 'transform 0.2s, box-shadow 0.2s',
-              cursor: 'pointer',
-              ':hover': {
-                transform: 'translateY(-2px)',
-                boxShadow: '0 4px 8px rgba(0,0,0,0.15)'
-              }
-            }}
-            onClick={() => handleViewStats(driver)}
-          >
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '15px'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{
-                  width: '40px',
-                  height: '40px',
-                  background: '#2196F3',
-                  borderRadius: '50%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'white',
-                  fontWeight: 'bold',
-                  fontSize: '18px'
-                }}>
-                  {driver.firstName?.charAt(0) || driver.name?.charAt(0) || '?'}
-                </div>
-                <div>
-                  <h4 style={{ margin: 0 }}>{driver.name || `${driver.firstName} ${driver.lastName}`}</h4>
-                  <div style={{ fontSize: '12px', color: '#666' }}>{driver.email || 'No email'}</div>
-                </div>
-              </div>
-              <span style={{
-                background: getStatusColor(driver.status),
-                color: 'white',
-                padding: '4px 8px',
-                borderRadius: '12px',
-                fontSize: '12px'
-              }}>
-                {driver.status}
-              </span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 style={{ margin: 0, color: '#333' }}>
+                📊 {selectedDriver.name} - Performance Stats
+              </h3>
+              <button
+                onClick={() => setShowStatsModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  color: '#999'
+                }}
+              >
+                ×
+              </button>
             </div>
 
             <div style={{
               display: 'grid',
               gridTemplateColumns: '1fr 1fr',
-              gap: '10px',
-              marginBottom: '15px',
-              fontSize: '13px'
+              gap: '15px',
+              marginBottom: '20px'
             }}>
-              <div>
-                <div style={{ color: '#666' }}>📞 Phone</div>
-                <div>{driver.phone || 'N/A'}</div>
-              </div>
-              <div>
-                <div style={{ color: '#666' }}>🪪 License</div>
-                <div>{driver.licenseNumber || 'N/A'}</div>
-              </div>
-              <div>
-                <div style={{ color: '#666' }}>📅 Expiry</div>
-                <div style={{
-                  color: driver.licenseExpiry && new Date(driver.licenseExpiry) < new Date() ? '#f44336' : 'inherit'
-                }}>
-                  {driver.licenseExpiry ? format(new Date(driver.licenseExpiry), 'MMM dd, yyyy') : 'N/A'}
-                </div>
-              </div>
-              <div>
-                <div style={{ color: '#666' }}>⭐ Experience</div>
-                <div>{driver.experience} years</div>
-              </div>
-            </div>
-
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              marginBottom: '15px',
-              padding: '10px',
-              background: '#f5f5f5',
-              borderRadius: '6px'
-            }}>
-              <div style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ fontSize: '12px', color: '#666' }}>Trips</div>
-                <div style={{ fontWeight: 'bold' }}>{driver.totalTrips}</div>
-              </div>
-              <div style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ fontSize: '12px', color: '#666' }}>Rating</div>
-                <div style={{ fontWeight: 'bold', color: '#FFC107' }}>{driver.rating} ⭐</div>
-              </div>
-              <div style={{ flex: 1, textAlign: 'center' }}>
-                <div style={{ fontSize: '12px', color: '#666' }}>Incidents</div>
-                <div style={{ fontWeight: 'bold', color: driver.incidents > 0 ? '#f44336' : '#4CAF50' }}>
-                  {driver.incidents}
-                </div>
-              </div>
-            </div>
-
-            {driver.assignedBus && (
               <div style={{
-                marginBottom: '15px',
-                padding: '8px',
+                padding: '15px',
                 background: '#e3f2fd',
-                borderRadius: '4px',
-                fontSize: '13px'
+                borderRadius: '8px',
+                textAlign: 'center'
               }}>
-                🚌 Assigned to: <strong>{buses.find(b => b._id === driver.assignedBus)?.busNumber || 'Unknown'}</strong>
+                <div style={{ fontSize: '28px', fontWeight: 'bold', color: '#2196F3' }}>
+                  {driverStats.monthlyTrips}
+                </div>
+                <div style={{ fontSize: '12px', color: '#666' }}>Monthly Trips</div>
               </div>
-            )}
+              <div style={{
+                padding: '15px',
+                background: '#e8f5e9',
+                borderRadius: '8px',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '28px', fontWeight: 'bold', color: '#4CAF50' }}>
+                  {driverStats.onTimeRate}%
+                </div>
+                <div style={{ fontSize: '12px', color: '#666' }}>On-Time Rate</div>
+              </div>
+              <div style={{
+                padding: '15px',
+                background: '#fff3e0',
+                borderRadius: '8px',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '28px', fontWeight: 'bold', color: '#FF9800' }}>
+                  {driverStats.fuelEfficiency}
+                </div>
+                <div style={{ fontSize: '12px', color: '#666' }}>Fuel Efficiency (km/L)</div>
+              </div>
+              <div style={{
+                padding: '15px',
+                background: '#fce4ec',
+                borderRadius: '8px',
+                textAlign: 'center'
+              }}>
+                <div style={{ fontSize: '28px', fontWeight: 'bold', color: '#f44336' }}>
+                  {driverStats.safetyScore}/100
+                </div>
+                <div style={{ fontSize: '12px', color: '#666' }}>Safety Score</div>
+              </div>
+            </div>
 
             <div style={{
-              display: 'flex',
-              gap: '10px',
-              borderTop: '1px solid #eee',
-              paddingTop: '15px'
+              padding: '15px',
+              background: '#f5f5f5',
+              borderRadius: '8px',
+              marginBottom: '15px'
             }}>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleStatusToggle(driver);
-                }}
-                style={{
-                  flex: 1,
-                  padding: '8px',
-                  background: driver.status === 'active' ? '#FF9800' : '#4CAF50',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '12px'
-                }}
-              >
-                {driver.status === 'active' ? '🔴 Deactivate' : '🟢 Activate'}
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleEdit(driver);
-                }}
-                style={{
-                  flex: 1,
-                  padding: '8px',
-                  background: '#2196F3',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '12px'
-                }}
-              >
-                ✏️ Edit
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDelete(driver.id);
-                }}
-                style={{
-                  flex: 0.5,
-                  padding: '8px',
-                  background: '#f44336',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '12px'
-                }}
-              >
-                🗑️
-              </button>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <span>Student Compliments</span>
+                <strong>{driverStats.studentCompliments}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <span>Average Speed</span>
+                <strong>{driverStats.avgSpeed} km/h</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <span>Total Distance</span>
+                <strong>{driverStats.totalDistance} km</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Attendance Rate</span>
+                <strong>{driverStats.attendanceRate}%</strong>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
 
-      {drivers.length === 0 && !loading && (
-        <div style={{
-          textAlign: 'center',
-          padding: '60px',
-          background: 'white',
-          borderRadius: '8px',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-        }}>
-          <div style={{ fontSize: '48px', marginBottom: '16px' }}>👤</div>
-          <h3 style={{ marginBottom: '8px' }}>No drivers found</h3>
-          <p style={{ color: '#666', marginBottom: '20px' }}>
-            Get started by adding your first driver to the system.
-          </p>
-          <button
-            onClick={() => {
-              setEditingDriver(null);
-              resetForm();
-              setShowForm(true);
-            }}
-            style={{
-              padding: '10px 24px',
-              background: '#4CAF50',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '14px'
-            }}
-          >
-            ➕ Add New Driver
-          </button>
+            <div style={{
+              padding: '15px',
+              background: '#f5f5f5',
+              borderRadius: '8px',
+              marginBottom: '20px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <span>Last Trip</span>
+                <strong>{format(new Date(driverStats.lastTrip), 'MMM dd, yyyy')}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Next Trip</span>
+                <strong>{format(new Date(driverStats.nextTrip), 'MMM dd, yyyy')}</strong>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowStatsModal(false)}
+              style={{
+                width: '100%',
+                padding: '12px',
+                background: '#2196F3',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: '500'
+              }}
+            >
+              Close
+            </button>
+          </div>
         </div>
       )}
     </div>

@@ -10,7 +10,7 @@ import LoadingSpinner from './components/common/LoadingSpinner';
 import './assets/styles/index.css';
 import TransportStudents from './pages/Students/TransportStudents';
 import SMSDashboard from './pages/Admin/SMSDashboard';
-import MessagingDashboard from './pages/Admin/MessagingDashboard'; // ✅ ADDED Messaging Dashboard import
+import MessagingDashboard from './pages/Admin/MessagingDashboard';
 
 // Lazy load pages for better performance
 const Dashboard = lazy(() => import('./pages/Dashboard/Dashboard'));
@@ -19,6 +19,7 @@ const TransportPage = lazy(() => import('./pages/Transport/TransportPage'));
 const AnalyticsDashboard = lazy(() => import('./pages/Analytics/AnalyticsDashboard'));
 const ReportsPage = lazy(() => import('./pages/Reports/ReportsPage'));
 const SettingsPage = lazy(() => import('./pages/Settings/SettingsPage'));
+const Notifications = lazy(() => import('./components/Parent/Notifications'));
 
 function App() {
   // Listen for auth changes from AuthContext
@@ -106,12 +107,21 @@ function App() {
                       </ProtectedRoute>
                     } 
                   />
-                  {/* ✅ ADDED Messaging Dashboard Route */}
+                  {/* Messaging Dashboard Route */}
                   <Route 
                     path="/messaging" 
                     element={
                       <ProtectedRoute>
                         <MessagingDashboard />
+                      </ProtectedRoute>
+                    } 
+                  />
+                  {/* Parent Notifications Route */}
+                  <Route 
+                    path="/notifications" 
+                    element={
+                      <ProtectedRoute>
+                        <Notifications />
                       </ProtectedRoute>
                     } 
                   />

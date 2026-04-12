@@ -38,30 +38,32 @@ const ConversationItem = ({ conversation, onPress, colors }) => {
       .slice(0, 2);
   };
 
+  const hasUnread = conversation.unread > 0;
+
   return (
     <TouchableOpacity
       style={[
         styles.conversationItem, 
         { borderBottomColor: colors.border },
-        !conversation.isRead && styles.unreadItem
+        hasUnread && styles.unreadItem
       ]}
       onPress={() => onPress(conversation)}
     >
-      <View style={[styles.avatar, { backgroundColor: conversation.unreadCount > 0 ? colors.primary : colors.secondary }]}>
+      <View style={[styles.avatar, { backgroundColor: hasUnread ? colors.primary : colors.secondary }]}>
         {conversation.avatar ? (
           <Image source={{ uri: conversation.avatar }} style={styles.avatarImage} />
         ) : (
-          <Text style={styles.avatarText}>{getInitials(conversation.title || conversation.name)}</Text>
+          <Text style={styles.avatarText}>{getInitials(conversation.name)}</Text>
         )}
       </View>
 
       <View style={styles.conversationContent}>
         <View style={styles.conversationHeader}>
-          <Text style={[styles.conversationName, { color: colors.text, fontWeight: !conversation.isRead ? '700' : '500' }]} numberOfLines={1}>
-            {conversation.title || conversation.name}
+          <Text style={[styles.conversationName, { color: colors.text, fontWeight: hasUnread ? '700' : '500' }]} numberOfLines={1}>
+            {conversation.name}
           </Text>
           <Text style={[styles.conversationTime, { color: colors.textSecondary }]}>
-            {getLastMessageTime(conversation.createdAt || conversation.lastMessageTime)}
+            {getLastMessageTime(conversation.lastMessage?.timestamp || conversation.updatedAt)}
           </Text>
         </View>
 
@@ -69,30 +71,31 @@ const ConversationItem = ({ conversation, onPress, colors }) => {
           <Text
             style={[
               styles.lastMessage,
-              { color: !conversation.isRead ? colors.text : colors.textSecondary }
+              { color: hasUnread ? colors.text : colors.textSecondary }
             ]}
             numberOfLines={1}
           >
-            {conversation.message || conversation.lastMessage || 'No message'}
+            {conversation.lastMessage?.text || 'No messages yet'}
           </Text>
-          {!conversation.isRead && (
+          {hasUnread && (
             <View style={[styles.unreadBadge, { backgroundColor: colors.primary }]}>
-              <Text style={styles.unreadCount}>New</Text>
+              <Text style={styles.unreadCount}>{conversation.unread}</Text>
             </View>
           )}
         </View>
 
-        {conversation.student && (
-          <Text style={[styles.studentInfo, { color: colors.textSecondary }]}>
-            👤 {conversation.student.name}
-          </Text>
-        )}
-        
-        {conversation.tripName && (
-          <Text style={[styles.tripInfo, { color: colors.primary }]}>
-            🚌 {conversation.tripName}
-          </Text>
-        )}
+        <View style={styles.conversationMeta}>
+          {conversation.type === 'driver' && (
+            <View style={styles.driverBadge}>
+              <Text style={styles.driverBadgeText}>Driver</Text>
+            </View>
+          )}
+          {conversation.lastMessage?.smsSent && (
+            <View style={styles.smsBadge}>
+              <Text style={styles.smsBadgeText}>SMS</Text>
+            </View>
+          )}
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -116,7 +119,7 @@ const EmptyState = ({ colors, onNewMessagePress }) => (
 
 export default function ConversationsScreen({ navigation }) {
   const { colors } = useTheme();
-  const { user, isAuthenticated, getAuthToken } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const { socket, isConnected } = useSocket();
   
   const [loading, setLoading] = useState(true);
@@ -125,7 +128,6 @@ export default function ConversationsScreen({ navigation }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Fetch conversations when screen comes into focus
   useFocusEffect(
     useCallback(() => {
       if (isAuthenticated()) {
@@ -136,16 +138,15 @@ export default function ConversationsScreen({ navigation }) {
   );
 
   useEffect(() => {
-    // Set up socket listeners for real-time updates
     if (socket && isConnected) {
-      socket.on('new_driver_message', handleNewMessage);
-      socket.on('message_read', handleMessageRead);
+      socket.on('new-message', handleNewMessage);
+      socket.on('message-read', handleMessageRead);
     }
 
     return () => {
       if (socket) {
-        socket.off('new_driver_message', handleNewMessage);
-        socket.off('message_read', handleMessageRead);
+        socket.off('new-message', handleNewMessage);
+        socket.off('message-read', handleMessageRead);
       }
     };
   }, [socket, isConnected]);
@@ -159,26 +160,26 @@ export default function ConversationsScreen({ navigation }) {
 
     try {
       setLoading(true);
-      console.log('📨 Loading conversations...');
+      console.log('Loading conversations...');
       
-      const response = await api.parent.getConversations();
-      console.log('📨 Conversations response:', response);
+      const response = await api.parentConversations.getConversations();
+      console.log('Conversations response:', response);
       
       if (response.success) {
-        setConversations(response.data || []);
+        const data = response.data || [];
+        setConversations(data);
+        
+        // Calculate total unread count
+        const totalUnread = data.reduce((sum, conv) => sum + (conv.unread || 0), 0);
+        setUnreadCount(totalUnread);
       } else {
         console.error('Failed to load conversations:', response.message);
         setConversations([]);
       }
     } catch (error) {
-      console.error('Error loading conversations:', error.response?.data || error.message);
-      
-      if (error.status === 401) {
-        // Token expired - will be handled by interceptor
-        console.log('Token expired, please login again');
-      }
-      
+      console.error('Error loading conversations:', error);
       Alert.alert('Error', 'Failed to load messages. Please pull to refresh.');
+      setConversations([]);
     } finally {
       setLoading(false);
     }
@@ -188,9 +189,9 @@ export default function ConversationsScreen({ navigation }) {
     if (!isAuthenticated()) return;
     
     try {
-      const response = await api.parent.getUnreadCount();
+      const response = await api.parentConversations.getUnreadCount();
       if (response.success) {
-        setUnreadCount(response.unreadCount);
+        setUnreadCount(response.data?.unreadCount || 0);
       }
     } catch (error) {
       console.error('Error loading unread count:', error);
@@ -204,40 +205,38 @@ export default function ConversationsScreen({ navigation }) {
   };
 
   const handleNewMessage = (data) => {
-    console.log('📨 New message received:', data);
+    console.log('New message received:', data);
     
-    // Add to conversations list or update existing
     setConversations(prev => {
       const existingIndex = prev.findIndex(c => c.id === data.conversationId);
       
-      const newMessage = {
+      const newConversation = {
         id: data.conversationId,
-        message: data.message,
-        title: data.title || 'Driver Message',
-        type: data.type || 'driver_message',
-        student: data.student,
-        tripName: data.tripName,
-        isRead: false,
-        createdAt: new Date().toISOString(),
+        name: data.senderName || 'Driver',
+        type: 'driver',
+        lastMessage: {
+          text: data.text,
+          timestamp: data.timestamp,
+          smsSent: data.smsSent || false
+        },
+        unread: 1,
+        updatedAt: data.timestamp
       };
       
       if (existingIndex >= 0) {
-        // Update existing conversation
         const updated = [...prev];
         updated[existingIndex] = {
           ...updated[existingIndex],
-          message: data.message,
-          isRead: false,
-          createdAt: new Date().toISOString(),
+          lastMessage: newConversation.lastMessage,
+          unread: (updated[existingIndex].unread || 0) + 1,
+          updatedAt: data.timestamp
         };
         return updated;
       } else {
-        // Add new conversation
-        return [newMessage, ...prev];
+        return [newConversation, ...prev];
       }
     });
     
-    // Update unread count
     setUnreadCount(prev => prev + 1);
   };
 
@@ -245,48 +244,28 @@ export default function ConversationsScreen({ navigation }) {
     setConversations(prev =>
       prev.map(c =>
         c.id === data.conversationId
-          ? { ...c, isRead: true }
+          ? { ...c, unread: 0 }
           : c
       )
     );
   };
 
   const handleConversationPress = async (conversation) => {
-    // Mark as read
-    if (!conversation.isRead) {
-      try {
-        await api.parent.markConversationRead(conversation.id);
-        setConversations(prev =>
-          prev.map(c =>
-            c.id === conversation.id
-              ? { ...c, isRead: true }
-              : c
-          )
-        );
-        setUnreadCount(prev => Math.max(0, prev - 1));
-      } catch (error) {
-        console.error('Error marking as read:', error);
-      }
-    }
-    
     // Navigate to chat detail
     navigation.navigate('Chat', {
       conversationId: conversation.id,
-      title: conversation.title,
-      student: conversation.student,
-      tripName: conversation.tripName,
+      name: conversation.name,
+      driverId: conversation.driverId,
     });
   };
 
   const handleNewMessagePress = () => {
-    // Navigate to contact driver screen
-    navigation.navigate('ContactDriver');
+    navigation.navigate('NewMessage');
   };
 
   const filteredConversations = conversations.filter(c =>
-    (c.title || c.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (c.message || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (c.student?.name || '').toLowerCase().includes(searchQuery.toLowerCase())
+    (c.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (c.lastMessage?.text || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   if (loading && !refreshing) {
@@ -312,7 +291,6 @@ export default function ConversationsScreen({ navigation }) {
         </TouchableOpacity>
       </LinearGradient>
 
-      {/* Unread banner */}
       {unreadCount > 0 && (
         <View style={styles.unreadBanner}>
           <Text style={styles.unreadBannerText}>
@@ -339,7 +317,7 @@ export default function ConversationsScreen({ navigation }) {
 
       {!isConnected && (
         <View style={styles.offlineBanner}>
-          <Text style={styles.offlineText}>🔴 You're offline. Messages will sync when online.</Text>
+          <Text style={styles.offlineText}>You're offline. Messages will sync when online.</Text>
         </View>
       )}
 
@@ -429,9 +407,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   unreadItem: {
-    backgroundColor: '#FFF8E7',
-    borderLeftWidth: 4,
-    borderLeftColor: '#FF9800',
+    backgroundColor: '#e3f2fd',
   },
   avatar: { 
     width: 50, 
@@ -458,18 +434,43 @@ const styles = StyleSheet.create({
     alignItems: 'center' 
   },
   lastMessage: { fontSize: 13, flex: 1 },
-  studentInfo: { fontSize: 11, marginTop: 4 },
-  tripInfo: { fontSize: 11, marginTop: 2 },
+  conversationMeta: { 
+    flexDirection: 'row', 
+    marginTop: 4,
+    gap: 6
+  },
+  driverBadge: {
+    backgroundColor: '#FF9800',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  driverBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  smsBadge: {
+    backgroundColor: '#4CAF50',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  smsBadgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '600',
+  },
   unreadBadge: { 
-    minWidth: 32, 
-    height: 20, 
-    borderRadius: 10, 
+    minWidth: 22, 
+    height: 22, 
+    borderRadius: 11, 
     justifyContent: 'center', 
     alignItems: 'center', 
     paddingHorizontal: 6, 
     marginLeft: 8 
   },
-  unreadCount: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
+  unreadCount: { color: '#fff', fontSize: 11, fontWeight: 'bold' },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 30, marginTop: -50 },
   emptyIcon: { fontSize: 60, marginBottom: 20 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 8 },

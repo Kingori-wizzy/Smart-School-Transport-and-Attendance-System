@@ -42,29 +42,29 @@ const ContactItem = ({ contact, onPress, colors }) => {
       <View style={styles.contactInfo}>
         <Text style={[styles.contactName, { color: colors.text }]}>{contact.name}</Text>
         <Text style={[styles.contactRole, { color: colors.textSecondary }]}>
-          {contact.role === 'driver' ? '🚌 Driver' : contact.role === 'admin' ? '🏫 School Admin' : '👤 Staff'}
+          Driver - Bus {contact.busNumber}
         </Text>
-        {contact.busNumber && (
-          <Text style={[styles.contactBus, { color: colors.primary }]}>
-            Bus: {contact.busNumber}
-          </Text>
-        )}
+        <Text style={[styles.contactStudent, { color: colors.primary }]}>
+          Student: {contact.studentName}
+        </Text>
       </View>
     </TouchableOpacity>
   );
 };
 
-const EmptyState = ({ colors, searchQuery, loading }) => {
+const EmptyState = ({ colors, searchQuery, loading, hasChildren }) => {
   if (loading) return null;
   
   return (
     <View style={styles.emptyContainer}>
-      <Text style={[styles.emptyIcon, { color: colors.textSecondary }]}>👥</Text>
-      <Text style={[styles.emptyTitle, { color: colors.text }]}>No Contacts Found</Text>
+      <Text style={[styles.emptyIcon, { color: colors.textSecondary }]}>🚌</Text>
+      <Text style={[styles.emptyTitle, { color: colors.text }]}>No Drivers Found</Text>
       <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-        {searchQuery
-          ? `No contacts matching "${searchQuery}"`
-          : 'No drivers assigned to your children yet'}
+        {!hasChildren
+          ? 'No children added to your account yet. Please add your children first.'
+          : searchQuery
+          ? `No drivers matching "${searchQuery}"`
+          : 'No drivers assigned to your children yet.'}
       </Text>
     </View>
   );
@@ -72,39 +72,55 @@ const EmptyState = ({ colors, searchQuery, loading }) => {
 
 export default function NewMessageScreen({ route, navigation }) {
   const { colors } = useTheme();
-  const { user, childrenList } = useAuth();
+  const { user, children } = useAuth();
   
   const [loading, setLoading] = useState(true);
   const [contacts, setContacts] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [initiatingChat, setInitiatingChat] = useState(false);
 
   useEffect(() => {
     loadDriversFromChildren();
-  }, [childrenList]);
+  }, [children]);
 
   const loadDriversFromChildren = async () => {
     try {
       setLoading(true);
       
+      if (!children || children.length === 0) {
+        setContacts([]);
+        return;
+      }
+      
+      console.log('Children list:', children);
+      
       // Extract drivers from children's bus assignments
       const driverContacts = [];
       const uniqueDrivers = new Map();
       
-      for (const child of childrenList) {
-        if (child.busId && child.busNumber && !uniqueDrivers.has(child.busNumber)) {
-          uniqueDrivers.set(child.busNumber, {
-            id: child.busId,
-            name: `Driver - ${child.busNumber}`,
+      for (const child of children) {
+        const childId = child._id || child.id;
+        const childName = child.fullName || `${child.firstName || ''} ${child.lastName || ''}`.trim();
+        const busNumber = child.busNumber || child.transportDetails?.busNumber;
+        const driverId = child.driverId || child.transportDetails?.driverId;
+        const driverName = child.driverName || `Driver ${busNumber || 'School Bus'}`;
+        
+        if (busNumber && !uniqueDrivers.has(busNumber)) {
+          uniqueDrivers.set(busNumber, {
+            id: driverId || `driver-${busNumber}`,
+            name: driverName,
             role: 'driver',
-            busNumber: child.busNumber,
-            studentName: child.fullName || `${child.firstName} ${child.lastName}`,
-            studentId: child.id,
+            busNumber: busNumber,
+            studentName: childName,
+            studentId: childId,
             avatar: null,
           });
         }
       }
       
-      setContacts(Array.from(uniqueDrivers.values()));
+      const contactsList = Array.from(uniqueDrivers.values());
+      console.log('Driver contacts:', contactsList);
+      setContacts(contactsList);
       
     } catch (error) {
       console.error('Error loading contacts:', error);
@@ -114,17 +130,76 @@ export default function NewMessageScreen({ route, navigation }) {
     }
   };
 
+  const initiateConversation = async (contact) => {
+    try {
+      setInitiatingChat(true);
+      
+      // Try to initiate conversation with the driver
+      const response = await api.post('/messaging/initiate-conversation', {
+        driverId: contact.id,
+        parentId: user?.id
+      });
+      
+      if (response.success) {
+        const conversationId = response.data?.conversationId;
+        
+        navigation.replace('Chat', {
+          conversationId: conversationId,
+          name: contact.name,
+          driverId: contact.id,
+          studentId: contact.studentId,
+        });
+      } else {
+        // If conversation already exists, try to get existing one
+        const conversationsResponse = await api.parentConversations.getConversations();
+        if (conversationsResponse.success) {
+          const existingConv = conversationsResponse.data.find(
+            c => c.name === contact.name || c.type === 'driver'
+          );
+          
+          if (existingConv) {
+            navigation.replace('Chat', {
+              conversationId: existingConv.id,
+              name: existingConv.name,
+              driverId: contact.id,
+              studentId: contact.studentId,
+            });
+          } else {
+            // Navigate with contact info even without conversation ID
+            navigation.replace('Chat', {
+              name: contact.name,
+              driverId: contact.id,
+              studentId: contact.studentId,
+              isNew: true,
+            });
+          }
+        } else {
+          navigation.replace('Chat', {
+            name: contact.name,
+            driverId: contact.id,
+            studentId: contact.studentId,
+            isNew: true,
+          });
+        }
+      }
+      
+    } catch (error) {
+      console.error('Error initiating conversation:', error);
+      
+      // Still navigate to chat even if conversation creation fails
+      navigation.replace('Chat', {
+        name: contact.name,
+        driverId: contact.id,
+        studentId: contact.studentId,
+        isNew: true,
+      });
+    } finally {
+      setInitiatingChat(false);
+    }
+  };
+
   const handleSelectContact = (contact) => {
-    navigation.navigate('Chat', {
-      conversationId: `driver-${contact.id}`,
-      title: contact.name,
-      name: contact.name,
-      student: { id: contact.studentId, name: contact.studentName },
-      tripName: contact.busNumber,
-      isNew: true,
-      contactId: contact.id,
-      contactType: 'driver',
-    });
+    initiateConversation(contact);
   };
 
   const filteredContacts = contacts.filter(c =>
@@ -132,6 +207,19 @@ export default function NewMessageScreen({ route, navigation }) {
     (c.studentName && c.studentName.toLowerCase().includes(searchQuery.toLowerCase())) ||
     (c.busNumber && c.busNumber.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+
+  const hasChildren = children && children.length > 0;
+
+  if (loading) {
+    return (
+      <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+          Loading drivers...
+        </Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -159,11 +247,11 @@ export default function NewMessageScreen({ route, navigation }) {
         ) : null}
       </View>
 
-      {loading ? (
-        <View style={styles.loadingContainer}>
+      {initiatingChat ? (
+        <View style={styles.initiatingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
-            Loading drivers...
+          <Text style={[styles.initiatingText, { color: colors.textSecondary }]}>
+            Starting conversation...
           </Text>
         </View>
       ) : filteredContacts.length > 0 ? (
@@ -177,13 +265,18 @@ export default function NewMessageScreen({ route, navigation }) {
           ListHeaderComponent={
             <View style={styles.infoHeader}>
               <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                Contact your child's bus driver directly
+                Select a driver to start messaging
               </Text>
             </View>
           }
         />
       ) : (
-        <EmptyState colors={colors} searchQuery={searchQuery} loading={loading} />
+        <EmptyState 
+          colors={colors} 
+          searchQuery={searchQuery} 
+          loading={loading}
+          hasChildren={hasChildren}
+        />
       )}
     </View>
   );
@@ -191,27 +284,62 @@ export default function NewMessageScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { paddingTop: 50, paddingBottom: 20, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
+  header: { 
+    paddingTop: 50, 
+    paddingBottom: 20, 
+    paddingHorizontal: 20, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between' 
+  },
+  backButton: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 20, 
+    backgroundColor: 'rgba(255,255,255,0.3)', 
+    justifyContent: 'center', 
+    alignItems: 'center' 
+  },
   backIcon: { fontSize: 24, color: '#fff' },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  searchContainer: { flexDirection: 'row', alignItems: 'center', margin: 15, paddingHorizontal: 15, borderRadius: 10, height: 50 },
+  searchContainer: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    margin: 15, 
+    paddingHorizontal: 15, 
+    borderRadius: 10, 
+    height: 50 
+  },
   searchIcon: { fontSize: 16, marginRight: 10 },
   searchInput: { flex: 1, fontSize: 14 },
   clearIcon: { fontSize: 16, padding: 5 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingText: { marginTop: 10, fontSize: 14 },
+  initiatingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  initiatingText: { marginTop: 10, fontSize: 14 },
   listContent: { paddingBottom: 20 },
   infoHeader: { paddingHorizontal: 15, paddingVertical: 10 },
   infoText: { fontSize: 12, textAlign: 'center' },
-  contactItem: { flexDirection: 'row', alignItems: 'center', padding: 15, borderBottomWidth: 1 },
-  contactAvatar: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  contactItem: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    padding: 15, 
+    borderBottomWidth: 1 
+  },
+  contactAvatar: { 
+    width: 50, 
+    height: 50, 
+    borderRadius: 25, 
+    justifyContent: 'center', 
+    alignItems: 'center', 
+    marginRight: 12 
+  },
   contactAvatarImage: { width: 50, height: 50, borderRadius: 25 },
   contactAvatarText: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
   contactInfo: { flex: 1 },
   contactName: { fontSize: 16, fontWeight: '600', marginBottom: 2 },
   contactRole: { fontSize: 12, marginBottom: 2 },
-  contactBus: { fontSize: 11 },
+  contactStudent: { fontSize: 11 },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 30, marginTop: -50 },
   emptyIcon: { fontSize: 60, marginBottom: 20 },
   emptyTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 8 },

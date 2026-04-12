@@ -6,6 +6,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
 const path = require('path');
+const bcrypt = require('bcryptjs');
 
 // Load environment variables
 require('dotenv').config();
@@ -36,18 +37,19 @@ const analyticsService = require('./ai/services/analyticsService');
 // Create Express app
 const app = express();
 
-// ✅ Updated CORS for admin frontend and mobile apps
+// Updated CORS for admin frontend and mobile apps
 app.use(cors({
   origin: [
-    'http://localhost:5173',           // Admin frontend (Vite default)
-    'http://localhost:3000',            // Alternative frontend port
-    'http://192.168.100.3:8081',        // Expo mobile (your IP)
-    'http://192.168.100.3:19000',       // Expo default port
-    'http://localhost:19006',            // Expo web
-    'http://localhost:19002',            // Expo dev tools
-    /\.exp\.direct$/,                    // Expo tunnel domains
-    /\.ngrok\.io$/,                      // ngrok tunnels
-    'http://10.0.2.2:5000'              // Android emulator
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'http://192.168.100.3:8081',
+    'http://192.168.100.3:19000',
+    'http://192.168.100.3:19001',
+    'http://localhost:19006',
+    'http://localhost:19002',
+    /\.exp\.direct$/,
+    /\.ngrok\.io$/,
+    'http://10.0.2.2:5000'
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
@@ -64,14 +66,13 @@ mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-  .then(() => console.log('✅ MongoDB connected successfully'))
-  .catch(err => console.error('❌ MongoDB connection error:', err));
+  .then(() => console.log('MongoDB connected successfully'))
+  .catch(err => console.error('MongoDB connection error:', err));
 
 // Make mongoose accessible globally
 global.mongoose = mongoose;
 
 // ==================== ROUTES ====================
-// Mount routes - including both singular and plural for parent routes
 
 // Authentication
 app.use('/api/auth', authRoutes);
@@ -87,14 +88,14 @@ app.use('/api/geofences', geofenceRoutes);
 // Notifications
 app.use('/api/notifications', notificationRoutes);
 
-// Parent routes - MOUNTED ON BOTH SINGULAR AND PLURAL for mobile app compatibility
-app.use('/api/parents', parentRoutes);   // Plural version (for admin panel)
-app.use('/api/parent', parentRoutes);    // Singular version (for mobile app)
+// Parent routes - both singular and plural for compatibility
+app.use('/api/parents', parentRoutes);
+app.use('/api/parent', parentRoutes);
 
 // User and role-specific routes
 app.use('/api/users', userRoutes);
 app.use('/api/driver', driverRoutes);
-app.use('/api/drivers', driverRoutes);   // Also mount on plural for consistency
+app.use('/api/drivers', driverRoutes);
 
 // Communication
 app.use('/api/sms', smsRoutes);
@@ -112,9 +113,301 @@ app.use('/api/assignments', require('./routes/assignmentRoutes'));
 app.use('/api/routes', require('./routes/routeRoutes'));
 app.use('/api/messaging', messagingRoutes);
 
+// Aliases for parent and driver conversation endpoints (for mobile app compatibility)
+app.use('/api/parent/conversations', messagingRoutes);
+app.use('/api/driver/conversations', messagingRoutes);
+// ==========================================
+// ==================== CUSTOM ASSIGNMENT ENDPOINTS ====================
+
+// Assign student to bus
+app.put('/api/students/:studentId/assign-bus', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { busId, busNumber, pickupPoint, dropoffPoint } = req.body;
+    
+    const Student = mongoose.model('Student');
+    const Bus = mongoose.model('Bus');
+    
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    
+    const bus = await Bus.findById(busId);
+    if (!bus) {
+      return res.status(404).json({ success: false, message: 'Bus not found' });
+    }
+    
+    student.busId = busId;
+    student.busNumber = busNumber || bus.busNumber;
+    student.transportDetails = {
+      busId: busId,
+      busNumber: busNumber || bus.busNumber,
+      pickupPoint: pickupPoint || student.pickupPoint || 'School Gate',
+      dropoffPoint: dropoffPoint || student.dropoffPoint || 'Home',
+      status: 'active',
+      assignedDate: new Date()
+    };
+    student.usesTransport = true;
+    
+    await student.save();
+    
+    if (!bus.assignedStudents) {
+      bus.assignedStudents = [];
+    }
+    if (!bus.assignedStudents.includes(studentId)) {
+      bus.assignedStudents.push(studentId);
+      await bus.save();
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Student assigned to bus successfully',
+      data: { studentId, busId }
+    });
+  } catch (error) {
+    console.error('Error assigning student to bus:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Remove student from bus
+app.delete('/api/students/:studentId/remove-bus', async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const Student = mongoose.model('Student');
+    
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    
+    student.busId = null;
+    student.busNumber = null;
+    student.transportDetails = null;
+    student.usesTransport = false;
+    
+    await student.save();
+    
+    res.json({ success: true, message: 'Student removed from bus successfully' });
+  } catch (error) {
+    console.error('Error removing student from bus:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Assign student to trip
+app.post('/api/trips/:tripId/assign-student', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const { studentId, tripType } = req.body;
+    
+    const Trip = mongoose.model('Trip');
+    const Student = mongoose.model('Student');
+    
+    const trip = await Trip.findById(tripId);
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+    
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+    
+    if (!trip.students) {
+      trip.students = [];
+    }
+    
+    if (trip.students.includes(studentId)) {
+      return res.status(400).json({ success: false, message: 'Student already assigned to this trip' });
+    }
+    
+    trip.students.push(studentId);
+    
+    if (!trip.studentDetails) {
+      trip.studentDetails = [];
+    }
+    trip.studentDetails.push({
+      studentId: studentId,
+      name: `${student.firstName || ''} ${student.lastName || ''}`.trim(),
+      admissionNumber: student.admissionNumber,
+      classLevel: student.classLevel,
+      pickupPoint: student.transportDetails?.pickupPoint || 'School Gate',
+      dropoffPoint: student.transportDetails?.dropoffPoint || 'Home'
+    });
+    
+    await trip.save();
+    
+    if (!student.assignedTrips) {
+      student.assignedTrips = [];
+    }
+    student.assignedTrips.push({
+      tripId: tripId,
+      tripType: tripType || trip.tripType,
+      assignedDate: new Date()
+    });
+    await student.save();
+    
+    res.json({ 
+      success: true, 
+      message: 'Student assigned to trip successfully',
+      data: { studentId, tripId }
+    });
+  } catch (error) {
+    console.error('Error assigning student to trip:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Remove student from trip
+app.delete('/api/trips/:tripId/remove-student', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const { studentId } = req.body;
+    
+    const Trip = mongoose.model('Trip');
+    const Student = mongoose.model('Student');
+    
+    const trip = await Trip.findById(tripId);
+    if (trip) {
+      trip.students = trip.students.filter(id => id.toString() !== studentId);
+      trip.studentDetails = trip.studentDetails?.filter(d => d.studentId?.toString() !== studentId);
+      await trip.save();
+    }
+    
+    const student = await Student.findById(studentId);
+    if (student && student.assignedTrips) {
+      student.assignedTrips = student.assignedTrips.filter(t => t.tripId?.toString() !== tripId);
+      await student.save();
+    }
+    
+    res.json({ success: true, message: 'Student removed from trip successfully' });
+  } catch (error) {
+    console.error('Error removing student from trip:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get unassigned students for a trip
+app.get('/api/students/unassigned-trips/list', async (req, res) => {
+  try {
+    const { tripId } = req.query;
+    const Student = mongoose.model('Student');
+    const Trip = mongoose.model('Trip');
+    
+    let assignedStudentIds = [];
+    
+    if (tripId) {
+      const trip = await Trip.findById(tripId);
+      if (trip && trip.students) {
+        assignedStudentIds = trip.students.map(id => id.toString());
+      }
+    }
+    
+    const students = await Student.find({
+      _id: { $nin: assignedStudentIds },
+      role: { $ne: 'admin' }
+    }).select('firstName lastName email admissionNumber classLevel busId transportDetails');
+    
+    res.json({ 
+      success: true, 
+      data: students,
+      count: students.length
+    });
+  } catch (error) {
+    console.error('Error fetching unassigned students:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get students assigned to a specific trip
+app.get('/api/trips/:tripId/students', async (req, res) => {
+  try {
+    const { tripId } = req.params;
+    const Trip = mongoose.model('Trip');
+    
+    const trip = await Trip.findById(tripId).populate('students', 'firstName lastName email admissionNumber classLevel');
+    
+    if (!trip) {
+      return res.status(404).json({ success: false, message: 'Trip not found' });
+    }
+    
+    res.json({ 
+      success: true, 
+      data: trip.students || [],
+      count: trip.students?.length || 0
+    });
+  } catch (error) {
+    console.error('Error fetching trip students:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get students assigned to a specific bus
+app.get('/api/buses/:busId/students', async (req, res) => {
+  try {
+    const { busId } = req.params;
+    const Student = mongoose.model('Student');
+    
+    const students = await Student.find({ 
+      busId: busId,
+      usesTransport: true
+    }).select('firstName lastName email admissionNumber classLevel pickupPoint dropoffPoint');
+    
+    res.json({ 
+      success: true, 
+      data: students,
+      count: students.length
+    });
+  } catch (error) {
+    console.error('Error fetching bus students:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Assign driver to bus
+app.put('/api/buses/:busId/assign-driver', async (req, res) => {
+  try {
+    const { busId } = req.params;
+    const { driverId, driverName, driverPhone } = req.body;
+    
+    const Bus = mongoose.model('Bus');
+    const User = mongoose.model('User');
+    
+    const bus = await Bus.findById(busId);
+    if (!bus) {
+      return res.status(404).json({ success: false, message: 'Bus not found' });
+    }
+    
+    if (driverId) {
+      const driver = await User.findById(driverId);
+      if (driver && driver.role === 'driver') {
+        bus.driverId = driverId;
+        bus.driverName = `${driver.firstName || ''} ${driver.lastName || ''}`.trim();
+        bus.driverPhone = driver.phone;
+        
+        if (!driver.driverDetails) driver.driverDetails = {};
+        driver.driverDetails.assignedBus = busId;
+        await driver.save();
+      }
+    } else {
+      bus.driverId = null;
+      bus.driverName = null;
+      bus.driverPhone = null;
+    }
+    
+    await bus.save();
+    
+    res.json({ success: true, message: 'Driver assigned to bus successfully', data: bus });
+  } catch (error) {
+    console.error('Error assigning driver to bus:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ==================== HEALTH & INFO ROUTES ====================
 
-// Health check route
 app.get('/api/health', (req, res) => {
   res.status(200).json({ 
     status: 'OK', 
@@ -127,7 +420,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// API info route
 app.get('/', (req, res) => {
   res.json({
     name: 'Smart School Transport API',
@@ -143,44 +435,58 @@ app.get('/', (req, res) => {
       geofences: '/api/geofences',
       notifications: '/api/notifications',
       parents: '/api/parents',
-      parent: '/api/parent',      // Singular version for mobile
+      parent: '/api/parent',
       users: '/api/users',
       drivers: '/api/drivers',
       sms: '/api/sms',
       analytics: '/api/analytics',
       reports: '/api/reports',
       transport: '/api/transport',
-      settings: '/api/settings'
+      settings: '/api/settings',
+      assignments: {
+        assignStudentToBus: 'PUT /api/students/:studentId/assign-bus',
+        assignStudentToTrip: 'POST /api/trips/:tripId/assign-student',
+        removeStudentFromTrip: 'DELETE /api/trips/:tripId/remove-student',
+        unassignedStudents: 'GET /api/students/unassigned-trips/list',
+        tripStudents: 'GET /api/trips/:tripId/students',
+        busStudents: 'GET /api/buses/:busId/students',
+        assignDriverToBus: 'PUT /api/buses/:busId/assign-driver'
+      }
     }
   });
 });
 
 // ==================== SOCKET.IO SETUP ====================
 
-// Create HTTP server
 const server = http.createServer(app);
 
-// Socket.io setup with updated CORS
 const io = socketIo(server, {
   cors: {
     origin: [
-      'http://localhost:5173', 
+      'http://localhost:5173',
       'http://localhost:3000',
       'http://192.168.100.3:8081',
       'http://192.168.100.3:19000',
+      'http://192.168.100.3:19001',
       'http://localhost:19006',
+      'http://localhost:19002',
       /\.exp\.direct$/,
-      /\.ngrok\.io$/
+      /\.ngrok\.io$/,
+      'http://10.0.2.2:5000'
     ],
     methods: ['GET', 'POST'],
     credentials: true
   },
   transports: ['websocket', 'polling'],
   pingTimeout: 60000,
-  pingInterval: 25000
+  pingInterval: 25000,
+  allowEIO3: true,
+  allowUpgrades: true,
+  perMessageDeflate: {
+    threshold: 1024
+  }
 });
 
-// Socket authentication middleware
 io.use((socket, next) => {
   const token = socket.handshake.auth.token || socket.handshake.query.token;
   
@@ -200,14 +506,12 @@ io.use((socket, next) => {
   }
 });
 
-// Socket connection handler
 io.on('connection', (socket) => {
-  console.log('🟢 Client connected:', socket.id, 'Role:', socket.userRole, 'User:', socket.userId);
+  console.log('Client connected:', socket.id, 'Role:', socket.userRole, 'User:', socket.userId);
 
-  // Join rooms based on role
   if (socket.userRole === 'parent') {
-    socket.join(`parent-${socket.userId}`);
-    console.log(`Parent ${socket.userId} joined their room`);
+    socket.join(`user-${socket.userId}`);
+    console.log(`Parent ${socket.userId} joined their room for notifications`);
   } else if (socket.userRole === 'driver') {
     socket.join(`driver-${socket.userId}`);
     console.log(`Driver ${socket.userId} joined their room`);
@@ -216,38 +520,30 @@ io.on('connection', (socket) => {
     console.log(`Admin ${socket.userId} joined admin room`);
   }
 
-  // Subscribe to bus updates
   socket.on('subscribe-to-bus', (busId) => {
     socket.join(`bus-${busId}`);
     console.log(`Socket ${socket.id} subscribed to bus ${busId}`);
-    
-    // Confirm subscription
     socket.emit('subscribed', { busId, success: true });
   });
 
-  // Unsubscribe from bus
   socket.on('unsubscribe-from-bus', (busId) => {
     socket.leave(`bus-${busId}`);
     console.log(`Socket ${socket.id} unsubscribed from bus ${busId}`);
   });
 
-  // Join trip room
   socket.on('join-trip', (tripId) => {
     socket.join(`trip-${tripId}`);
     console.log(`Socket ${socket.id} joined trip ${tripId}`);
   });
 
-  // Leave trip room
   socket.on('leave-trip', (tripId) => {
     socket.leave(`trip-${tripId}`);
     console.log(`Socket ${socket.id} left trip ${tripId}`);
   });
 
-  // Location updates from drivers
   socket.on('driver-location', (data) => {
     const { tripId, busId, location } = data;
     
-    // Broadcast to all interested parties
     io.to(`bus-${busId}`).emit('bus-location', {
       busId,
       location,
@@ -262,9 +558,17 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Boarding confirmation
   socket.on('student-boarded', (data) => {
-    const { tripId, studentId, studentName } = data;
+    const { tripId, studentId, studentName, parentId } = data;
+    
+    if (parentId) {
+      io.to(`user-${parentId}`).emit('student-boarded-confirmed', {
+        studentId,
+        studentName,
+        tripId,
+        timestamp: new Date()
+      });
+    }
     
     io.to(`trip-${tripId}`).emit('student-boarded-confirmed', {
       studentId,
@@ -273,33 +577,29 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Test connection
   socket.on('ping', (callback) => {
     if (typeof callback === 'function') {
       callback({ pong: true, timestamp: new Date() });
     }
   });
 
-  // Handle disconnection
   socket.on('disconnect', (reason) => {
-    console.log('🔴 Client disconnected:', socket.id, 'Reason:', reason);
+    console.log('Client disconnected:', socket.id, 'Reason:', reason);
   });
 
-  // Handle errors
   socket.on('error', (error) => {
     console.error('Socket error:', error);
   });
 });
 
-// Make io accessible to routes
 app.set('io', io);
 app.locals.io = io;
+global.io = io;
 
 // ==================== ERROR HANDLING ====================
 
-// Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('❌ Server Error:', err.stack);
+  console.error('Server Error:', err.stack);
   res.status(500).json({ 
     success: false, 
     message: 'Internal server error',
@@ -307,11 +607,8 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler - Catch all unmatched routes
 app.use((req, res) => {
-  // Log the requested path for debugging
-  console.log(`⚠️ 404 Not Found: ${req.method} ${req.originalUrl}`);
-  
+  console.log(`404 Not Found: ${req.method} ${req.originalUrl}`);
   res.status(404).json({ 
     success: false, 
     message: 'Route not found',
@@ -326,16 +623,15 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 server.listen(PORT, HOST, () => {
   console.log('\n=================================');
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 Host: ${HOST}`);
-  console.log(`📱 Mobile app: http://192.168.100.3:${PORT}`);
-  console.log(`💻 Admin frontend: http://localhost:5173`);
-  console.log(`🤖 AI Analytics: ${analyticsService ? '✅ Initialized' : '⏳ Pending'}`);
-  console.log(`🗄️  MongoDB: ${mongoose.connection.readyState === 1 ? '✅ Connected' : '❌ Disconnected'}`);
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Host: ${HOST}`);
+  console.log(`Mobile app: http://192.168.100.3:${PORT}`);
+  console.log(`Admin frontend: http://localhost:5173`);
+  console.log(`AI Analytics: ${analyticsService ? 'Initialized' : 'Pending'}`);
+  console.log(`MongoDB: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'}`);
   console.log('=================================\n');
   
-  // Log all mounted routes for debugging
-  console.log('📁 Mounted Routes:');
+  console.log('Mounted Routes:');
   console.log('   - /api/auth');
   console.log('   - /api/students');
   console.log('   - /api/buses');
@@ -345,7 +641,7 @@ server.listen(PORT, HOST, () => {
   console.log('   - /api/geofences');
   console.log('   - /api/notifications');
   console.log('   - /api/parents (plural)');
-  console.log('   - /api/parent (singular) ← For mobile app');
+  console.log('   - /api/parent (singular)');
   console.log('   - /api/users');
   console.log('   - /api/driver');
   console.log('   - /api/drivers');
@@ -356,10 +652,33 @@ server.listen(PORT, HOST, () => {
   console.log('   - /api/settings');
   console.log('   - /api/assignments');
   console.log('   - /api/routes');
+  console.log('\nParent Notification Endpoints:');
+  console.log('   - GET    /api/notifications');
+  console.log('   - GET    /api/notifications/unread/count');
+  console.log('   - PUT    /api/notifications/:id/read');
+  console.log('   - PUT    /api/notifications/read-all');
+  console.log('   - DELETE /api/notifications/:id');
+  console.log('   - DELETE /api/notifications/clear/all');
+  console.log('\nCustom Assignment Endpoints:');
+  console.log('   - PUT    /api/students/:studentId/assign-bus');
+  console.log('   - POST   /api/trips/:tripId/assign-student');
+  console.log('   - DELETE /api/trips/:tripId/remove-student');
+  console.log('   - GET    /api/students/unassigned-trips/list');
+  console.log('   - GET    /api/trips/:tripId/students');
+  console.log('   - GET    /api/buses/:busId/students');
+  console.log('   - PUT    /api/buses/:busId/assign-driver');
+  console.log('\nSocket.IO Configuration:');
+  console.log('   - Transport: WebSocket + Polling');
+  console.log('   - Allow EIO3: Yes');
+  console.log('   - Ping Timeout: 60s');
+  console.log('\nSocket.IO Rooms:');
+  console.log('   - user-{userId} (For parent notifications)');
+  console.log('   - driver-{driverId}');
+  console.log('   - bus-{busId}');
+  console.log('   - trip-{tripId}');
+  console.log('   - admins');
   console.log('=================================\n');
 });
-
-// ==================== GRACEFUL SHUTDOWN ====================
 
 const shutdown = (signal) => {
   console.log(`\n${signal} received, shutting down gracefully...`);
@@ -372,7 +691,6 @@ const shutdown = (signal) => {
     });
   });
   
-  // Force close after 10 seconds
   setTimeout(() => {
     console.error('Could not close connections in time, forcefully shutting down');
     process.exit(1);

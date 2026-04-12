@@ -199,22 +199,50 @@ const api = {
       api.request('/driver/current-trip'),
   },
 
-  // Trip actions
+  // Trip actions - FIXED: Correct endpoints for SMS notifications
   trip: {
     start: (tripId) => 
-      api.request(`/driver/trip/${tripId}/start`, { method: 'POST' }),
+      api.request(`/trips/${tripId}/start`, { method: 'PATCH' }),
     
     end: (tripId) => 
-      api.request(`/driver/trip/${tripId}/end`, { method: 'POST' }),
+      api.request(`/trips/${tripId}/complete`, { method: 'PATCH' }),
     
-    boardStudent: (tripId, studentId, method) => 
-      api.request(`/driver/trip/${tripId}/board/${studentId}`, { 
-        method: 'POST', 
-        body: JSON.stringify({ 
-          method, 
-          timestamp: new Date().toISOString() 
-        }) 
-      }),
+    // FIXED: Board student - triggers SMS to parent
+    boardStudent: async (tripId, studentId, location = null) => {
+      console.log(`🚌 Boarding student ${studentId} on trip ${tripId}`);
+      const body = {
+        boardingTime: new Date().toISOString(),
+        pickupPoint: 'School Gate',
+        location: location
+      };
+      return await api.request(`/trips/${tripId}/students/${studentId}/board`, { 
+        method: 'PATCH', 
+        body: JSON.stringify(body) 
+      });
+    },
+    
+    // FIXED: Alight student - triggers SMS to parent
+    alightStudent: async (tripId, studentId, location = null) => {
+      console.log(`🏠 Alighting student ${studentId} on trip ${tripId}`);
+      const body = {
+        alightingTime: new Date().toISOString(),
+        dropoffPoint: 'Home',
+        location: location
+      };
+      return await api.request(`/trips/${tripId}/students/${studentId}/alight`, { 
+        method: 'PATCH', 
+        body: JSON.stringify(body) 
+      });
+    },
+    
+    // Get current active trip
+    getCurrentTrip: async () => {
+      return await api.request('/trips/current');
+    },
+    
+    // Get trip with students
+    getTripWithStudents: (tripId) => 
+      api.request(`/trips/${tripId}/with-students`),
     
     updateLocation: (tripId, lat, lon, speed, heading) => 
       api.request('/driver/gps/update', { 

@@ -25,6 +25,10 @@ const MessageBubble = ({ message, isOwn, colors }) => {
     return format(date, 'HH:mm');
   };
 
+  const getMessageText = () => {
+    return message.message || message.text;
+  };
+
   return (
     <View style={[styles.messageRow, isOwn ? styles.ownMessageRow : styles.otherMessageRow]}>
       <View
@@ -34,19 +38,35 @@ const MessageBubble = ({ message, isOwn, colors }) => {
           isOwn ? styles.ownBubble : styles.otherBubble,
         ]}
       >
+        {!isOwn && (
+          <Text style={[styles.senderName, { color: colors.textSecondary }]}>
+            {message.senderName || 'Driver'}
+          </Text>
+        )}
         <Text style={[styles.messageText, { color: isOwn ? '#fff' : colors.text }]}>
-          {message.message || message.text}
+          {getMessageText()}
         </Text>
-        <Text style={[styles.messageTime, { color: isOwn ? 'rgba(255,255,255,0.7)' : colors.textSecondary }]}>
-          {formatTime(message.createdAt || message.timestamp)}
-          {message.isRead && isOwn && <Text style={styles.readReceipt}> ✓✓</Text>}
-        </Text>
+        <View style={styles.messageFooter}>
+          <Text style={[styles.messageTime, { color: isOwn ? 'rgba(255,255,255,0.7)' : colors.textSecondary }]}>
+            {formatTime(message.createdAt || message.timestamp)}
+          </Text>
+          {message.smsSent && (
+            <View style={styles.smsBadge}>
+              <Text style={styles.smsBadgeText}>SMS</Text>
+            </View>
+          )}
+          {isOwn && (
+            <Text style={[styles.readReceipt, { color: isOwn ? 'rgba(255,255,255,0.7)' : colors.textSecondary }]}>
+              {message.isRead ? ' ✓✓' : message.delivered ? ' ✓' : ' ⏳'}
+            </Text>
+          )}
+        </View>
       </View>
     </View>
   );
 };
 
-const TypingIndicator = ({ colors }) => (
+const TypingIndicator = ({ colors, userName }) => (
   <View style={[styles.messageRow, styles.otherMessageRow]}>
     <View style={[styles.typingBubble, { backgroundColor: colors.card }]}>
       <View style={styles.typingDots}>
@@ -54,23 +74,25 @@ const TypingIndicator = ({ colors }) => (
         <View style={[styles.dot, { backgroundColor: colors.textSecondary }]} />
         <View style={[styles.dot, { backgroundColor: colors.textSecondary }]} />
       </View>
+      <Text style={[styles.typingText, { color: colors.textSecondary }]}>
+        {userName || 'Driver'} is typing...
+      </Text>
     </View>
   </View>
 );
 
 export default function ChatScreen({ route, navigation }) {
   const { colors } = useTheme();
-  const { user, getAuthToken } = useAuth();
-  const { socket, isConnected } = useSocket();
+  const { user } = useAuth();
+  const { socket, isConnected, sendTyping, sendMessage: sendSocketMessage, joinConversation, leaveConversation } = useSocket();
   const flatListRef = useRef();
   
   const { 
     conversationId, 
     title, 
     name, 
-    avatar, 
-    student, 
-    tripName 
+    driverId,
+    studentId 
   } = route.params;
   
   const [loading, setLoading] = useState(true);
@@ -79,6 +101,7 @@ export default function ChatScreen({ route, navigation }) {
   const [sending, setSending] = useState(false);
   const [typing, setTyping] = useState(false);
   const [otherTyping, setOtherTyping] = useState(false);
+  const [typingUserName, setTypingUserName] = useState('');
   const typingTimeoutRef = useRef();
   const displayName = title || name || 'Driver';
 
@@ -87,21 +110,21 @@ export default function ChatScreen({ route, navigation }) {
     markConversationAsRead();
 
     if (socket && isConnected) {
-      socket.emit('join_conversation', conversationId);
+      joinConversation(conversationId);
       
-      socket.on('new_driver_message', handleNewMessage);
+      socket.on('new-message', handleNewMessage);
       socket.on('typing', handleTyping);
-      socket.on('stop_typing', handleStopTyping);
-      socket.on('message_read', handleMessageRead);
+      socket.on('message-delivered', handleMessageDelivered);
+      socket.on('message-read', handleMessageRead);
     }
 
     return () => {
       if (socket && isConnected) {
-        socket.emit('leave_conversation', conversationId);
-        socket.off('new_driver_message');
+        leaveConversation(conversationId);
+        socket.off('new-message');
         socket.off('typing');
-        socket.off('stop_typing');
-        socket.off('message_read');
+        socket.off('message-delivered');
+        socket.off('message-read');
       }
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
@@ -112,28 +135,13 @@ export default function ChatScreen({ route, navigation }) {
   const loadMessages = async () => {
     try {
       setLoading(true);
-      // Since we don't have a messages endpoint yet, we'll show the conversation message
-      // You can expand this when you add message history endpoint
-      const response = await api.parent.getConversations();
+      const response = await api.parentConversations.getMessages(conversationId);
       
       if (response.success) {
-        const conversation = response.data.find(c => c.id === conversationId);
-        if (conversation) {
-          // Format the conversation as a message
-          setMessages([{
-            id: conversation.id,
-            message: conversation.message,
-            title: conversation.title,
-            type: conversation.type,
-            createdAt: conversation.createdAt,
-            isRead: conversation.isRead,
-            student: conversation.student,
-            tripName: conversation.tripName
-          }]);
-        }
+        const messagesData = response.data || [];
+        setMessages(messagesData);
+        setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
       }
-      
-      setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
     } catch (error) {
       console.error('Error loading messages:', error);
     } finally {
@@ -143,7 +151,7 @@ export default function ChatScreen({ route, navigation }) {
 
   const markConversationAsRead = async () => {
     try {
-      await api.parent.markConversationRead(conversationId);
+      await api.parentConversations.markAsRead(conversationId);
     } catch (error) {
       console.error('Error marking as read:', error);
     }
@@ -152,14 +160,15 @@ export default function ChatScreen({ route, navigation }) {
   const handleNewMessage = (data) => {
     if (data.conversationId === conversationId) {
       const newMessage = {
-        id: `msg-${Date.now()}`,
-        message: data.message,
-        title: data.title,
-        type: data.type,
-        createdAt: new Date().toISOString(),
+        id: data.id || `msg-${Date.now()}`,
+        text: data.text,
+        message: data.text,
+        senderId: data.senderId,
+        senderName: data.senderName,
+        createdAt: data.timestamp || new Date().toISOString(),
         isRead: false,
-        student: data.student,
-        tripName: data.tripName
+        delivered: data.delivered || false,
+        smsSent: data.smsSent || false
       };
       setMessages(prev => [...prev, newMessage]);
       setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
@@ -167,19 +176,30 @@ export default function ChatScreen({ route, navigation }) {
     }
   };
 
-  const handleTyping = () => {
-    setOtherTyping(true);
+  const handleTyping = (data) => {
+    if (data.conversationId === conversationId) {
+      setOtherTyping(data.isTyping);
+      if (data.userName) {
+        setTypingUserName(data.userName);
+      }
+    }
   };
 
-  const handleStopTyping = () => {
-    setOtherTyping(false);
+  const handleMessageDelivered = (data) => {
+    if (data.conversationId === conversationId) {
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === data.messageId ? { ...msg, delivered: true } : msg
+        )
+      );
+    }
   };
 
   const handleMessageRead = (data) => {
     if (data.conversationId === conversationId) {
       setMessages(prev =>
         prev.map(msg =>
-          msg.id === data.messageId ? { ...msg, isRead: true } : msg
+          msg.senderId === user?.id ? { ...msg, isRead: true } : msg
         )
       );
     }
@@ -188,7 +208,7 @@ export default function ChatScreen({ route, navigation }) {
   const handleTypingStart = () => {
     if (!typing && socket && isConnected) {
       setTyping(true);
-      socket.emit('typing', { conversationId });
+      sendTyping(conversationId, true);
     }
     
     if (typingTimeoutRef.current) {
@@ -198,7 +218,7 @@ export default function ChatScreen({ route, navigation }) {
     typingTimeoutRef.current = setTimeout(() => {
       setTyping(false);
       if (socket && isConnected) {
-        socket.emit('stop_typing', { conversationId });
+        sendTyping(conversationId, false);
       }
     }, 2000);
   };
@@ -207,8 +227,24 @@ export default function ChatScreen({ route, navigation }) {
     if (!inputText.trim() || sending) return;
 
     const trimmedText = inputText.trim();
+    const tempId = `temp-${Date.now()}-${Math.random()}`;
+    
+    const newMessage = {
+      id: tempId,
+      conversationId: conversationId,
+      senderId: user?.id,
+      senderName: `${user?.firstName} ${user?.lastName}`,
+      text: trimmedText,
+      timestamp: new Date().toISOString(),
+      read: false,
+      delivered: false,
+      sending: true,
+    };
+
+    setMessages(prev => [...prev, newMessage]);
     setInputText('');
     setSending(true);
+    setTimeout(() => flatListRef.current?.scrollToEnd(), 100);
 
     // Clear typing indicator
     if (typingTimeoutRef.current) {
@@ -216,19 +252,33 @@ export default function ChatScreen({ route, navigation }) {
     }
     setTyping(false);
     if (socket && isConnected) {
-      socket.emit('stop_typing', { conversationId });
+      sendTyping(conversationId, false);
     }
 
     try {
-      // Since we don't have a direct message endpoint, show alert that this is a read-only view
-      Alert.alert(
-        'Read Only',
-        'This conversation is from your driver. To send a message, please use the Contact Driver option.',
-        [{ text: 'OK' }]
-      );
+      const response = await api.parentConversations.sendMessage(conversationId, trimmedText);
+      
+      if (response.success) {
+        const sentMessage = response.data;
+        
+        setMessages(prev =>
+          prev.map(msg => msg.id === tempId ? { ...sentMessage, sending: false } : msg)
+        );
+
+        if (socket && isConnected) {
+          sendSocketMessage(sentMessage);
+        }
+      } else {
+        throw new Error(response.message || 'Failed to send message');
+      }
     } catch (error) {
       console.error('Error sending message:', error);
-      Alert.alert('Error', 'Failed to send message');
+      setMessages(prev =>
+        prev.map(msg => 
+          msg.id === tempId ? { ...msg, failed: true, sending: false } : msg
+        )
+      );
+      Alert.alert('Error', 'Failed to send message. Please try again.');
     } finally {
       setSending(false);
     }
@@ -236,8 +286,8 @@ export default function ChatScreen({ route, navigation }) {
 
   const handleContactDriver = () => {
     navigation.navigate('ContactDriver', {
-      student: student,
-      tripName: tripName
+      driverId: driverId,
+      conversationId: conversationId
     });
   };
 
@@ -271,12 +321,9 @@ export default function ChatScreen({ route, navigation }) {
           </View>
           <View>
             <Text style={styles.headerName}>{displayName}</Text>
-            {student && (
-              <Text style={styles.headerStudent}>👤 {student.name}</Text>
-            )}
-            {tripName && (
-              <Text style={styles.headerTrip}>🚌 {tripName}</Text>
-            )}
+            <Text style={styles.headerStatus}>
+              {isConnected ? 'Online' : 'Offline'}
+            </Text>
           </View>
         </View>
 
@@ -292,7 +339,7 @@ export default function ChatScreen({ route, navigation }) {
         renderItem={({ item }) => (
           <MessageBubble
             message={item}
-            isOwn={false}
+            isOwn={item.senderId === user?.id}
             colors={colors}
           />
         )}
@@ -303,16 +350,19 @@ export default function ChatScreen({ route, navigation }) {
             <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
               No messages yet
             </Text>
+            <Text style={[styles.emptySubtext, { color: colors.textSecondary }]}>
+              Send a message to start the conversation
+            </Text>
           </View>
         }
       />
 
-      {otherTyping && <TypingIndicator colors={colors} />}
+      {otherTyping && <TypingIndicator colors={colors} userName={typingUserName} />}
 
       <View style={[styles.inputContainer, { backgroundColor: colors.card, borderTopColor: colors.border }]}>
         <TextInput
           style={[styles.input, { color: colors.text }]}
-          placeholder="Reply to driver..."
+          placeholder="Type a message..."
           placeholderTextColor={colors.textSecondary}
           value={inputText}
           onChangeText={(text) => {
@@ -320,13 +370,18 @@ export default function ChatScreen({ route, navigation }) {
             if (text) handleTypingStart();
           }}
           multiline
+          maxLength={500}
         />
         <TouchableOpacity
           style={[styles.sendButton, { backgroundColor: colors.primary }]}
           onPress={sendMessage}
           disabled={!inputText.trim() || sending}
         >
-          <Text style={styles.sendButtonText}>➤</Text>
+          {sending ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.sendButtonText}>➤</Text>
+          )}
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -344,27 +399,32 @@ const styles = StyleSheet.create({
   headerAvatar: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
   headerAvatarText: { fontSize: 18, fontWeight: 'bold' },
   headerName: { fontSize: 16, fontWeight: '600', color: '#fff', marginBottom: 2 },
-  headerStudent: { fontSize: 11, color: 'rgba(255,255,255,0.8)' },
-  headerTrip: { fontSize: 10, color: 'rgba(255,255,255,0.7)' },
+  headerStatus: { fontSize: 11, color: 'rgba(255,255,255,0.8)' },
   contactButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center' },
   contactIcon: { fontSize: 20, color: '#fff' },
   messagesList: { padding: 15, paddingBottom: 10 },
   messageRow: { marginBottom: 10, flexDirection: 'row' },
   ownMessageRow: { justifyContent: 'flex-end' },
   otherMessageRow: { justifyContent: 'flex-start' },
-  messageBubble: { maxWidth: '75%', padding: 12, borderRadius: 18 },
+  messageBubble: { maxWidth: '80%', padding: 12, borderRadius: 18 },
   ownBubble: { borderBottomRightRadius: 4 },
   otherBubble: { borderBottomLeftRadius: 4 },
+  senderName: { fontSize: 11, marginBottom: 2 },
   messageText: { fontSize: 14, lineHeight: 18, marginBottom: 4 },
+  messageFooter: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 4 },
   messageTime: { fontSize: 10, alignSelf: 'flex-end' },
-  readReceipt: { fontSize: 10 },
-  typingBubble: { padding: 12, borderRadius: 18, borderBottomLeftRadius: 4 },
-  typingDots: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', width: 40 },
+  readReceipt: { fontSize: 10, marginLeft: 2 },
+  smsBadge: { backgroundColor: '#e8f5e9', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 8, marginLeft: 4 },
+  smsBadgeText: { fontSize: 8, color: '#4CAF50' },
+  typingBubble: { padding: 12, borderRadius: 18, borderBottomLeftRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  typingDots: { flexDirection: 'row', alignItems: 'center' },
   dot: { width: 6, height: 6, borderRadius: 3, marginHorizontal: 2, opacity: 0.5 },
+  typingText: { fontSize: 12, fontStyle: 'italic' },
   inputContainer: { flexDirection: 'row', alignItems: 'flex-end', padding: 10, borderTopWidth: 1 },
-  input: { flex: 1, maxHeight: 100, paddingHorizontal: 15, paddingVertical: 8, fontSize: 14 },
+  input: { flex: 1, maxHeight: 100, paddingHorizontal: 15, paddingVertical: 8, fontSize: 14, borderRadius: 20 },
   sendButton: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginLeft: 10 },
-  sendButtonText: { color: '#fff', fontSize: 16 },
+  sendButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
   emptyMessages: { padding: 40, alignItems: 'center' },
-  emptyText: { fontSize: 14 },
+  emptyText: { fontSize: 16, fontWeight: '500', marginBottom: 8 },
+  emptySubtext: { fontSize: 13, textAlign: 'center' },
 });

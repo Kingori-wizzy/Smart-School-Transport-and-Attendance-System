@@ -8,28 +8,27 @@ const api = {
   // Set auth token (call after login or token refresh)
   setAuthToken: (token) => {
     cachedToken = token;
-    console.log(`🔑 Auth token ${token ? 'set' : 'cleared'} in memory`);
+    console.log(`Auth token ${token ? 'set' : 'cleared'} in memory`);
   },
 
   // Clear auth token
   clearAuthToken: () => {
     cachedToken = null;
-    console.log('🔑 Auth token cleared from memory');
+    console.log('Auth token cleared from memory');
   },
 
   // Get current token (from memory or storage)
   getAuthToken: async () => {
-    if (cachedToken) return cachedToken;
-    return await AsyncStorage.getItem('@auth_token');
+    if (cachedToken) {
+      return cachedToken;
+    }
+    const token = await AsyncStorage.getItem('@auth_token');
+    return token;
   },
 
   async request(endpoint, options = {}) {
     try {
-      // Get token (from memory or storage)
       const token = await this.getAuthToken();
-      
-      // Debug token presence
-      console.log(`🔑 Auth token present: ${!!token}`);
       
       const headers = {
         'Content-Type': 'application/json',
@@ -38,19 +37,12 @@ const api = {
       
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
-        console.log(`🔑 Token attached to request: ${endpoint}`);
-      } else {
-        console.log(`⚠️ No auth token for request: ${endpoint}`);
       }
-
-      console.log(`🌐 API Request: ${options.method || 'GET'} ${API_URL}${endpoint}`);
 
       const response = await fetch(`${API_URL}${endpoint}`, {
         ...options,
         headers,
       });
-
-      console.log(`📥 Response status: ${response.status} for ${endpoint}`);
 
       const responseText = await response.text();
       
@@ -69,11 +61,9 @@ const api = {
         
         // Handle 401 Unauthorized - token expired or invalid
         if (response.status === 401) {
-          console.log('🔑 Token expired or invalid, clearing storage');
           this.clearAuthToken();
           await AsyncStorage.multiRemove(['@auth_token', '@user', '@user_role']);
           
-          // Emit logout event if needed
           if (global.eventEmitter) {
             global.eventEmitter.emit('auth:unauthorized');
           }
@@ -85,20 +75,20 @@ const api = {
         throw error;
       }
 
-      if (!responseText) {
-        return {};
+      if (!responseText || responseText.trim() === '') {
+        return { success: true, data: [] };
       }
 
       try {
         const data = JSON.parse(responseText);
         return data;
       } catch (parseError) {
-        console.error('❌ JSON Parse Error:', parseError.message);
-        throw new Error('Invalid JSON response from server');
+        console.error('JSON Parse Error:', parseError.message);
+        return { success: true, data: [] };
       }
       
     } catch (error) {
-      console.error('❌ API Error:', {
+      console.error('API Error:', {
         endpoint,
         method: options.method,
         message: error.message,
@@ -110,13 +100,10 @@ const api = {
 
   // ==================== USER/PROFILE ====================
   user: {
-    // Save push token with better error handling
     savePushToken: async (token) => {
       try {
-        // Check if user is logged in first
         const authToken = await api.getAuthToken();
         if (!authToken) {
-          console.log('⚠️ Cannot save push token: User not authenticated');
           return { success: false, message: 'Not authenticated' };
         }
         
@@ -125,7 +112,7 @@ const api = {
           body: JSON.stringify({ token }) 
         });
       } catch (error) {
-        console.error('❌ Error saving push token:', error);
+        console.error('Error saving push token:', error);
         return { success: false, message: error.message };
       }
     },
@@ -151,7 +138,6 @@ const api = {
     deleteAccount: () => 
       api.request('/user/account', { method: 'DELETE' }),
     
-    // Get push token status
     getPushTokenStatus: () => 
       api.request('/user/push-token', { method: 'GET' }),
   },
@@ -165,7 +151,6 @@ const api = {
           body: JSON.stringify({ email, password }) 
         });
         
-        // If login successful and token exists, store it
         if (response.token) {
           await AsyncStorage.setItem('@auth_token', response.token);
           api.setAuthToken(response.token);
@@ -174,11 +159,11 @@ const api = {
             await AsyncStorage.setItem('@user', JSON.stringify(response.user));
             await AsyncStorage.setItem('@user_role', response.user.role);
           }
-          console.log('✅ Auth token stored after login');
         }
         
         return response;
       } catch (error) {
+        console.error('Login error:', error.message);
         throw error;
       }
     },
@@ -186,22 +171,18 @@ const api = {
     register: (userData) => 
       api.request('/auth/register', { method: 'POST', body: JSON.stringify(userData) }),
     
-    // Step 1: Send forgot password email
     forgotPassword: (email) => 
       api.request('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
     
-    // Step 2: Verify the reset code
     verifyResetCode: (email, code) => 
       api.request('/auth/verify-reset-code', { method: 'POST', body: JSON.stringify({ email, code }) }),
     
-    // Step 3: Reset password with verified code
     resetPassword: (email, code, newPassword) => 
       api.request('/auth/reset-password', { 
         method: 'POST', 
         body: JSON.stringify({ email, code, newPassword }) 
       }),
     
-    // Legacy reset password (kept for compatibility)
     resetPasswordWithToken: (token, newPassword) => 
       api.request('/auth/reset-password', { 
         method: 'POST', 
@@ -212,7 +193,6 @@ const api = {
       try {
         return await api.request('/auth/verify');
       } catch (error) {
-        // If verify fails, clear token
         await AsyncStorage.multiRemove(['@auth_token', '@user', '@user_role']);
         api.clearAuthToken();
         throw error;
@@ -223,20 +203,16 @@ const api = {
       try {
         await api.request('/auth/logout', { method: 'POST' });
       } finally {
-        // Always clear local storage even if API call fails
         await AsyncStorage.multiRemove(['@auth_token', '@user', '@user_role']);
         api.clearAuthToken();
-        console.log('✅ User logged out, tokens cleared');
       }
     },
     
-    // Check if user is authenticated
     isAuthenticated: async () => {
       const token = await api.getAuthToken();
       return !!token;
     },
     
-    // Get current user
     getCurrentUser: async () => {
       const userStr = await AsyncStorage.getItem('@user');
       return userStr ? JSON.parse(userStr) : null;
@@ -265,67 +241,169 @@ const api = {
     
     getChildTrips: (childId) => 
       api.request(`/parents/children/${childId}/trips/recent`),
-    
-    // ==================== CONVERSATIONS ====================
-    getConversations: (page = 1, limit = 20) => 
-      api.request(`/parent/conversations?page=${page}&limit=${limit}`),
-    
-    getUnreadCount: () => 
-      api.request('/parent/conversations/unread/count'),
-    
-    markConversationRead: (conversationId) => 
-      api.request(`/parent/conversations/${conversationId}/read`, { method: 'PUT' }),
   },
 
-  // ==================== ATTENDANCE ====================
+  // ==================== PARENT CONVERSATIONS ====================
+  parentConversations: {
+    getConversations: async () => {
+      try {
+        const response = await api.request('/messaging/parent/conversations');
+        return response;
+      } catch (error) {
+        console.error('Error fetching conversations:', error);
+        return { success: true, data: [] };
+      }
+    },
+    
+    getMessages: async (conversationId) => {
+      try {
+        const response = await api.request(`/messaging/parent/conversations/${conversationId}/messages`);
+        return response;
+      } catch (error) {
+        console.error('Error fetching messages:', error);
+        return { success: true, data: [] };
+      }
+    },
+    
+    sendMessage: async (conversationId, text) => {
+      return await api.request(`/messaging/parent/conversations/${conversationId}/messages`, { 
+        method: 'POST', 
+        body: JSON.stringify({ text }) 
+      });
+    },
+    
+    markAsRead: async (conversationId) => {
+      return await api.request(`/messaging/parent/conversations/${conversationId}/read`, { method: 'POST' });
+    },
+    
+    getUnreadCount: async () => {
+      try {
+        const response = await api.request('/messaging/parent/conversations/unread/count');
+        return response;
+      } catch (error) {
+        return { success: true, data: { unreadCount: 0 } };
+      }
+    },
+  },
+
+  // ==================== ATTENDANCE (FIXED) ====================
   attendance: {
-    getToday: (childId) => 
-      api.request(`/attendance/child/${childId}/today`),
+    getToday: async (childId) => {
+      try {
+        const response = await api.request(`/attendance/child/${childId}/today`);
+        // Handle different response formats
+        if (response && response.data) return response.data;
+        if (response && (response.present !== undefined || response.checkIn)) return response;
+        return { present: false, checkIn: null, checkOut: null };
+      } catch (error) {
+        console.error('Error fetching today attendance:', error);
+        return { present: false, checkIn: null, checkOut: null };
+      }
+    },
     
-    getHistory: (childId, startDate, endDate) => 
-      api.request(`/attendance/child/${childId}?startDate=${startDate}&endDate=${endDate}`),
+    getHistory: async (childId, startDate, endDate) => {
+      try {
+        let url = `/attendance/child/${childId}`;
+        const params = [];
+        if (startDate) params.push(`startDate=${startDate}`);
+        if (endDate) params.push(`endDate=${endDate}`);
+        if (params.length) url += `?${params.join('&')}`;
+        
+        const response = await api.request(url);
+        
+        // Handle different response formats
+        if (Array.isArray(response)) return response;
+        if (response && response.data && Array.isArray(response.data)) return response.data;
+        if (response && response.attendance && Array.isArray(response.attendance)) return response.attendance;
+        if (response && response.records && Array.isArray(response.records)) return response.records;
+        
+        return [];
+      } catch (error) {
+        console.error('Error fetching attendance history:', error);
+        return [];
+      }
+    },
     
-    getStats: (childId) => 
-      api.request(`/attendance/child/${childId}/stats`),
+    getStats: async (childId) => {
+      try {
+        const response = await api.request(`/attendance/child/${childId}/stats`);
+        
+        if (response && response.data) return response.data;
+        if (response && (response.totalDays !== undefined || response.presentDays !== undefined)) return response;
+        
+        return {
+          totalDays: 0,
+          presentDays: 0,
+          absentDays: 0,
+          lateDays: 0,
+          attendanceRate: 0
+        };
+      } catch (error) {
+        console.error('Error fetching attendance stats:', error);
+        return {
+          totalDays: 0,
+          presentDays: 0,
+          absentDays: 0,
+          lateDays: 0,
+          attendanceRate: 0
+        };
+      }
+    },
     
-    exportReport: (childId, month) => 
-      api.request(`/attendance/child/${childId}/export?month=${month}`),
+    exportReport: async (childId, month) => {
+      try {
+        const response = await api.request(`/attendance/child/${childId}/export?month=${month}`);
+        return response;
+      } catch (error) {
+        console.error('Error exporting attendance report:', error);
+        throw error;
+      }
+    },
   },
 
   // ==================== NOTIFICATIONS ====================
   notifications: {
-    getAll: (page = 1, limit = 20) => 
-      api.request(`/notifications?page=${page}&limit=${limit}`),
+    getAll: async (page = 1, limit = 20) => {
+      return await api.request(`/notifications?page=${page}&limit=${limit}`);
+    },
     
-    markAsRead: (notificationId) => 
-      api.request(`/notifications/${notificationId}/read`, { method: 'PATCH' }),
+    getUnreadCount: async () => {
+      return await api.request('/notifications/unread/count');
+    },
     
-    markAllAsRead: () => 
-      api.request('/notifications/read-all', { method: 'POST' }),
+    markAsRead: async (notificationId) => {
+      return await api.request(`/notifications/${notificationId}/read`, { method: 'PATCH' });
+    },
     
-    delete: (notificationId) => 
-      api.request(`/notifications/${notificationId}`, { method: 'DELETE' }),
+    markAllAsRead: async () => {
+      return await api.request('/notifications/read-all', { method: 'POST' });
+    },
     
-    deleteAll: () => 
-      api.request('/notifications/all', { method: 'DELETE' }),
+    delete: async (notificationId) => {
+      return await api.request(`/notifications/${notificationId}`, { method: 'DELETE' });
+    },
+    
+    deleteAll: async () => {
+      return await api.request('/notifications/all', { method: 'DELETE' });
+    },
   },
 
-  // ==================== MESSAGES ====================
+  // ==================== MESSAGES (Legacy) ====================
   messages: {
     getConversations: () => 
-      api.request('/messages/conversations'),
+      api.parentConversations.getConversations(),
     
     getMessages: (conversationId) => 
-      api.request(`/messages/${conversationId}`),
+      api.parentConversations.getMessages(conversationId),
     
     sendMessage: (conversationId, text) => 
-      api.request('/messages', { 
-        method: 'POST', 
-        body: JSON.stringify({ conversationId, text }) 
-      }),
+      api.parentConversations.sendMessage(conversationId, text),
     
-    markAsRead: (messageId) => 
-      api.request(`/messages/${messageId}/read`, { method: 'PATCH' }),
+    markAsRead: (conversationId) => 
+      api.parentConversations.markAsRead(conversationId),
+    
+    getUnreadCount: () => 
+      api.parentConversations.getUnreadCount(),
   },
 
   // ==================== TRANSPORT ====================
@@ -349,7 +427,7 @@ const api = {
       }),
   },
 
-  // ==================== PROFILE (Alias for user endpoints) ====================
+  // ==================== PROFILE ====================
   profile: {
     update: (userData) => 
       api.request('/user/profile', { method: 'PUT', body: JSON.stringify(userData) }),
@@ -380,26 +458,26 @@ const api = {
   patch: (endpoint, body) => api.request(endpoint, { method: 'PATCH', body: JSON.stringify(body) }),
   
   // ==================== AUTH TOKEN MANAGEMENT ====================
-  // Helper to manually set token
   setAuthToken: async (token) => {
     if (token) {
       await AsyncStorage.setItem('@auth_token', token);
       cachedToken = token;
-      console.log('✅ Auth token manually set');
     }
   },
   
-  // Helper to clear token
   clearAuthToken: async () => {
     await AsyncStorage.removeItem('@auth_token');
     cachedToken = null;
-    console.log('✅ Auth token cleared');
   },
   
-  // Helper to get current token
   getAuthToken: async () => {
     if (cachedToken) return cachedToken;
     return await AsyncStorage.getItem('@auth_token');
+  },
+  
+  checkToken: async () => {
+    const token = await api.getAuthToken();
+    return !!token;
   },
 };
 

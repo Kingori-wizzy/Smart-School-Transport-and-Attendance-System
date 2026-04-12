@@ -8,7 +8,7 @@ const { authMiddleware } = require('../middleware/authMiddleware');
 // All routes require authentication
 router.use(authMiddleware);
 
-// ==================== GENERAL ATTENDANCE ENDPOINT (NEW) ====================
+// ==================== GENERAL ATTENDANCE ENDPOINT ====================
 
 /**
  * @route   GET /api/attendance
@@ -29,28 +29,22 @@ router.get('/', async (req, res) => {
       sortOrder = 'desc'
     } = req.query;
 
-    // Build query
     const query = {};
     
     if (studentId) query.studentId = studentId;
     if (tripId) query.tripId = tripId;
     if (eventType) query.eventType = eventType;
     
-    // Date range filter
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
       if (endDate) query.createdAt.$lte = new Date(endDate + 'T23:59:59');
     }
     
-    // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    
-    // Sort order
     const sort = {};
     sort[sortBy] = sortOrder === 'desc' ? -1 : 1;
     
-    // Execute queries
     const [attendance, total] = await Promise.all([
       Attendance.find(query)
         .populate('studentId', 'firstName lastName name classLevel admissionNumber photo')
@@ -62,7 +56,6 @@ router.get('/', async (req, res) => {
       Attendance.countDocuments(query)
     ]);
 
-    // Calculate summary statistics
     const summary = {
       totalRecords: total,
       boardings: attendance.filter(a => a.eventType === 'board').length,
@@ -88,7 +81,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ==================== DRIVER ENDPOINTS (for mobile app) ====================
+// ==================== DRIVER ENDPOINTS ====================
 
 /**
  * @route   POST /api/attendance/driver/trip/:tripId/board/:studentId
@@ -100,25 +93,16 @@ router.post('/driver/trip/:tripId/board/:studentId', async (req, res) => {
     const { tripId, studentId } = req.params;
     const { method, timestamp, syncedFromOffline, location, deviceId } = req.body;
 
-    // Verify the trip exists and is active
     const trip = await Trip.findById(tripId).populate('busId');
     if (!trip) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Trip not found' 
-      });
+      return res.status(404).json({ success: false, error: 'Trip not found' });
     }
 
-    // Verify the student exists
     const student = await Student.findById(studentId);
     if (!student) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Student not found' 
-      });
+      return res.status(404).json({ success: false, error: 'Student not found' });
     }
 
-    // Check if student already boarded this trip (avoid duplicates)
     const existingAttendance = await Attendance.findOne({
       studentId,
       tripId,
@@ -133,7 +117,6 @@ router.post('/driver/trip/:tripId/board/:studentId', async (req, res) => {
       });
     }
 
-    // Create attendance record
     const attendance = new Attendance({
       studentId,
       tripId,
@@ -157,14 +140,12 @@ router.post('/driver/trip/:tripId/board/:studentId', async (req, res) => {
 
     await attendance.save();
 
-    // Update student's current status
     await Student.findByIdAndUpdate(studentId, {
       currentTrip: tripId,
       lastBoardingTime: new Date(),
       currentStatus: 'onboard'
     });
 
-    // Emit real-time update via socket
     if (req.io) {
       req.io.to(`trip-${tripId}`).emit('student-boarded', {
         studentId,
@@ -190,11 +171,8 @@ router.post('/driver/trip/:tripId/board/:studentId', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Boarding error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    console.error('Boarding error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -261,11 +239,8 @@ router.post('/driver/trip/:tripId/alight/:studentId', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Alighting error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    console.error('Alighting error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -279,10 +254,7 @@ router.post('/driver/sync-offline', async (req, res) => {
     const { scans, deviceId } = req.body;
     
     if (!Array.isArray(scans) || scans.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid scans array'
-      });
+      return res.status(400).json({ success: false, error: 'Invalid scans array' });
     }
 
     const results = [];
@@ -300,12 +272,7 @@ router.post('/driver/sync-offline', async (req, res) => {
         });
 
         if (existing) {
-          results.push({
-            success: true,
-            studentId,
-            status: 'duplicate',
-            attendanceId: existing._id
-          });
+          results.push({ success: true, studentId, status: 'duplicate', attendanceId: existing._id });
           continue;
         }
 
@@ -319,28 +286,15 @@ router.post('/driver/sync-offline', async (req, res) => {
             type: 'Point',
             coordinates: [location.lng, location.lat]
           } : null,
-          metadata: {
-            deviceId,
-            syncedFromOffline: true,
-            syncBatch
-          }
+          metadata: { deviceId, syncedFromOffline: true, syncBatch }
         });
 
         await attendance.save();
 
-        results.push({
-          success: true,
-          studentId,
-          status: 'synced',
-          attendanceId: attendance._id
-        });
+        results.push({ success: true, studentId, status: 'synced', attendanceId: attendance._id });
 
       } catch (error) {
-        results.push({
-          success: false,
-          studentId: scan.studentId,
-          error: error.message
-        });
+        results.push({ success: false, studentId: scan.studentId, error: error.message });
       }
     }
 
@@ -357,11 +311,8 @@ router.post('/driver/sync-offline', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Offline sync error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    console.error('Offline sync error:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -396,24 +347,17 @@ router.get('/driver/trip/:tripId/students', async (req, res) => {
       status: alightedMap[b.studentId._id.toString()] ? 'completed' : 'onboard'
     }));
 
-    res.json({
-      success: true,
-      count: students.length,
-      data: students
-    });
+    res.json({ success: true, count: students.length, data: students });
 
   } catch (error) {
-    console.error('❌ Error fetching trip students:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    console.error('Error fetching trip students:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ==================== PARENT/CHILD ENDPOINTS ====================
 
-// 📊 Get today's attendance for a child
+// Get today's attendance for a child
 router.get('/child/:childId/today', async (req, res) => {
   try {
     const { childId } = req.params;
@@ -445,12 +389,12 @@ router.get('/child/:childId/today', async (req, res) => {
       busNumber: attendance.tripId?.busNumber || attendance.busNumber
     });
   } catch (error) {
-    console.error('Error fetching today\'s attendance:', error);
+    console.error('Error fetching today attendance:', error);
     res.status(500).json({ message: error.message });
   }
 });
 
-// 📅 Get attendance history for a child
+// Get attendance history for a child
 router.get('/child/:childId', async (req, res) => {
   try {
     const { childId } = req.params;
@@ -489,7 +433,7 @@ router.get('/child/:childId', async (req, res) => {
   }
 });
 
-// 📊 Get attendance statistics for a child
+// Get attendance statistics for a child
 router.get('/child/:childId/stats', async (req, res) => {
   try {
     const { childId } = req.params;
@@ -561,11 +505,11 @@ router.get('/child/:childId/stats', async (req, res) => {
   }
 });
 
-// 📥 Export attendance report
+// Export attendance report (CSV for admin, JSON for mobile)
 router.get('/child/:childId/export', async (req, res) => {
   try {
     const { childId } = req.params;
-    const { month } = req.query;
+    const { month, format = 'csv' } = req.query;
 
     const startDate = new Date(month);
     startDate.setDate(1);
@@ -580,6 +524,35 @@ router.get('/child/:childId/export', async (req, res) => {
       createdAt: { $gte: startDate, $lt: endDate }
     }).sort({ createdAt: 1 }).populate('tripId', 'routeName busNumber');
 
+    const student = await Student.findById(childId);
+    const studentName = student ? `${student.firstName} ${student.lastName}` : 'Student';
+
+    // If JSON format is requested (for mobile app)
+    if (format === 'json') {
+      const reportData = {
+        childId,
+        childName: studentName,
+        month,
+        generatedAt: new Date().toISOString(),
+        summary: {
+          totalDays: attendance.length,
+          presentDays: attendance.filter(a => a.eventType === 'board').length,
+          lateDays: attendance.filter(a => a.eventType === 'late').length,
+          absentDays: 0
+        },
+        records: attendance.map(a => ({
+          date: a.createdAt.toISOString().split('T')[0],
+          status: a.eventType === 'board' ? 'present' : a.eventType === 'late' ? 'late' : 'absent',
+          checkIn: a.createdAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          busNumber: a.tripId?.busNumber || a.busNumber || 'N/A',
+          driverName: a.driverName || 'N/A'
+        }))
+      };
+      
+      return res.json({ success: true, data: reportData });
+    }
+
+    // CSV format for admin download
     const csvRows = [
       ['Date', 'Status', 'Check In', 'Check Out', 'Bus Number', 'Driver'].join(','),
       ...attendance.map(a => [
@@ -599,130 +572,52 @@ router.get('/child/:childId/export', async (req, res) => {
     res.send(csv);
   } catch (error) {
     console.error('Error exporting attendance:', error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
 // ==================== DASHBOARD STATS ENDPOINTS ====================
 
-// 📊 Get overall attendance stats for dashboard (detailed version)
+// Get overall attendance stats for dashboard (detailed version)
 router.get('/stats/summary', async (req, res) => {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
-    
     const lastWeek = new Date();
     lastWeek.setDate(lastWeek.getDate() - 7);
-    
     const lastMonth = new Date();
     lastMonth.setMonth(lastMonth.getMonth() - 1);
     
-    // Get today's stats
     const [todayBoarded, totalStudents, uniqueStudentsToday, byClass, weekly] = await Promise.all([
-      Attendance.countDocuments({
-        createdAt: { $gte: today, $lt: tomorrow },
-        eventType: 'board'
-      }),
+      Attendance.countDocuments({ createdAt: { $gte: today, $lt: tomorrow }, eventType: 'board' }),
       Student.countDocuments({ isActive: true }),
-      
-      // Unique students who attended today
-      Attendance.distinct('studentId', {
-        createdAt: { $gte: today, $lt: tomorrow },
-        eventType: 'board'
-      }),
-      
-      // Attendance by class today
+      Attendance.distinct('studentId', { createdAt: { $gte: today, $lt: tomorrow }, eventType: 'board' }),
       Attendance.aggregate([
-        {
-          $match: {
-            createdAt: { $gte: today, $lt: tomorrow },
-            eventType: 'board'
-          }
-        },
-        {
-          $lookup: {
-            from: 'students',
-            localField: 'studentId',
-            foreignField: '_id',
-            as: 'student'
-          }
-        },
+        { $match: { createdAt: { $gte: today, $lt: tomorrow }, eventType: 'board' } },
+        { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
         { $unwind: '$student' },
-        {
-          $group: {
-            _id: '$student.classLevel',
-            count: { $sum: 1 }
-          }
-        },
+        { $group: { _id: '$student.classLevel', count: { $sum: 1 } } },
         { $sort: { count: -1 } }
       ]),
-      
-      // Weekly trend
       Attendance.aggregate([
-        {
-          $match: {
-            createdAt: { $gte: lastWeek },
-            eventType: 'board'
-          }
-        },
-        {
-          $group: {
-            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-            count: { $sum: 1 }
-          }
-        },
+        { $match: { createdAt: { $gte: lastWeek }, eventType: 'board' } },
+        { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } },
         { $sort: { _id: 1 } }
       ])
     ]);
     
-    // Get monthly trend
     const monthly = await Attendance.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: lastMonth },
-          eventType: 'board'
-        }
-      },
-      {
-        $group: {
-          _id: { 
-            year: { $year: "$createdAt" },
-            month: { $month: "$createdAt" },
-            day: { $dayOfMonth: "$createdAt" }
-          },
-          date: { $first: "$createdAt" },
-          count: { $sum: 1 }
-        }
-      },
+      { $match: { createdAt: { $gte: lastMonth }, eventType: 'board' } },
+      { $group: { _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" }, day: { $dayOfMonth: "$createdAt" } }, date: { $first: "$createdAt" }, count: { $sum: 1 } } },
       { $sort: { date: 1 } },
-      {
-        $project: {
-          _id: 0,
-          date: {
-            $dateToString: { format: "%Y-%m-%d", date: "$date" }
-          },
-          count: 1
-        }
-      }
+      { $project: { _id: 0, date: { $dateToString: { format: "%Y-%m-%d", date: "$date" } }, count: 1 } }
     ]);
     
-    // Get peak hours
     const peakHours = await Attendance.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: today, $lt: tomorrow },
-          eventType: 'board'
-        }
-      },
-      {
-        $group: {
-          _id: { $hour: "$createdAt" },
-          count: { $sum: 1 }
-        }
-      },
+      { $match: { createdAt: { $gte: today, $lt: tomorrow }, eventType: 'board' } },
+      { $group: { _id: { $hour: "$createdAt" }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } }
     ]);
     
@@ -733,9 +628,7 @@ router.get('/stats/summary', async (req, res) => {
       data: {
         today: todayBoarded,
         totalStudents,
-        attendanceRate: totalStudents > 0 
-          ? Math.round((uniqueStudentsCount / totalStudents) * 100) 
-          : 0,
+        attendanceRate: totalStudents > 0 ? Math.round((uniqueStudentsCount / totalStudents) * 100) : 0,
         uniqueStudents: uniqueStudentsCount,
         weekly,
         monthly,
@@ -764,12 +657,11 @@ router.get('/stats/summary', async (req, res) => {
   }
 });
 
-// 📊 Get overall attendance stats for dashboard (basic version)
+// Get overall attendance stats for dashboard (basic version)
 router.get('/stats', async (req, res) => {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
     
@@ -784,43 +676,16 @@ router.get('/stats', async (req, res) => {
     lastWeek.setDate(lastWeek.getDate() - 7);
     
     const weeklyAttendance = await Attendance.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: lastWeek },
-          eventType: 'board'
-        }
-      },
-      {
-        $group: {
-          _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-          count: { $sum: 1 }
-        }
-      },
+      { $match: { createdAt: { $gte: lastWeek }, eventType: 'board' } },
+      { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }, count: { $sum: 1 } } },
       { $sort: { _id: 1 } }
     ]);
     
     const attendanceByClass = await Attendance.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: today, $lt: tomorrow },
-          eventType: 'board'
-        }
-      },
-      {
-        $lookup: {
-          from: 'students',
-          localField: 'studentId',
-          foreignField: '_id',
-          as: 'student'
-        }
-      },
+      { $match: { createdAt: { $gte: today, $lt: tomorrow }, eventType: 'board' } },
+      { $lookup: { from: 'students', localField: 'studentId', foreignField: '_id', as: 'student' } },
       { $unwind: '$student' },
-      {
-        $group: {
-          _id: '$student.classLevel',
-          count: { $sum: 1 }
-        }
-      }
+      { $group: { _id: '$student.classLevel', count: { $sum: 1 } } }
     ]);
     
     res.json({
@@ -828,9 +693,7 @@ router.get('/stats', async (req, res) => {
       data: {
         today: todayCount,
         totalStudents,
-        attendanceRate: totalStudents > 0 
-          ? Math.round((todayCount / totalStudents) * 100) 
-          : 0,
+        attendanceRate: totalStudents > 0 ? Math.round((todayCount / totalStudents) * 100) : 0,
         weekly: weeklyAttendance,
         byClass: attendanceByClass,
         timestamp: new Date()
@@ -852,8 +715,6 @@ router.get('/stats', async (req, res) => {
     });
   }
 });
-
-// ==================== DASHBOARD ENDPOINTS ====================
 
 // Get today's attendance summary for dashboard scanner
 router.get('/today', async (req, res) => {
@@ -897,7 +758,7 @@ router.get('/today', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching today\'s attendance:', error);
+    console.error('Error fetching today attendance:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

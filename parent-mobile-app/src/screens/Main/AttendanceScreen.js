@@ -9,12 +9,14 @@ import {
   ActivityIndicator,
   RefreshControl,
   Dimensions,
+  Share,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Calendar } from 'react-native-calendars';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
-import { COLORS } from '../../constants/config';
+import { COLORS, API_URL } from '../../constants/config';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
 
 const { width } = Dimensions.get('window');
@@ -35,14 +37,14 @@ const AttendanceDetail = ({ record, onClose }) => {
       <View style={styles.detailHeader}>
         <Text style={styles.detailDate}>{format(new Date(record.date), 'MMMM dd, yyyy')}</Text>
         <TouchableOpacity onPress={onClose}>
-          <Text style={styles.detailClose}>✕</Text>
+          <Text style={styles.detailClose}>x</Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.detailRow}>
         <Text style={styles.detailLabel}>Status:</Text>
-        <Text style={[styles.detailStatus, { color: record.status === 'present' ? '#4CAF50' : record.status === 'late' ? '#FF9800' : '#f44336' }]}>
-          {record.status === 'present' ? '✅ Present' : record.status === 'late' ? '⚠️ Late' : '❌ Absent'}
+        <Text style={[styles.detailStatus, { color: record.status === 'present' || record.status === 'boarded' ? '#4CAF50' : record.status === 'late' ? '#FF9800' : '#f44336' }]}>
+          {record.status === 'present' || record.status === 'boarded' ? 'Present' : record.status === 'late' ? 'Late' : 'Absent'}
         </Text>
       </View>
 
@@ -92,6 +94,7 @@ export default function AttendanceScreen({ route, navigation }) {
   });
   const [markedDates, setMarkedDates] = useState({});
   const [currentMonth, setCurrentMonth] = useState(format(new Date(), 'yyyy-MM'));
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     fetchAttendanceData();
@@ -109,15 +112,36 @@ export default function AttendanceScreen({ route, navigation }) {
       setLoading(true);
       
       const childId = child._id || child.id;
-      const start = format(startOfMonth(new Date(currentMonth)), 'yyyy-MM-dd');
-      const end = format(endOfMonth(new Date(currentMonth)), 'yyyy-MM-dd');
+      const start = format(startOfMonth(new Date(currentMonth + '-01')), 'yyyy-MM-dd');
+      const end = format(endOfMonth(new Date(currentMonth + '-01')), 'yyyy-MM-dd');
       
-      const data = await api.attendance.getHistory(childId, start, end);
+      console.log(`Fetching attendance for child ${childId} from ${start} to ${end}`);
+      
+      let data = [];
+      try {
+        const response = await api.attendance.getHistory(childId, start, end);
+        console.log('Attendance response:', response);
+        
+        if (Array.isArray(response)) {
+          data = response;
+        } else if (response && response.data && Array.isArray(response.data)) {
+          data = response.data;
+        } else if (response && response.attendance && Array.isArray(response.attendance)) {
+          data = response.attendance;
+        } else {
+          data = [];
+        }
+      } catch (apiError) {
+        console.error('API Error fetching attendance:', apiError);
+        data = [];
+      }
+      
       processAttendanceData(data);
       
     } catch (error) {
       console.error('Error fetching attendance:', error);
       Alert.alert('Error', 'Failed to load attendance data');
+      processAttendanceData([]);
     } finally {
       setLoading(false);
     }
@@ -126,7 +150,7 @@ export default function AttendanceScreen({ route, navigation }) {
   const processAttendanceData = (data) => {
     setAttendanceData(data);
 
-    const present = data.filter(d => d.status === 'present').length;
+    const present = data.filter(d => d.status === 'present' || d.status === 'boarded' || d.eventType === 'board').length;
     const absent = data.filter(d => d.status === 'absent').length;
     const late = data.filter(d => d.status === 'late').length;
     const total = data.length;
@@ -137,11 +161,21 @@ export default function AttendanceScreen({ route, navigation }) {
     const marked = {};
     data.forEach(day => {
       let color;
-      switch(day.status) {
-        case 'present': color = '#4CAF50'; break;
-        case 'absent': color = '#f44336'; break;
-        case 'late': color = '#FF9800'; break;
-        default: color = '#999';
+      const status = day.status || day.eventType;
+      switch(status) {
+        case 'present':
+        case 'boarded':
+        case 'board':
+          color = '#4CAF50'; 
+          break;
+        case 'absent': 
+          color = '#f44336'; 
+          break;
+        case 'late': 
+          color = '#FF9800'; 
+          break;
+        default: 
+          color = '#999';
       }
 
       marked[day.date] = {
@@ -170,12 +204,65 @@ export default function AttendanceScreen({ route, navigation }) {
   };
 
   const handleExport = async () => {
+    setExporting(true);
     try {
       const childId = child._id || child.id;
-      await api.attendance.exportReport(childId, currentMonth);
-      Alert.alert('Success', 'Attendance report downloaded');
+      const month = currentMonth;
+      const token = await api.getAuthToken();
+      
+      console.log(`Exporting report for child ${childId}, month: ${month}`);
+      
+      // IMPORTANT: Add format=json to the URL
+      const response = await fetch(`${API_URL}/attendance/child/${childId}/export?month=${month}&format=json`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Export failed with status: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      console.log('Export result:', result);
+      
+      if (result.success && result.data) {
+        const reportData = result.data;
+        
+        // Format the report as readable text
+        let reportText = `Attendance Report\n`;
+        reportText += `==================\n\n`;
+        reportText += `Student: ${reportData.childName}\n`;
+        reportText += `Month: ${reportData.month}\n`;
+        reportText += `Generated: ${new Date(reportData.generatedAt).toLocaleString()}\n\n`;
+        reportText += `SUMMARY\n`;
+        reportText += `-------\n`;
+        reportText += `Total Days: ${reportData.summary.totalDays}\n`;
+        reportText += `Present: ${reportData.summary.presentDays}\n`;
+        reportText += `Late: ${reportData.summary.lateDays}\n`;
+        reportText += `Absent: ${reportData.summary.absentDays}\n\n`;
+        reportText += `DAILY RECORDS\n`;
+        reportText += `-------------\n`;
+        
+        reportData.records.forEach(record => {
+          reportText += `${record.date}: ${record.status.toUpperCase()} at ${record.checkIn} (Bus: ${record.busNumber})\n`;
+        });
+        
+        await Share.share({
+          title: `Attendance Report - ${reportData.childName} (${reportData.month})`,
+          message: reportText,
+        });
+      } else {
+        Alert.alert('Info', 'No attendance data available for this month');
+      }
+      
     } catch (error) {
-      Alert.alert('Error', 'Failed to export report');
+      console.error('Export error:', error);
+      Alert.alert('Info', 'Unable to export report. Please try again later.');
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -205,9 +292,9 @@ export default function AttendanceScreen({ route, navigation }) {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
         <View style={styles.statsContainer}>
-          <StatCard title="Present" value={stats.present} icon="✅" color="#4CAF50" />
-          <StatCard title="Absent" value={stats.absent} icon="❌" color="#f44336" />
-          <StatCard title="Late" value={stats.late} icon="⚠️" color="#FF9800" />
+          <StatCard title="Present" value={stats.present} icon="✓" color="#4CAF50" />
+          <StatCard title="Absent" value={stats.absent} icon="✗" color="#f44336" />
+          <StatCard title="Late" value={stats.late} icon="⚠" color="#FF9800" />
         </View>
 
         <View style={styles.rateCard}>
@@ -258,30 +345,44 @@ export default function AttendanceScreen({ route, navigation }) {
 
         <View style={styles.listContainer}>
           <Text style={styles.listTitle}>Recent Attendance</Text>
-          {attendanceData.slice(0, 10).map((item, index) => (
-            <TouchableOpacity
-              key={item.id || index}
-              style={styles.listItem}
-              onPress={() => setSelectedDate(item.date)}
-            >
-              <View style={styles.listItemLeft}>
-                <Text style={styles.listDate}>{format(new Date(item.date), 'MMM dd, yyyy')}</Text>
-                {item.checkIn && item.checkOut && (
-                  <Text style={styles.listTime}>🕒 {item.checkIn} - {item.checkOut}</Text>
-                )}
-              </View>
-              <View style={[styles.listStatus, { backgroundColor: item.status === 'present' ? '#4CAF50' : item.status === 'late' ? '#FF9800' : '#f44336' }]}>
-                <Text style={styles.listStatusText}>
-                  {item.status === 'present' ? '✅' : item.status === 'late' ? '⚠️' : '❌'} {item.status}
-                </Text>
-              </View>
-            </TouchableOpacity>
-          ))}
+          {attendanceData.length === 0 ? (
+            <View style={styles.emptyList}>
+              <Text style={styles.emptyListText}>No attendance records found</Text>
+            </View>
+          ) : (
+            attendanceData.slice(0, 10).map((item, index) => (
+              <TouchableOpacity
+                key={item.id || index}
+                style={styles.listItem}
+                onPress={() => setSelectedDate(item.date)}
+              >
+                <View style={styles.listItemLeft}>
+                  <Text style={styles.listDate}>{format(new Date(item.date), 'MMM dd, yyyy')}</Text>
+                  {item.checkIn && (
+                    <Text style={styles.listTime}>In: {item.checkIn}</Text>
+                  )}
+                </View>
+                <View style={[styles.listStatus, { backgroundColor: item.status === 'present' || item.status === 'boarded' || item.eventType === 'board' ? '#4CAF50' : item.status === 'late' ? '#FF9800' : '#f44336' }]}>
+                  <Text style={styles.listStatusText}>
+                    {item.status === 'present' || item.status === 'boarded' || item.eventType === 'board' ? 'Present' : item.status === 'late' ? 'Late' : 'Absent'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))
+          )}
         </View>
 
-        <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
+        <TouchableOpacity 
+          style={[styles.exportButton, exporting && styles.exportButtonDisabled]} 
+          onPress={handleExport}
+          disabled={exporting}
+        >
           <LinearGradient colors={[COLORS.primary, COLORS.secondary]} style={styles.exportGradient}>
-            <Text style={styles.exportButtonText}>📥 Download Report</Text>
+            {exporting ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.exportButtonText}>Download Report</Text>
+            )}
           </LinearGradient>
         </TouchableOpacity>
       </ScrollView>
@@ -299,8 +400,8 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1 },
   childName: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
   childClass: { fontSize: 14, color: 'rgba(255,255,255,0.8)', marginTop: 2 },
-  statsContainer: { flexDirection: 'row', justifyContent: 'space-around', padding: 15 },
-  statCard: { flex: 1, marginHorizontal: 4, padding: 12, borderRadius: 10, alignItems: 'center', elevation: 3 },
+  statsContainer: { flexDirection: 'row', justifyContent: 'space-around', padding: 15, gap: 10 },
+  statCard: { flex: 1, padding: 12, borderRadius: 10, alignItems: 'center', elevation: 3 },
   statIcon: { fontSize: 20, marginBottom: 4 },
   statValue: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
   statTitle: { fontSize: 11, color: '#fff', opacity: 0.9 },
@@ -312,8 +413,8 @@ const styles = StyleSheet.create({
   calendarCard: { backgroundColor: '#fff', margin: 15, marginTop: 0, padding: 15, borderRadius: 10, elevation: 2 },
   calendarTitle: { fontSize: 16, fontWeight: '600', color: '#333', marginBottom: 10 },
   calendar: { borderRadius: 10, overflow: 'hidden' },
-  legendContainer: { flexDirection: 'row', justifyContent: 'center', marginBottom: 15 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 10 },
+  legendContainer: { flexDirection: 'row', justifyContent: 'center', marginBottom: 15, flexWrap: 'wrap' },
+  legendItem: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 10, marginVertical: 5 },
   legendDot: { width: 10, height: 10, borderRadius: 5, marginRight: 5 },
   legendText: { fontSize: 12, color: '#666' },
   detailCard: { backgroundColor: '#fff', margin: 15, marginTop: 0, padding: 15, borderRadius: 10, elevation: 3 },
@@ -332,7 +433,10 @@ const styles = StyleSheet.create({
   listTime: { fontSize: 12, color: '#999', marginTop: 2 },
   listStatus: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
   listStatusText: { fontSize: 11, color: '#fff', fontWeight: '500' },
+  emptyList: { alignItems: 'center', paddingVertical: 30 },
+  emptyListText: { fontSize: 14, color: '#999' },
   exportButton: { margin: 15, marginTop: 0, marginBottom: 30, borderRadius: 10, overflow: 'hidden' },
+  exportButtonDisabled: { opacity: 0.6 },
   exportGradient: { paddingVertical: 14, alignItems: 'center' },
   exportButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
 });

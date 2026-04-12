@@ -15,50 +15,94 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-function RouteMap({ waypoints }) {
+// Custom bus icon
+const busIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
+// Custom school icon
+const schoolIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
+function RouteMap({ waypoints, centerOnRoute = true }) {
   const map = useMap();
   
   useEffect(() => {
-    if (waypoints && waypoints.length > 0) {
+    if (waypoints && waypoints.length > 0 && centerOnRoute) {
       try {
-        const bounds = L.latLngBounds(waypoints.map(w => [w.lat, w.lng]));
-        map.fitBounds(bounds, { padding: [50, 50] });
+        const validWaypoints = waypoints.filter(w => w && typeof w.lat === 'number' && typeof w.lng === 'number');
+        if (validWaypoints.length > 0) {
+          const bounds = L.latLngBounds(validWaypoints.map(w => [w.lat, w.lng]));
+          map.fitBounds(bounds, { padding: [50, 50] });
+        }
       } catch (error) {
         console.error('Error fitting bounds:', error);
       }
     }
-  }, [waypoints, map]);
+  }, [waypoints, map, centerOnRoute]);
 
   return (
     <>
       <TileLayer
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
       />
       {waypoints && waypoints.map((point, index) => (
-        <Marker key={index} position={[point.lat, point.lng]}>
+        <Marker 
+          key={index} 
+          position={[point.lat, point.lng]}
+          icon={index === 0 ? schoolIcon : (index === waypoints.length - 1 ? busIcon : undefined)}
+        >
           <Popup>
-            <b>{point.name || `Stop ${index + 1}`}</b>
-            <br />
-            {point.address || 'N/A'}
-            <br />
-            <small>ETA: {point.eta || 'N/A'}</small>
+            <div style={{ minWidth: '150px' }}>
+              <b>{point.name || `Stop ${index + 1}`}</b>
+              <br />
+              {point.address && <><small>{point.address}</small><br /></>}
+              {point.eta && <small>⏱️ ETA: {point.eta}</small>}
+              {point.arrivalTime && <small>🚌 Arrival: {point.arrivalTime}</small>}
+              {point.departureTime && <small>🚪 Departure: {point.departureTime}</small>}
+            </div>
           </Popup>
         </Marker>
       ))}
       {waypoints && waypoints.length > 1 && (
         <Polyline
-          positions={waypoints.map(w => [w.lat, w.lng])}
+          positions={waypoints.filter(w => w && typeof w.lat === 'number').map(w => [w.lat, w.lng])}
           color="#2196F3"
           weight={4}
-          opacity={0.7}
+          opacity={0.8}
+          dashArray="10, 10"
         />
       )}
     </>
   );
 }
 
-export default function RoutePlanner() {
+// Component to handle map recentering
+function MapController({ center, zoom }) {
+  const map = useMap();
+  
+  useEffect(() => {
+    if (center && center.lat && center.lng) {
+      map.setView([center.lat, center.lng], zoom || 13);
+    }
+  }, [center, zoom, map]);
+  
+  return null;
+}
+
+export default function RoutePlanner({ selectedRoute: externalSelectedRoute, onRouteSelect }) {
   const [routes, setRoutes] = useState([]);
   const [buses, setBuses] = useState([]);
   const [drivers, setDrivers] = useState([]);
@@ -67,6 +111,10 @@ export default function RoutePlanner() {
   const [showForm, setShowForm] = useState(false);
   const [editingRoute, setEditingRoute] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [mapCenter, setMapCenter] = useState({ lat: -1.2864, lng: 36.8172 });
+  const [mapZoom, setMapZoom] = useState(12);
+  const [showRouteDetails, setShowRouteDetails] = useState(false);
+  
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -81,7 +129,14 @@ export default function RoutePlanner() {
   });
 
   // Nairobi coordinates as default center
-  const defaultCenter = [-1.2864, 36.8172];
+  const defaultCenter = { lat: -1.2864, lng: 36.8172 };
+
+  // Sync with external selected route if provided
+  useEffect(() => {
+    if (externalSelectedRoute && externalSelectedRoute !== selectedRoute) {
+      handleViewOnMap(externalSelectedRoute);
+    }
+  }, [externalSelectedRoute]);
 
   useEffect(() => {
     fetchRoutes();
@@ -98,27 +153,38 @@ export default function RoutePlanner() {
       const data = await response.json();
       
       if (data.success && data.data) {
-        const formattedRoutes = data.data.map(route => ({
-          id: route._id,
-          _id: route._id,
-          name: route.name || 'Unnamed Route',
-          description: route.description || '',
-          startPoint: route.startPoint || route.stops?.[0]?.name || 'School',
-          endPoint: route.endPoint || route.stops?.[route.stops.length - 1]?.name || 'Destination',
-          distance: route.distance || 0,
-          duration: route.estimatedDuration || route.duration || 0,
-          stops: route.stops?.length || 0,
-          status: route.active !== false ? 'active' : 'inactive',
-          assignedBuses: route.assignedBuses || (route.busId ? [route.busId] : []),
-          assignedDriver: route.assignedDriver || '',
-          waypoints: route.stops?.map(stop => ({
-            lat: stop.coordinates?.lat || stop.lat || defaultCenter[0],
-            lng: stop.coordinates?.lng || stop.lng || defaultCenter[1],
-            name: stop.name,
-            address: stop.address || '',
-            eta: stop.eta || ''
-          })) || []
-        }));
+        const formattedRoutes = data.data.map(route => {
+          // Parse waypoints from stops
+          let routeWaypoints = [];
+          if (route.stops && route.stops.length > 0) {
+            routeWaypoints = route.stops.map((stop, idx) => ({
+              lat: stop.coordinates?.lat || stop.lat || defaultCenter.lat + (idx * 0.002),
+              lng: stop.coordinates?.lng || stop.lng || defaultCenter.lng + (idx * 0.002),
+              name: stop.name,
+              address: stop.address || '',
+              eta: stop.eta || '',
+              arrivalTime: stop.arrivalTime || '',
+              departureTime: stop.departureTime || ''
+            }));
+          }
+          
+          return {
+            id: route._id,
+            _id: route._id,
+            name: route.name || 'Unnamed Route',
+            description: route.description || '',
+            startPoint: route.startPoint || route.stops?.[0]?.name || 'School',
+            endPoint: route.endPoint || route.stops?.[route.stops.length - 1]?.name || 'Destination',
+            distance: route.distance || 0,
+            duration: route.estimatedDuration || route.duration || 0,
+            stops: route.stops?.length || 0,
+            status: route.active !== false ? 'active' : 'inactive',
+            assignedBuses: route.assignedBuses || (route.busId ? [route.busId] : []),
+            assignedDriver: route.assignedDriver || '',
+            waypoints: routeWaypoints,
+            routeData: route
+          };
+        });
         setRoutes(formattedRoutes);
       } else {
         setRoutes([]);
@@ -168,15 +234,41 @@ export default function RoutePlanner() {
 
   const handleViewOnMap = (route) => {
     setSelectedRoute(route);
+    setShowRouteDetails(true);
+    
     if (route.waypoints && route.waypoints.length > 0) {
       setWaypoints(route.waypoints);
+      // Center on first waypoint or calculate bounds
+      if (route.waypoints[0]) {
+        setMapCenter({ lat: route.waypoints[0].lat, lng: route.waypoints[0].lng });
+      }
     } else {
-      setWaypoints([
-        { lat: defaultCenter[0], lng: defaultCenter[1], name: route.startPoint || 'Start Point' },
-        { lat: defaultCenter[0] + 0.01, lng: defaultCenter[1] + 0.01, name: route.endPoint || 'End Point' }
-      ]);
+      // Create default waypoints if none exist
+      const defaultWaypoints = [
+        { 
+          lat: defaultCenter.lat, 
+          lng: defaultCenter.lng, 
+          name: route.startPoint || 'Start Point',
+          address: 'School Location'
+        },
+        { 
+          lat: defaultCenter.lat + 0.01, 
+          lng: defaultCenter.lng + 0.01, 
+          name: route.endPoint || 'End Point',
+          address: 'Destination'
+        }
+      ];
+      setWaypoints(defaultWaypoints);
+      setMapCenter(defaultCenter);
     }
-    toast.success(`Viewing ${route.name} on map`);
+    
+    setMapZoom(13);
+    toast.success(`📍 Viewing ${route.name} on map`);
+    
+    // Callback to parent if provided
+    if (onRouteSelect) {
+      onRouteSelect(route);
+    }
   };
 
   const handleInputChange = (e) => {
@@ -187,7 +279,6 @@ export default function RoutePlanner() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    // Validate required fields
     if (!formData.name) {
       toast.error('Route name is required');
       return;
@@ -200,37 +291,41 @@ export default function RoutePlanner() {
         distance: parseFloat(formData.distance) || 0,
         estimatedDuration: parseInt(formData.duration) || 0,
         active: formData.status === 'active',
+        startPoint: formData.startPoint || 'School',
+        endPoint: formData.endPoint || 'Destination',
         stops: []
       };
       
-      // Add start point as first stop if provided
-      if (formData.startPoint) {
-        routeData.stops.push({
-          name: formData.startPoint,
-          order: 0,
-          coordinates: { lat: defaultCenter[0], lng: defaultCenter[1] }
-        });
-      }
+      // Add start point as first stop
+      routeData.stops.push({
+        name: formData.startPoint || 'School',
+        order: 0,
+        coordinates: { lat: defaultCenter.lat, lng: defaultCenter.lng },
+        address: formData.startPoint || 'School Location'
+      });
       
-      // Add end point as last stop if provided and different from start
+      // Add end point as last stop
       if (formData.endPoint && formData.endPoint !== formData.startPoint) {
         routeData.stops.push({
           name: formData.endPoint,
           order: 1,
-          coordinates: { lat: defaultCenter[0] + 0.01, lng: defaultCenter[1] + 0.01 }
+          coordinates: { lat: defaultCenter.lat + 0.01, lng: defaultCenter.lng + 0.01 },
+          address: formData.endPoint
         });
       }
       
       // Add additional stops if specified
-      if (formData.stops > 2) {
-        for (let i = 2; i < formData.stops; i++) {
+      const additionalStops = parseInt(formData.stops) || 0;
+      if (additionalStops > 2) {
+        for (let i = 2; i < additionalStops; i++) {
           routeData.stops.push({
             name: `Stop ${i + 1}`,
             order: i,
             coordinates: { 
-              lat: defaultCenter[0] + (i * 0.005), 
-              lng: defaultCenter[1] + (i * 0.005) 
-            }
+              lat: defaultCenter.lat + (i * 0.003), 
+              lng: defaultCenter.lng + (i * 0.003) 
+            },
+            address: `Stop ${i + 1}`
           });
         }
       }
@@ -317,6 +412,7 @@ export default function RoutePlanner() {
       if (selectedRoute?._id === id) {
         setSelectedRoute(null);
         setWaypoints([]);
+        setShowRouteDetails(false);
       }
     } catch (error) {
       console.error('Error deleting route:', error);
@@ -374,7 +470,14 @@ export default function RoutePlanner() {
         flexWrap: 'wrap',
         gap: '10px'
       }}>
-        <h3 style={{ margin: 0 }}>Route Planner</h3>
+        <div>
+          <h3 style={{ margin: 0 }}>🗺️ Route Planner</h3>
+          {selectedRoute && (
+            <p style={{ margin: '5px 0 0 0', fontSize: '14px', color: '#666' }}>
+              Currently viewing: <strong>{selectedRoute.name}</strong>
+            </p>
+          )}
+        </div>
         <button
           onClick={() => {
             setEditingRoute(null);
@@ -399,20 +502,102 @@ export default function RoutePlanner() {
 
       {/* Map View */}
       <div style={{
-        height: '400px',
+        height: '450px',
         marginBottom: '20px',
         borderRadius: '8px',
         overflow: 'hidden',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+        position: 'relative'
       }}>
         <MapContainer
-          center={defaultCenter}
-          zoom={12}
+          center={[mapCenter.lat, mapCenter.lng]}
+          zoom={mapZoom}
           style={{ height: '100%', width: '100%' }}
+          key={`${mapCenter.lat}-${mapCenter.lng}-${mapZoom}`}
         >
-          <RouteMap waypoints={waypoints} />
+          <RouteMap waypoints={waypoints} centerOnRoute={!!selectedRoute} />
+          <MapController center={mapCenter} zoom={mapZoom} />
         </MapContainer>
+        
+        {/* Map Controls Overlay */}
+        <div style={{
+          position: 'absolute',
+          bottom: '10px',
+          right: '10px',
+          background: 'white',
+          padding: '8px 12px',
+          borderRadius: '4px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+          fontSize: '12px',
+          zIndex: 1000
+        }}>
+          🚌 {waypoints.length} stops | 📍 Click markers for details
+        </div>
       </div>
+
+      {/* Selected Route Details */}
+      {showRouteDetails && selectedRoute && (
+        <div style={{
+          background: '#e3f2fd',
+          padding: '15px',
+          borderRadius: '8px',
+          marginBottom: '20px',
+          borderLeft: `4px solid ${getStatusColor(selectedRoute.status)}`
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+            <div>
+              <strong style={{ fontSize: '16px' }}>{selectedRoute.name}</strong>
+              <p style={{ margin: '5px 0 0 0', fontSize: '13px', color: '#555' }}>
+                {selectedRoute.description || 'No description'}
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={() => handleEdit(selectedRoute)}
+                style={{
+                  padding: '6px 12px',
+                  background: '#FF9800',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px'
+                }}
+              >
+                ✏️ Edit Route
+              </button>
+              <button
+                onClick={() => setShowRouteDetails(false)}
+                style={{
+                  padding: '6px 12px',
+                  background: '#999',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px'
+                }}
+              >
+                Hide Details
+              </button>
+            </div>
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: '10px',
+            marginTop: '10px',
+            fontSize: '13px'
+          }}>
+            <div>📍 From: {selectedRoute.startPoint}</div>
+            <div>🏁 To: {selectedRoute.endPoint}</div>
+            <div>📏 Distance: {selectedRoute.distance} km</div>
+            <div>⏱️ Duration: {selectedRoute.duration} min</div>
+            <div>🛑 Stops: {selectedRoute.stops}</div>
+            <div>📊 Status: <span style={{ color: getStatusColor(selectedRoute.status) }}>{selectedRoute.status}</span></div>
+          </div>
+        </div>
+      )}
 
       {/* Route Stats */}
       <div style={{
@@ -438,7 +623,7 @@ export default function RoutePlanner() {
           borderRadius: '8px',
           textAlign: 'center'
         }}>
-          <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#white' }}>
+          <div style={{ fontSize: '24px', fontWeight: 'bold' }}>
             {routes.filter(r => r.status === 'active').length}
           </div>
           <div style={{ fontSize: '12px', opacity: 0.9 }}>Active Routes</div>
@@ -487,7 +672,7 @@ export default function RoutePlanner() {
               cursor: 'pointer',
               transition: 'transform 0.2s, box-shadow 0.2s',
               ...(selectedRoute?._id === route._id ? {
-                boxShadow: '0 4px 8px rgba(33, 150, 243, 0.3)',
+                boxShadow: '0 4px 12px rgba(33, 150, 243, 0.3)',
                 transform: 'scale(1.02)'
               } : {})
             }}
@@ -542,36 +727,30 @@ export default function RoutePlanner() {
               </div>
             </div>
 
-            {route.assignedBuses && route.assignedBuses.length > 0 && (
-              <div style={{
-                marginBottom: '10px',
-                padding: '8px',
-                background: '#e3f2fd',
-                borderRadius: '4px',
-                fontSize: '12px'
-              }}>
-                🚌 Assigned Buses: {route.assignedBuses.join(', ')}
-              </div>
-            )}
-
-            {route.assignedDriver && (
-              <div style={{
-                marginBottom: '15px',
-                padding: '8px',
-                background: '#e8f5e9',
-                borderRadius: '4px',
-                fontSize: '12px'
-              }}>
-                👤 Assigned Driver: {route.assignedDriver}
-              </div>
-            )}
-
             <div style={{
               display: 'flex',
               gap: '10px',
               borderTop: '1px solid #eee',
               paddingTop: '15px'
             }}>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleViewOnMap(route);
+                }}
+                style={{
+                  flex: 1,
+                  padding: '8px',
+                  background: '#2196F3',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '12px'
+                }}
+              >
+                🗺️ View Map
+              </button>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -596,8 +775,7 @@ export default function RoutePlanner() {
                   handleDelete(route.id);
                 }}
                 style={{
-                  flex: 0.5,
-                  padding: '8px',
+                  padding: '8px 12px',
                   background: '#f44336',
                   color: 'white',
                   border: 'none',
@@ -671,7 +849,7 @@ export default function RoutePlanner() {
             overflowY: 'auto'
           }}>
             <h3 style={{ margin: '0 0 20px 0' }}>
-              {editingRoute ? 'Edit Route' : 'Create New Route'}
+              {editingRoute ? '✏️ Edit Route' : '➕ Create New Route'}
             </h3>
             <form onSubmit={handleSubmit}>
               <div style={{ marginBottom: '15px' }}>
@@ -806,8 +984,8 @@ export default function RoutePlanner() {
                     name="stops"
                     value={formData.stops}
                     onChange={handleInputChange}
-                    min="0"
-                    placeholder="0"
+                    min="2"
+                    placeholder="2"
                     style={{
                       width: '100%',
                       padding: '10px',
@@ -815,6 +993,7 @@ export default function RoutePlanner() {
                       borderRadius: '4px'
                     }}
                   />
+                  <small style={{ color: '#666', fontSize: '11px' }}>Minimum 2 stops (start and end)</small>
                 </div>
 
                 <div>

@@ -28,7 +28,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 const { width } = Dimensions.get('window');
 
 const QRScanScreen = ({ navigation, route }) => {
-  const { activeTrip, tripStudents, boardStudent, alightStudent, getStudentScanStatus } = useTrip();
+  const { activeTrip, tripStudents, boardStudent, alightStudent, getStudentScanStatus, refreshTrip } = useTrip();
   const { user } = useAuth();
   
   const [hasPermission, setHasPermission] = useState(null);
@@ -162,7 +162,7 @@ const QRScanScreen = ({ navigation, route }) => {
                 deviceId: await getDeviceId()
               });
               
-              if (response.data.success) {
+              if (response.data?.success) {
                 await AsyncStorage.removeItem('@offline_scans');
                 setOfflineQueue([]);
                 Alert.alert('Success', `${offlineQueue.length} scans synced successfully`);
@@ -195,8 +195,60 @@ const QRScanScreen = ({ navigation, route }) => {
     }
   };
 
+  // FIXED: Use the updated api.trip methods that trigger SMS
+  const recordAttendance = async (studentId, type, location) => {
+    try {
+      console.log(`Recording ${type} for student ${studentId} on trip ${tripId}`);
+      
+      let result;
+      if (type === 'boarding') {
+        result = await api.trip.boardStudent(tripId, studentId, location);
+      } else {
+        result = await api.trip.alightStudent(tripId, studentId, location);
+      }
+      
+      console.log('Attendance response:', result);
+      return result;
+    } catch (error) {
+      console.error('API error:', error);
+      throw error;
+    }
+  };
+
+  // Check if trip can accept scans
+  const canScan = () => {
+    if (!activeTrip) {
+      Alert.alert('No Active Trip', 'Please select and start a trip first.');
+      return false;
+    }
+    
+    if (activeTrip.status !== 'running') {
+      Alert.alert(
+        'Trip Not Started',
+        'The trip must be started before scanning students.',
+        [
+          { 
+            text: 'Go to Trip', 
+            onPress: () => navigation.navigate('TripManagement') 
+          },
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      );
+      return false;
+    }
+    
+    return true;
+  };
+
   const handleBarCodeScanned = async ({ type, data }) => {
     if (!scanning || scanned || !tripId) return;
+    
+    // Check if trip is running before scanning
+    if (!canScan()) {
+      setScanned(false);
+      setScanning(true);
+      return;
+    }
     
     setScanned(true);
     setScanning(false);
@@ -236,48 +288,75 @@ const QRScanScreen = ({ navigation, route }) => {
         };
       }
 
-      const scanData = {
-        studentId,
-        tripId,
-        method: 'qr',
-        timestamp: new Date().toISOString(),
-        location,
-        deviceId: await getDeviceId(),
-        metadata: {
-          scanMode,
-          qrData
-        }
-      };
-
       let result;
-      if (scanMode === 'boarding') {
-        result = await boardStudent(tripId, student._id, 'qr');
+      
+      if (isOnline) {
+        // Online mode - call API directly (triggers SMS)
+        result = await recordAttendance(student._id, scanMode, location);
+        
+        if (result.success) {
+          // Update local context
+          if (scanMode === 'boarding') {
+            await boardStudent(tripId, student._id, 'qr');
+          } else {
+            await alightStudent(tripId, student._id, 'qr');
+          }
+          
+          setScanResult({
+            success: true,
+            student,
+            type: scanMode,
+            offline: false,
+            parentNotified: result.data?.parentNotified === true || result.parentNotified === true,
+            smsSent: result.data?.parentNotified === true || result.parentNotified === true
+          });
+          
+          // Refresh trip data to update attendance
+          await refreshTrip();
+        } else {
+          throw new Error(result.message || 'Failed to record attendance');
+        }
       } else {
-        result = await alightStudent(tripId, student._id, 'qr');
-      }
-
-      if (result.success) {
+        // Offline mode - save to queue
+        const scanData = {
+          studentId: student._id,
+          tripId,
+          type: scanMode,
+          method: 'qr',
+          timestamp: new Date().toISOString(),
+          location,
+          deviceId: await getDeviceId()
+        };
+        
+        await saveToOfflineQueue(scanData);
+        
+        // Update local context for offline
+        if (scanMode === 'boarding') {
+          await boardStudent(tripId, student._id, 'qr', true);
+        } else {
+          await alightStudent(tripId, student._id, 'qr', true);
+        }
+        
         setScanResult({
           success: true,
           student,
           type: scanMode,
-          offline: result.offline,
-          notificationSent: result.notificationSent !== false
+          offline: true,
+          parentNotified: false,
+          smsSent: false
         });
-        setShowResult(true);
-
-        await fetchStudentInfo(student._id);
-        loadScanHistory();
-
-        scanTimeout.current = setTimeout(() => {
-          setShowResult(false);
-          setScanned(false);
-          setScanning(true);
-          setScanResult(null);
-        }, 3000);
-      } else {
-        throw new Error(result.message || 'Failed to record scan');
       }
+
+      setShowResult(true);
+      await fetchStudentInfo(student._id);
+      loadScanHistory();
+
+      scanTimeout.current = setTimeout(() => {
+        setShowResult(false);
+        setScanned(false);
+        setScanning(true);
+        setScanResult(null);
+      }, 3000);
       
     } catch (error) {
       console.error('Scan error:', error);
@@ -298,6 +377,8 @@ const QRScanScreen = ({ navigation, route }) => {
   };
 
   const handleManualEntry = () => {
+    if (!canScan()) return;
+    
     Alert.prompt(
       'Manual Entry',
       'Enter Student ID or Admission Number:',
@@ -371,6 +452,9 @@ const QRScanScreen = ({ navigation, route }) => {
     );
   }
 
+  // Show warning if trip is not running
+  const isTripRunning = activeTrip?.status === 'running';
+
   return (
     <View style={styles.container}>
       <LinearGradient colors={['#667eea', '#764ba2']} style={styles.header}>
@@ -389,11 +473,21 @@ const QRScanScreen = ({ navigation, route }) => {
         </View>
       </LinearGradient>
 
+      {/* Trip Status Warning */}
+      {!isTripRunning && (
+        <View style={styles.warningBanner}>
+          <Ionicons name="warning-outline" size={16} color="#fff" />
+          <Text style={styles.warningText}>
+            Trip is not started. Please start the trip before scanning.
+          </Text>
+        </View>
+      )}
+
       <View style={styles.cameraContainer}>
         <Camera
           style={styles.camera}
           type={Camera.Constants.Type.back}
-          onBarCodeScanned={scanned ? undefined : handleBarCodeScanned}
+          onBarCodeScanned={scanned || !isTripRunning ? undefined : handleBarCodeScanned}
           barCodeScannerSettings={{
             barCodeTypes: ['qr'],
           }}
@@ -467,6 +561,13 @@ const QRScanScreen = ({ navigation, route }) => {
           </Text>
         </View>
         
+        <View style={[styles.infoItem, isTripRunning ? styles.activeTripBadge : styles.inactiveTripBadge]}>
+          <Ionicons name="bus" size={20} color={isTripRunning ? "#4CAF50" : "#f44336"} />
+          <Text style={[styles.infoText, { color: isTripRunning ? "#4CAF50" : "#f44336", fontWeight: 'bold' }]}>
+            {isTripRunning ? 'Trip Running' : 'Trip Not Started'}
+          </Text>
+        </View>
+        
         {offlineQueue.length > 0 && (
           <TouchableOpacity 
             style={[styles.infoItem, styles.offlineBadge]}
@@ -502,11 +603,11 @@ const QRScanScreen = ({ navigation, route }) => {
                 <Text style={styles.modalSubtext}>
                   {scanResult.type === 'boarding' ? 'Boarded' : 'Alighted'} successfully
                 </Text>
-                {scanResult.notificationSent !== false && (
+                {scanResult.parentNotified && (
                   <View style={styles.notificationBadge}>
                     <Ionicons name="notifications" size={14} color="#4CAF50" />
                     <Text style={styles.notificationBadgeText}>
-                      Parent notified via SMS and push
+                      Parent notified via SMS
                     </Text>
                   </View>
                 )}
@@ -565,11 +666,20 @@ const QRScanScreen = ({ navigation, route }) => {
                   <Text style={styles.studentInfoValue}>{studentInfo.admissionNumber}</Text>
                 </View>
                 
+                <View style={styles.studentInfoRow}>
+                  <Text style={styles.studentInfoLabel}>Parent Phone:</Text>
+                  <Text style={styles.studentInfoValue}>
+                    {studentInfo.parentPhone || 'Not registered'}
+                  </Text>
+                </View>
+                
                 {studentInfo.transportDetails?.pickupPoint && (
                   <View style={styles.studentInfoRow}>
                     <Text style={styles.studentInfoLabel}>Pickup:</Text>
                     <Text style={styles.studentInfoValue}>
-                      {studentInfo.transportDetails.pickupPoint.name}
+                      {typeof studentInfo.transportDetails.pickupPoint === 'string' 
+                        ? studentInfo.transportDetails.pickupPoint 
+                        : studentInfo.transportDetails.pickupPoint.name}
                     </Text>
                   </View>
                 )}
@@ -578,7 +688,9 @@ const QRScanScreen = ({ navigation, route }) => {
                   <View style={styles.studentInfoRow}>
                     <Text style={styles.studentInfoLabel}>Dropoff:</Text>
                     <Text style={styles.studentInfoValue}>
-                      {studentInfo.transportDetails.dropoffPoint.name}
+                      {typeof studentInfo.transportDetails.dropoffPoint === 'string' 
+                        ? studentInfo.transportDetails.dropoffPoint 
+                        : studentInfo.transportDetails.dropoffPoint.name}
                     </Text>
                   </View>
                 )}
@@ -666,6 +778,11 @@ const QRScanScreen = ({ navigation, route }) => {
                 <Text style={styles.historyTime}>
                   {new Date(item.timestamp).toLocaleTimeString()}
                 </Text>
+                {item.smsSent && (
+                  <View style={styles.smsIndicator}>
+                    <Ionicons name="chatbubble" size={10} color="#4CAF50" />
+                  </View>
+                )}
                 {item.offline && (
                   <View style={styles.offlineIndicator}>
                     <Ionicons name="cloud-offline" size={12} color="#999" />
@@ -753,8 +870,20 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
   },
+  warningBanner: {
+    backgroundColor: '#f44336',
+    padding: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  warningText: {
+    color: '#fff',
+    fontSize: 12,
+    marginLeft: 8,
+  },
   cameraContainer: {
-    height: '50%',
+    height: '45%',
     overflow: 'hidden',
     position: 'relative'
   },
@@ -865,11 +994,11 @@ const styles = StyleSheet.create({
   infoBar: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    padding: 15,
+    padding: 12,
     backgroundColor: '#fff',
     elevation: 2,
     flexWrap: 'wrap',
-    gap: 10
+    gap: 8
   },
   infoItem: {
     flexDirection: 'row',
@@ -883,6 +1012,12 @@ const styles = StyleSheet.create({
   infoText: {
     fontSize: 14,
     color: '#666'
+  },
+  activeTripBadge: {
+    backgroundColor: '#e8f5e9',
+  },
+  inactiveTripBadge: {
+    backgroundColor: '#ffebee',
   },
   offlineBadge: {
     backgroundColor: '#fff3cd'
@@ -1065,6 +1200,9 @@ const styles = StyleSheet.create({
   historyTime: {
     fontSize: 11,
     color: '#999',
+  },
+  smsIndicator: {
+    marginLeft: 4,
   },
   offlineIndicator: {
     marginLeft: 5,
