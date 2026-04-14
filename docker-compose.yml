@@ -12,6 +12,25 @@ services:
     networks:
       - smart-school-network
 
+  mongo-express:
+    image: mongo-express:latest
+    container_name: smart-school-mongo-express
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongodb
+      ME_CONFIG_MONGODB_PORT: 27017
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ""
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ""
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin123
+      ME_CONFIG_OPTIONS_EDITORTHEME: "dracula"
+    depends_on:
+      - mongodb
+    networks:
+      - smart-school-network
+
   redis:
     image: redis:7-alpine
     container_name: smart-school-redis
